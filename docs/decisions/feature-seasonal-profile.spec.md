@@ -12,9 +12,8 @@
 
 `ProfileService` gains an app-level `AppProfile` with `PvpZone`, `PveZone`, and
 `PvpSeason`. `GameMode` remains the PvP/PvE rules fact. A separate
-`SessionProfileHint` carries what logs can say about profile selection, allowing a
-future positive seasonal signature without putting an app-only value into
-`GameMode`.
+`SessionProfileHint` carries what logs can say about profile selection, including
+the observed `PvpSeason` token, without putting an app-only value into `GameMode`.
 
 The title bar becomes a three-way localized switcher. PvP Season is pinned against
 ambiguous permanent-PvP and PvE auto-detections; manual selection of a permanent
@@ -56,9 +55,15 @@ Verified against the working tree before implementation.
 - The global `app.activeGameMode` setting stores `PVE` or `PVP`. Initialization maps
   every unknown value to PvP.
 - `EftRaidEventService` recognizes `Session mode: (Pve|Pvp|Regular)` and raises
-  `SessionModeDetected`. `ProfileService.OnRaidEvent` calls
+  `SessionModeDetected`. Because the expression has no token boundary,
+  `Session mode: PvpSeason` currently matches the `Pvp` prefix and is misclassified
+  as permanent PvP. `ProfileService.OnRaidEvent` calls
   `SetActiveGameMode(mode, isAuto: true)`. The startup scan raises the same event
   from the newest log's last session line.
+- The profile parser recognizes only legacy `SelectProfile ProfileId:...` lines.
+  EFT 1.1.0.0 emits `PrepareSelectedProfileLocally` followed by
+  `CompleteSelectedProfile`, so current startup/live parsing does not refresh the
+  PMC/SCAV identity after an in-game profile switch.
 - `QuestProgress`, `ObjectiveProgress`, `HideoutProgress`, `ItemInventory`, and
   `ProfileSettings` are already keyed by string `ProfileId`. Their services reload
   after `ActiveProfileChanged`, so a new id does not require table migration.
@@ -98,9 +103,19 @@ SessionProfileHint.PveZone
 SessionProfileHint.PvpSeason
 ```
 
-Known log tokens map `Pve` to `PveZone` and `Pvp`/`Regular` to `PvpZone`. If the
-real log capture proves a stable seasonal signature, it maps to `PvpSeason`. Both PvP
-hints still imply `GameMode.PVP` for raid/game-rule callers.
+Known log tokens map `Pve` to `PveZone`, `Pvp`/`Regular` to `PvpZone`, and the
+observed `PvpSeason` token to `PvpSeason`. Both PvP hints still imply
+`GameMode.PVP` for raid/game-rule callers. The session-mode expression matches the
+whole token (for example,
+`Session mode:\s*(Pve|PvpSeason|Pvp|Regular)\s*$`) so `PvpSeason` cannot regress to
+the old `Pvp` prefix match.
+
+EFT 1.1 profile selection is a two-phase log sequence. The parser keeps legacy
+`SelectProfile` support and treats `CompleteSelectedProfile` as the authoritative
+new selection line. It does not publish from `PrepareSelectedProfileLocally`, which
+can appear without a matching completion when a transition is interrupted. The
+selected PMC id updates `EftProfileInfo` exactly as the legacy line did; it is not
+used to infer an `AppProfile`.
 
 ```mermaid
 flowchart LR
@@ -208,8 +223,15 @@ make a parsed/persisted rules field carry an app-only storage choice. Two app pr
 can share PvP rules, so the concepts cannot remain one enum.
 
 **`SessionProfileHint` is separate from both.** Passing only `GameMode` to the
-resolver cannot represent a future positive seasonal signature. The hint is a parsed
+resolver cannot represent the positive `PvpSeason` signature. The hint is a parsed
 classification; `AppProfile` remains the selected storage destination.
+
+**Log transitions commit only on exact, completed evidence.** Exact-token session
+parsing prevents `PvpSeason` from falling through to the shorter `Pvp` alternative.
+For PMC identity, `CompleteSelectedProfile` is accepted alongside the legacy
+`SelectProfile`, while `PrepareSelectedProfileLocally` is ignored because it can be
+observed without a completed switch. This keeps both startup scan and live parsing on
+the same evidence contract.
 
 **The seasonal profile itself is the pin.** A second season-mode boolean could
 disagree with the visible profile. Deriving suppression from `current == PvpSeason`
@@ -230,13 +252,38 @@ preserve the analysis and give later PRs stable references.
 
 ## Open Questions
 
-- Does a real Kord Breach session contain a stable positive seasonal signature? Diff
-  its application log against permanent PvP. If found, map it to
-  `SessionProfileHint.PvpSeason`; otherwise ship manual selection plus pinning. Append
-  the redacted evidence pattern and fixture outcome here before merge.
-- Does the seasonal character use a different PMC profile id? Record the finding from
-  the same capture because it may affect existing profile-info/SCAV derivation, but do
-  not treat a merely different opaque id as a seasonal signature without evidence.
+None. Both capture questions were resolved on 2026-08-09.
+
+### Resolved log-capture findings
+
+The same EFT 1.1.0.0.46657 client process was switched from PvE Zone to PvP Season,
+then to PvP Zone, and finally back to PvE Zone. No raid or matchmaking was started.
+The relevant application-log sequences, with account-specific values redacted, were:
+
+```text
+Session mode: PvpSeason
+PrepareSelectedProfileLocally ProfileId:<season-pmc-id> AccountId:<account-id>
+CompleteSelectedProfile ProfileId:<season-pmc-id> AccountId:<account-id>
+
+Session mode: Regular
+PrepareSelectedProfileLocally ProfileId:<permanent-pvp-pmc-id> AccountId:<account-id>
+CompleteSelectedProfile ProfileId:<permanent-pvp-pmc-id> AccountId:<account-id>
+```
+
+`PvpSeason` is therefore a stable, semantic positive signature for the captured
+client version and maps to `SessionProfileHint.PvpSeason`. `Regular` remains the
+permanent `PvpZone` token. The season and permanent-PvP PMC ids were different while
+the account id was the same, confirming that the seasonal character has its own PMC
+profile id. Those ids are opaque, account-specific values and are deliberately not a
+profile-classification signal.
+
+The parser fixture outcome is fixed as follows: the exact redacted `PvpSeason` line
+must produce `SessionProfileHint.PvpSeason` plus `GameMode.PVP`, while `Regular` must
+produce `SessionProfileHint.PvpZone` plus `GameMode.PVP`. A paired profile-selection
+fixture must ignore `PrepareSelectedProfileLocally`, accept
+`CompleteSelectedProfile`, and prove that the two completed PMC ids remain distinct.
+The existing unbounded session regex would parse `PvpSeason` as `Pvp`; the fixture is
+also the regression guard for that prefix bug.
 
 ## Test Strategy
 
@@ -251,8 +298,9 @@ preserve the analysis and give later PRs stable references.
   and verify it loads `season`-seeded state rather than PvP/PvE state; restart and
   verify seasonal remains selected; manually leave seasonal and verify normal
   auto-switch behavior resumes.
-- **Parser fixture**: once real logs settle the open question, assert the observed
-  `SessionProfileHint` result. Confirmed indistinguishability still gets a fixture.
+- **Parser fixture**: use the redacted captured sequences above. Assert exact-token
+  parsing for `PvpSeason` and `Regular`, their `SessionProfileHint` and `GameMode`
+  pairs, and completed-profile parsing without publishing the prepare-only line.
 - **Not automated**: one real-game launch verifies that a PvP-shaped line does not
   move or falsely auto-mark an already-selected seasonal profile.
 
@@ -294,7 +342,9 @@ Requirement coverage:
   stronger guarantee than the existing PvP/PvE persistence model.
 - **Reset remains partial.** Users must not be told that Reset Progress creates a
   fresh seasonal profile. Complete reset is deferred under SPA-3/SPA-4/SPA-6.
-- **No automatic seasonal claim without evidence.** If logs remain ambiguous, manual
-  selection is the shipped floor.
+- **Versioned log contract.** Automatic seasonal selection depends on the observed
+  `PvpSeason` token. If a later client removes or renames it, unknown/ambiguous input
+  leaves the current profile unchanged and manual selection plus pinning remains the
+  fallback.
 - **Rollback.** The prior build ignores `season` table rows and treats the stored
   selection as PvP. No asset-database publish is involved.
