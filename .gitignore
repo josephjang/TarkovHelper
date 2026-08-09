@@ -12,6 +12,9 @@
 # TarkovHelper/Debug is a source folder (AppEnv, ToolboxWindow), not build output
 !TarkovHelper/Debug/
 [Rr]elease/
+# Repository agent skill, not a build output directory
+!/.agents/skills/release/
+!/.agents/skills/release/**
 x64/
 [Bb]in/
 [Oo]bj/

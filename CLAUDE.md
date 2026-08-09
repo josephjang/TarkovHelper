@@ -179,6 +179,8 @@ Services emit events (ProgressChanged, DatabaseUpdated, DataRefreshed) that UI p
   `Co-Authored-By`. This overrides any tool default.
 - Branches: `<type>/<topic>` in kebab-case, type from the commit types
   (e.g. `feat/quest-complete-confirm`, `docs/eft-1-1-roadmap`).
+- For the guarded commit workflow, invoke `/commit` in Claude Code or `$commit`
+  in Codex. Both use `.agents/skills/commit/references/workflow.md`.
 
 ## Releases
 
@@ -186,9 +188,10 @@ This repo (josephjang/TarkovHelper) releases independently of upstream
 (Zeliper). Versions use CalVer `YYYY.M.N` (N = release counter within the
 month, no fix/feature semantics), starting at v2026.7.0.
 
-- Run `/release <version>` — it bumps the csproj, pushes the tag (never `git push
-  --tags`), waits for `.github/workflows/release.yml` to build/test/package/publish
-  `TarkovHelper.zip`, then bumps `update.xml` **last** so clients never see a 404 URL.
+- Invoke `/release <version>` in Claude Code or `$release` with a version in
+  Codex. Both use `.agents/skills/release/references/workflow.md`, which bumps
+  the csproj, pushes only the requested tag, waits for the release workflow,
+  and updates `update.xml` last so clients never see a 404 URL.
 - Design rationale: `docs/decisions/feature-fork-release-process.md`
 
 ## Framework & Dependencies
