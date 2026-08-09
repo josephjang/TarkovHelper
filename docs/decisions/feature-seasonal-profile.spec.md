@@ -8,6 +8,11 @@
 > reverses a decision here appends `Superseded by <doc>` below this line, in the PR
 > that reverses it.
 
+> Superseded in part by `feature-profile-log-auto-switch.spec.md` (2026-08-09):
+> current-profile-dependent suppression and the season-as-pin state machine are
+> removed. Exact known hints resolve symmetrically from every current profile.
+> Every other technical decision here stands.
+
 ## Summary
 
 `ProfileService` gains an app-level `AppProfile` with `PvpZone`, `PveZone`, and
