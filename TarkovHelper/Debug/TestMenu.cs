@@ -307,13 +307,16 @@ public static class TestMenu
                 $"SELECT COUNT(*) FROM {table} WHERE ProfileId='pvp'", conn);
             var pveCmd = new Microsoft.Data.Sqlite.SqliteCommand(
                 $"SELECT COUNT(*) FROM {table} WHERE ProfileId='pve'", conn);
+            var seasonCmd = new Microsoft.Data.Sqlite.SqliteCommand(
+                $"SELECT COUNT(*) FROM {table} WHERE ProfileId='season'", conn);
 
             var pvpRows = Convert.ToInt32(await pvpCmd.ExecuteScalarAsync());
             var pveRows = Convert.ToInt32(await pveCmd.ExecuteScalarAsync());
+            var seasonRows = Convert.ToInt32(await seasonCmd.ExecuteScalarAsync());
 
             sb.AppendLine($"{table}:");
             sb.AppendLine($"  ProfileId column: {has}");
-            sb.AppendLine($"  PvP rows: {pvpRows}  |  PvE rows: {pveRows}");
+            sb.AppendLine($"  PvP rows: {pvpRows}  |  PvE rows: {pveRows}  |  Season rows: {seasonRows}");
         }
 
         MessageBox.Show(sb.ToString(), "Migration Test");
@@ -325,16 +328,21 @@ public static class TestMenu
         var sb = new StringBuilder();
         var profile = ProfileService.Instance;
 
-        sb.AppendLine($"Current: {profile.ActiveGameMode} (auto={profile.IsAutoDetected})");
+        sb.AppendLine($"Current: {profile.ActiveProfile} (auto={profile.IsAutoDetected})");
 
-        var target = profile.ActiveGameMode == Models.GameMode.PVP ? Models.GameMode.PVE : Models.GameMode.PVP;
-        profile.SetActiveGameMode(target);
+        var target = profile.ActiveProfile switch
+        {
+            Models.AppProfile.PvpZone => Models.AppProfile.PveZone,
+            Models.AppProfile.PveZone => Models.AppProfile.PvpSeason,
+            _ => Models.AppProfile.PvpZone
+        };
+        profile.SetActiveProfile(target);
         await Task.Delay(300);
 
         var questCount = QuestProgressService.Instance.AllTasks?.Count(t =>
             QuestProgressService.Instance.GetStatus(t) == QuestStatus.Done) ?? 0;
 
-        sb.AppendLine($"Switched to: {profile.ActiveGameMode}");
+        sb.AppendLine($"Switched to: {profile.ActiveProfile}");
         sb.AppendLine($"Done quests in this profile: {questCount}");
 
         MessageBox.Show(sb.ToString(), "Profile Switch Test");

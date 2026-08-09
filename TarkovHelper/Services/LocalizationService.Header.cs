@@ -49,18 +49,46 @@ public partial class LocalizationService
 
     #region Title Bar
 
+    public string HeaderPvpZone => CurrentLanguage switch
+    {
+        AppLanguage.KO => "PvP 존",
+        AppLanguage.JA => "PvP ゾーン",
+        _ => "PvP Zone"
+    };
+
+    public string HeaderPveZone => CurrentLanguage switch
+    {
+        AppLanguage.KO => "PvE 존",
+        AppLanguage.JA => "PvE ゾーン",
+        _ => "PvE Zone"
+    };
+
+    public string HeaderPvpSeason => CurrentLanguage switch
+    {
+        AppLanguage.KO => "시즌 PvP",
+        AppLanguage.JA => "PvP シーズン",
+        _ => "PvP Season"
+    };
+
     public string HeaderPvpTooltip => CurrentLanguage switch
     {
-        AppLanguage.KO => "PvP 모드로 전환",
-        AppLanguage.JA => "PvPモードに切り替え",
-        _ => "Switch to PvP mode"
+        AppLanguage.KO => "PvP 존으로 전환",
+        AppLanguage.JA => "PvP ゾーンに切り替え",
+        _ => "Switch to PvP Zone"
     };
 
     public string HeaderPveTooltip => CurrentLanguage switch
     {
-        AppLanguage.KO => "PvE 모드로 전환",
-        AppLanguage.JA => "PvEモードに切り替え",
-        _ => "Switch to PvE mode"
+        AppLanguage.KO => "PvE 존으로 전환",
+        AppLanguage.JA => "PvE ゾーンに切り替え",
+        _ => "Switch to PvE Zone"
+    };
+
+    public string HeaderPvpSeasonTooltip => CurrentLanguage switch
+    {
+        AppLanguage.KO => "시즌 PvP로 전환",
+        AppLanguage.JA => "PvP シーズンに切り替え",
+        _ => "Switch to PvP Season"
     };
 
     public string HeaderAutoBadge => CurrentLanguage switch
@@ -72,9 +100,9 @@ public partial class LocalizationService
 
     public string HeaderAutoBadgeTooltip => CurrentLanguage switch
     {
-        AppLanguage.KO => "게임 로그에서 모드를 자동으로 감지했습니다",
-        AppLanguage.JA => "ゲームログからモードを自動検出しました",
-        _ => "Mode auto-detected from game logs"
+        AppLanguage.KO => "게임 로그에서 프로필을 자동으로 감지했습니다",
+        AppLanguage.JA => "ゲームログからプロフィールを自動検出しました",
+        _ => "Profile auto-detected from game logs"
     };
 
     public string HeaderProfileTooltip => CurrentLanguage switch

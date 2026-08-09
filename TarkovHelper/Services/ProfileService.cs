@@ -11,13 +11,15 @@ public sealed class ProfileService
 
     public const string PvpProfileId = "pvp";
     public const string PveProfileId = "pve";
+    public const string SeasonProfileId = "season";
     private const string SettingKey = "app.activeGameMode";
 
-    private GameMode _activeGameMode = GameMode.PVP;
+    private AppProfile _activeProfile = AppProfile.PvpZone;
     private bool _isAutoDetected;
 
-    public GameMode ActiveGameMode => _activeGameMode;
-    public string ActiveProfileId => _activeGameMode == GameMode.PVE ? PveProfileId : PvpProfileId;
+    public AppProfile ActiveProfile => _activeProfile;
+    public GameMode ActiveGameMode => GetGameMode(_activeProfile);
+    public string ActiveProfileId => GetProfileId(_activeProfile);
     public bool IsAutoDetected => _isAutoDetected;
 
     public event EventHandler<ProfileChangedEventArgs>? ActiveProfileChanged;
@@ -30,53 +32,105 @@ public sealed class ProfileService
     public async Task InitializeAsync()
     {
         var saved = await UserDataDbService.Instance.GetSettingAsync(SettingKey);
-        var mode = saved == "PVE" ? GameMode.PVE : GameMode.PVP;
-        _log.Info($"Initialized: {mode}");
+        var profile = ParseStoredProfile(saved);
+        _log.Info($"Initialized: {profile}");
 
-        // SettingsService and other singletons may already be constructed (default PVP)
+        // SettingsService and other singletons may already be constructed (default PvP Zone)
         // before InitializeAsync runs. If the saved mode differs, fire the event so they
         // reload their profile-scoped state.
-        if (mode != _activeGameMode)
+        if (profile != _activeProfile || _isAutoDetected)
         {
-            _activeGameMode = mode;
-            ActiveProfileChanged?.Invoke(this, new ProfileChangedEventArgs(mode, false));
+            _activeProfile = profile;
+            _isAutoDetected = false;
+            ActiveProfileChanged?.Invoke(this, new ProfileChangedEventArgs(profile, false));
         }
     }
 
-    public void SetActiveGameMode(GameMode mode, bool isAuto = false)
+    public void SetActiveProfile(AppProfile profile, bool isAuto = false)
     {
-        if (mode == GameMode.Unknown) return;
-        if (_activeGameMode == mode && _isAutoDetected == isAuto) return;
+        if (!Enum.IsDefined(profile)) return;
+        if (_activeProfile == profile && _isAutoDetected == isAuto) return;
 
-        _activeGameMode = mode;
+        _activeProfile = profile;
         _isAutoDetected = isAuto;
 
-        _ = UserDataDbService.Instance.SetSettingAsync(SettingKey, mode == GameMode.PVE ? "PVE" : "PVP");
-        _log.Info($"Switched to {mode} (auto={isAuto})");
+        _ = UserDataDbService.Instance.SetSettingAsync(SettingKey, SerializeProfile(profile));
+        _log.Info($"Switched to {profile} (auto={isAuto})");
 
-        ActiveProfileChanged?.Invoke(this, new ProfileChangedEventArgs(mode, isAuto));
+        ActiveProfileChanged?.Invoke(this, new ProfileChangedEventArgs(profile, isAuto));
     }
+
+    public void ApplyDetectedProfile(SessionProfileHint hint)
+    {
+        var resolution = ResolveDetectedProfile(_activeProfile, hint);
+        if (resolution.DetectionApplied)
+            SetActiveProfile(resolution.Profile, isAuto: true);
+    }
+
+    public static ProfileResolution ResolveDetectedProfile(AppProfile current, SessionProfileHint detected)
+    {
+        if (detected == SessionProfileHint.Unknown)
+            return new ProfileResolution(current, false);
+
+        if (current == AppProfile.PvpSeason &&
+            detected is SessionProfileHint.PvpZone or SessionProfileHint.PveZone)
+        {
+            return new ProfileResolution(current, false);
+        }
+
+        var profile = detected switch
+        {
+            SessionProfileHint.PveZone => AppProfile.PveZone,
+            SessionProfileHint.PvpSeason => AppProfile.PvpSeason,
+            _ => AppProfile.PvpZone
+        };
+        return new ProfileResolution(profile, true);
+    }
+
+    public static AppProfile ParseStoredProfile(string? value) => value?.Trim().ToUpperInvariant() switch
+    {
+        "PVE" => AppProfile.PveZone,
+        "SEASON" => AppProfile.PvpSeason,
+        _ => AppProfile.PvpZone
+    };
+
+    public static string SerializeProfile(AppProfile profile) => profile switch
+    {
+        AppProfile.PveZone => "PVE",
+        AppProfile.PvpSeason => "SEASON",
+        _ => "PVP"
+    };
+
+    public static string GetProfileId(AppProfile profile) => profile switch
+    {
+        AppProfile.PveZone => PveProfileId,
+        AppProfile.PvpSeason => SeasonProfileId,
+        _ => PvpProfileId
+    };
 
     public static string GetProfileId(GameMode mode) =>
         mode == GameMode.PVE ? PveProfileId : PvpProfileId;
 
+    public static GameMode GetGameMode(AppProfile profile) =>
+        profile == AppProfile.PveZone ? GameMode.PVE : GameMode.PVP;
+
     private void OnRaidEvent(object? sender, EftRaidEventArgs e)
     {
         if (e.EventType != EftRaidEventType.SessionModeDetected) return;
-        var mode = EftRaidEventService.Instance.CurrentGameMode;
-        if (mode == GameMode.PVP || mode == GameMode.PVE)
-            SetActiveGameMode(mode, isAuto: true);
+        ApplyDetectedProfile(e.SessionProfileHint);
     }
 }
 
 public class ProfileChangedEventArgs : EventArgs
 {
+    public AppProfile Profile { get; }
     public GameMode GameMode { get; }
     public bool IsAutoDetected { get; }
 
-    public ProfileChangedEventArgs(GameMode mode, bool isAuto)
+    public ProfileChangedEventArgs(AppProfile profile, bool isAuto)
     {
-        GameMode = mode;
+        Profile = profile;
+        GameMode = ProfileService.GetGameMode(profile);
         IsAutoDetected = isAuto;
     }
 }

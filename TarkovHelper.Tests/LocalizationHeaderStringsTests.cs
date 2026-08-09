@@ -16,7 +16,9 @@ public class LocalizationHeaderStringsTests
         // Tabs
         "TabQuests", "TabHideout", "TabItems", "TabCollector", "TabMap",
         // Title bar
-        "HeaderPvpTooltip", "HeaderPveTooltip", "HeaderAutoBadge", "HeaderAutoBadgeTooltip",
+        "HeaderPvpZone", "HeaderPveZone", "HeaderPvpSeason",
+        "HeaderPvpTooltip", "HeaderPveTooltip", "HeaderPvpSeasonTooltip",
+        "HeaderAutoBadge", "HeaderAutoBadgeTooltip",
         "HeaderProfileTooltip", "HeaderProfileName", "HeaderLevelShort", "HeaderVersionTooltipIdle",
         "HeaderVersionTooltipInstall", "HeaderVersionTooltipCheckFailed",
         "HeaderUpdateAvailableFormat", "HeaderChecking",
@@ -94,5 +96,22 @@ public class LocalizationHeaderStringsTests
             Assert.NotEqual(GetString(en, key), GetString(ko, key));
             Assert.NotEqual(GetString(en, key), GetString(ja, key));
         }
+    }
+
+    [Theory]
+    [InlineData(AppLanguage.EN, "PvP Zone", "PvE Zone", "PvP Season")]
+    [InlineData(AppLanguage.KO, "PvP 존", "PvE 존", "시즌 PvP")]
+    [InlineData(AppLanguage.JA, "PvP ゾーン", "PvE ゾーン", "PvP シーズン")]
+    public void Profile_labels_match_the_game(
+        AppLanguage language,
+        string expectedPvp,
+        string expectedPve,
+        string expectedSeason)
+    {
+        var loc = TestLocalization.WithLanguage(language);
+
+        Assert.Equal(expectedPvp, loc.HeaderPvpZone);
+        Assert.Equal(expectedPve, loc.HeaderPveZone);
+        Assert.Equal(expectedSeason, loc.HeaderPvpSeason);
     }
 }

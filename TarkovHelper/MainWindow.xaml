@@ -20,7 +20,7 @@
             <Setter Property="Padding" Value="0,16,0,0"/>
         </Style>
 
-        <!-- PvP/PvE game mode toggle button -->
+        <!-- App profile toggle button -->
         <Style x:Key="GameModeToggleStyle" TargetType="ToggleButton">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
@@ -131,23 +131,30 @@
                             </StackPanel>
                         </Button>
 
-                        <!-- Game Mode Toggle (PvP / PvE) -->
+                        <!-- App Profile Toggle (PvP Zone / PvE Zone / PvP Season) -->
                         <Border Background="{StaticResource BackgroundLightBrush}"
                                 CornerRadius="4" Padding="2" Margin="0,0,12,0"
                                 VerticalAlignment="Center">
                             <StackPanel Orientation="Horizontal">
-                                <ToggleButton x:Name="BtnPvP" Content="PvP" IsChecked="True"
+                                <ToggleButton x:Name="BtnPvpZone"
                                               Style="{StaticResource GameModeToggleStyle}"
                                               Padding="10,4" FontSize="{DynamicResource FontSizeXSmall}" FontWeight="SemiBold"
-                                              Click="BtnPvP_Click" ToolTip="Switch to PvP mode"/>
-                                <ToggleButton x:Name="BtnPvE" Content="PvE" IsChecked="False"
+                                              Checked="BtnPvpZone_Checked" Unchecked="ProfileButton_Unchecked"
+                                              Click="BtnPvpZone_Click"/>
+                                <ToggleButton x:Name="BtnPveZone"
                                               Style="{StaticResource GameModeToggleStyle}"
                                               Padding="10,4" FontSize="{DynamicResource FontSizeXSmall}" FontWeight="SemiBold"
-                                              Click="BtnPvE_Click" ToolTip="Switch to PvE mode"/>
+                                              Checked="BtnPveZone_Checked" Unchecked="ProfileButton_Unchecked"
+                                              Click="BtnPveZone_Click"/>
+                                <ToggleButton x:Name="BtnPvpSeason"
+                                              Style="{StaticResource GameModeToggleStyle}"
+                                              Padding="10,4" FontSize="{DynamicResource FontSizeXSmall}" FontWeight="SemiBold"
+                                              Checked="BtnPvpSeason_Checked" Unchecked="ProfileButton_Unchecked"
+                                              Click="BtnPvpSeason_Click"/>
                                 <TextBlock x:Name="TxtAutoIndicator" Text="Auto"
                                            FontSize="{DynamicResource FontSizeTiny}" Foreground="{StaticResource AccentBrush}"
                                            VerticalAlignment="Center" Margin="4,0,2,0" Visibility="Collapsed"
-                                           ToolTip="Mode auto-detected from game logs"/>
+                                           ToolTip="Profile auto-detected from game logs"/>
                             </StackPanel>
                         </Border>
 

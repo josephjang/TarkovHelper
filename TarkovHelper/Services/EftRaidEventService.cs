@@ -18,14 +18,15 @@ public sealed class EftRaidEventService : IDisposable
 
     #region Regex Patterns
 
-    // SelectProfile: ProfileId와 AccountId 추출
-    private static readonly Regex SelectProfileRegex = new(
-        @"SelectProfile ProfileId:([a-f0-9]+) AccountId:(\d+)",
+    // Legacy SelectProfile and EFT 1.1's completed two-phase selection. Prepare-only
+    // lines are deliberately excluded because an interrupted transition may never commit.
+    private static readonly Regex CompletedProfileSelectionRegex = new(
+        @"\b(?:SelectProfile|CompleteSelectedProfile)\s+ProfileId:([a-f0-9]+)\s+AccountId:(\d+)(?:\s|$)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    // Session mode: PVE/PVP 감지
+    // Match the complete token so PvpSeason cannot fall through to the Pvp prefix.
     private static readonly Regex SessionModeRegex = new(
-        @"Session mode: (Pve|Pvp|Regular)",
+        @"Session mode:\s*(Pve|PvpSeason|Pvp|Regular)\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Matching with group id: 솔로/파티 구분
@@ -190,6 +191,7 @@ public sealed class EftRaidEventService : IDisposable
     private EftProfileInfo? _currentProfile;
     private EftRaidInfo? _currentRaid;
     private GameMode _currentGameMode = GameMode.Unknown;
+    private SessionProfileHint _currentSessionProfileHint = SessionProfileHint.Unknown;
     private string? _pendingGroupId;
 
     #endregion
@@ -234,6 +236,11 @@ public sealed class EftRaidEventService : IDisposable
     /// 현재 게임 모드 (PVE/PVP)
     /// </summary>
     public GameMode CurrentGameMode => _currentGameMode;
+
+    /// <summary>
+    /// Most recent app-profile hint parsed from a session-mode line.
+    /// </summary>
+    public SessionProfileHint CurrentSessionProfileHint => _currentSessionProfileHint;
 
     /// <summary>
     /// 모니터링 중인지 여부
@@ -481,31 +488,26 @@ public sealed class EftRaidEventService : IDisposable
 
             string? lastPmcProfileId = null;
             string? lastAccountId = null;
+            SessionProfileHint lastProfileHint = SessionProfileHint.Unknown;
             GameMode lastGameMode = GameMode.Unknown;
 
             string? line;
             while ((line = reader.ReadLine()) != null)
             {
-                // SelectProfile 감지
-                var selectMatch = SelectProfileRegex.Match(line);
-                if (selectMatch.Success)
+                // A profile switch is authoritative only after the completed line.
+                if (TryParseCompletedProfileSelection(line, out var profileId, out var accountId))
                 {
-                    lastPmcProfileId = selectMatch.Groups[1].Value;
-                    lastAccountId = selectMatch.Groups[2].Value;
-                    _log.Debug($"[Scan] Found SelectProfile: PMC={lastPmcProfileId}, Account={lastAccountId}");
+                    lastPmcProfileId = profileId;
+                    lastAccountId = accountId;
+                    _log.Debug($"[Scan] Found completed profile selection: PMC={lastPmcProfileId}, Account={lastAccountId}");
                 }
 
                 // Session mode 감지
-                var sessionMatch = SessionModeRegex.Match(line);
-                if (sessionMatch.Success)
+                if (TryParseSessionProfile(line, out var profileHint, out var gameMode))
                 {
-                    lastGameMode = sessionMatch.Groups[1].Value.ToLowerInvariant() switch
-                    {
-                        "pve" => GameMode.PVE,
-                        "pvp" or "regular" => GameMode.PVP,
-                        _ => GameMode.Unknown
-                    };
-                    _log.Debug($"[Scan] Found Session mode: {lastGameMode}");
+                    lastProfileHint = profileHint;
+                    lastGameMode = gameMode;
+                    _log.Debug($"[Scan] Found Session mode: {lastProfileHint} ({lastGameMode})");
                 }
             }
 
@@ -534,15 +536,17 @@ public sealed class EftRaidEventService : IDisposable
             if (lastGameMode != GameMode.Unknown)
             {
                 _currentGameMode = lastGameMode;
-                _log.Debug($"[Scan] GameMode set: {_currentGameMode}");
+                _currentSessionProfileHint = lastProfileHint;
+                _log.Debug($"[Scan] Session profile set: {_currentSessionProfileHint} ({_currentGameMode})");
 
                 // Propagate the detected mode so the active profile auto-switches at startup,
                 // not only on a live session line appended while monitoring.
                 RaidEvent?.Invoke(this, new EftRaidEventArgs
                 {
                     EventType = EftRaidEventType.SessionModeDetected,
+                    SessionProfileHint = _currentSessionProfileHint,
                     Timestamp = DateTime.Now,
-                    Message = $"Game mode: {_currentGameMode} (startup scan)"
+                    Message = $"Session profile: {_currentSessionProfileHint}; game mode: {_currentGameMode} (startup scan)"
                 });
             }
             _log.Debug("ScanLogFileForProfile completed");
@@ -717,32 +721,26 @@ public sealed class EftRaidEventService : IDisposable
         }
 
         // Session mode
-        var sessionMatch = SessionModeRegex.Match(line);
-        if (sessionMatch.Success)
+        if (TryParseSessionProfile(line, out var profileHint, out var gameMode))
         {
-            _currentGameMode = sessionMatch.Groups[1].Value.ToLowerInvariant() switch
-            {
-                "pve" => GameMode.PVE,
-                "pvp" or "regular" => GameMode.PVP,
-                _ => GameMode.Unknown
-            };
-            _log.Debug($"[Parse] Session mode detected: {_currentGameMode}");
+            _currentSessionProfileHint = profileHint;
+            _currentGameMode = gameMode;
+            _log.Debug($"[Parse] Session mode detected: {_currentSessionProfileHint} ({_currentGameMode})");
 
             RaidEvent?.Invoke(this, new EftRaidEventArgs
             {
                 EventType = EftRaidEventType.SessionModeDetected,
+                SessionProfileHint = _currentSessionProfileHint,
                 Timestamp = timestamp,
-                Message = $"Game mode: {_currentGameMode}"
+                Message = $"Session profile: {_currentSessionProfileHint}; game mode: {_currentGameMode}"
             });
         }
 
-        // SelectProfile
-        var selectMatch = SelectProfileRegex.Match(line);
-        if (selectMatch.Success)
+        // Legacy SelectProfile or EFT 1.1 CompleteSelectedProfile. A
+        // PrepareSelectedProfileLocally line is intentionally not accepted.
+        if (TryParseCompletedProfileSelection(line, out var profileId, out var accountId))
         {
-            var profileId = selectMatch.Groups[1].Value;
-            var accountId = selectMatch.Groups[2].Value;
-            _log.Debug($"[Parse] SelectProfile detected: ProfileId={profileId}, AccountId={accountId}");
+            _log.Debug($"[Parse] Completed profile selection detected: ProfileId={profileId}, AccountId={accountId}");
 
             if (_currentProfile?.PmcProfileId != profileId)
             {
@@ -955,6 +953,53 @@ public sealed class EftRaidEventService : IDisposable
                 Timestamp = timestamp
             });
         }
+    }
+
+    internal static bool TryParseSessionProfile(
+        string line,
+        out SessionProfileHint profileHint,
+        out GameMode gameMode)
+    {
+        var match = SessionModeRegex.Match(line);
+        if (!match.Success)
+        {
+            profileHint = SessionProfileHint.Unknown;
+            gameMode = GameMode.Unknown;
+            return false;
+        }
+
+        profileHint = match.Groups[1].Value.ToLowerInvariant() switch
+        {
+            "pve" => SessionProfileHint.PveZone,
+            "pvpseason" => SessionProfileHint.PvpSeason,
+            "pvp" or "regular" => SessionProfileHint.PvpZone,
+            _ => SessionProfileHint.Unknown
+        };
+        gameMode = profileHint switch
+        {
+            SessionProfileHint.PveZone => GameMode.PVE,
+            SessionProfileHint.PvpZone or SessionProfileHint.PvpSeason => GameMode.PVP,
+            _ => GameMode.Unknown
+        };
+        return profileHint != SessionProfileHint.Unknown;
+    }
+
+    internal static bool TryParseCompletedProfileSelection(
+        string line,
+        out string profileId,
+        out string accountId)
+    {
+        var match = CompletedProfileSelectionRegex.Match(line);
+        if (!match.Success)
+        {
+            profileId = string.Empty;
+            accountId = string.Empty;
+            return false;
+        }
+
+        profileId = match.Groups[1].Value;
+        accountId = match.Groups[2].Value;
+        return true;
     }
 
     private void ParseNetworkLogLine(string line)
