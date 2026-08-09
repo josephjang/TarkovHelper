@@ -18,7 +18,7 @@ public class LocalizationHeaderStringsTests
         // Title bar
         "HeaderPvpZone", "HeaderPveZone", "HeaderPvpSeason",
         "HeaderPvpTooltip", "HeaderPveTooltip", "HeaderPvpSeasonTooltip",
-        "HeaderAutoBadge", "HeaderAutoBadgeTooltip",
+        "HeaderActiveProfile", "HeaderProfileMenuTooltip", "HeaderProfileChangedFromLogsFormat",
         "HeaderProfileTooltip", "HeaderProfileName", "HeaderLevelShort", "HeaderVersionTooltipIdle",
         "HeaderVersionTooltipInstall", "HeaderVersionTooltipCheckFailed",
         "HeaderUpdateAvailableFormat", "HeaderChecking",
@@ -43,7 +43,7 @@ public class LocalizationHeaderStringsTests
 
     private static readonly string[] FormatKeys =
     {
-        "HeaderVersionTooltipInstall", "HeaderUpdateAvailableFormat",
+        "HeaderProfileChangedFromLogsFormat", "HeaderVersionTooltipInstall", "HeaderUpdateAvailableFormat",
         "SettingsCurrentVersionFormat", "SettingsUpdateToFormat", "TimeMinutesAgoFormat",
     };
 

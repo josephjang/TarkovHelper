@@ -157,6 +157,22 @@ internal sealed class AppDriver : IDisposable
         Thread.Sleep(300); // let WPF finish the state change before we act on it
     }
 
+    /// <summary>Resizes the normal window using WPF device-independent units.</summary>
+    public void ResizeWindow(double width, double height)
+    {
+        Win32.ShowWindow(_hwnd, Win32.SW_RESTORE);
+        Win32.GetWindowRect(_hwnd, out var rect);
+        var scale = Win32.GetDpiForWindow(_hwnd) / 96.0;
+        Assert.True(Win32.MoveWindow(
+            _hwnd,
+            rect.Left,
+            rect.Top,
+            (int)Math.Round(width * scale),
+            (int)Math.Round(height * scale),
+            repaint: true));
+        Thread.Sleep(300);
+    }
+
     /// <summary>Graceful close (WM_CLOSE, so the Closing event saves) and wait for exit.</summary>
     public void CloseAndWaitForExit()
     {
@@ -305,6 +321,11 @@ internal sealed class AppDriver : IDisposable
     /// <summary>Toggles a CheckBox-like element (TogglePattern).</summary>
     public void ToggleElement(string automationId)
         => ((TogglePattern)WaitForElement(automationId).GetCurrentPattern(TogglePattern.Pattern)).Toggle();
+
+    /// <summary>Selects one item in an exact-one control such as a RadioButton.</summary>
+    public void SelectElement(string automationId)
+        => ((SelectionItemPattern)WaitForElement(automationId)
+            .GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
 
     /// <summary>Whether a CheckBox-like element is currently checked (TogglePattern).</summary>
     public bool GetToggleState(string automationId)
@@ -836,6 +857,8 @@ internal static class Win32
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
     [DllImport("user32.dll")] public static extern bool GetWindowPlacement(IntPtr hwnd, ref WINDOWPLACEMENT placement);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int cmd);
+    [DllImport("user32.dll")] public static extern bool MoveWindow(
+        IntPtr hwnd, int x, int y, int width, int height, bool repaint);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr context);

@@ -15,8 +15,8 @@ public class ProfileSwitchingTests
     [InlineData(AppProfile.PveZone, SessionProfileHint.PveZone, AppProfile.PveZone, true)]
     [InlineData(AppProfile.PveZone, SessionProfileHint.PvpSeason, AppProfile.PvpSeason, true)]
     [InlineData(AppProfile.PvpSeason, SessionProfileHint.Unknown, AppProfile.PvpSeason, false)]
-    [InlineData(AppProfile.PvpSeason, SessionProfileHint.PvpZone, AppProfile.PvpSeason, false)]
-    [InlineData(AppProfile.PvpSeason, SessionProfileHint.PveZone, AppProfile.PvpSeason, false)]
+    [InlineData(AppProfile.PvpSeason, SessionProfileHint.PvpZone, AppProfile.PvpZone, true)]
+    [InlineData(AppProfile.PvpSeason, SessionProfileHint.PveZone, AppProfile.PveZone, true)]
     [InlineData(AppProfile.PvpSeason, SessionProfileHint.PvpSeason, AppProfile.PvpSeason, true)]
     public void Resolver_covers_every_profile_and_hint(
         AppProfile current,

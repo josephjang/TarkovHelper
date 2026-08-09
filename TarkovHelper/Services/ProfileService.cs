@@ -72,12 +72,6 @@ public sealed class ProfileService
         if (detected == SessionProfileHint.Unknown)
             return new ProfileResolution(current, false);
 
-        if (current == AppProfile.PvpSeason &&
-            detected is SessionProfileHint.PvpZone or SessionProfileHint.PveZone)
-        {
-            return new ProfileResolution(current, false);
-        }
-
         var profile = detected switch
         {
             SessionProfileHint.PveZone => AppProfile.PveZone,
