@@ -33,6 +33,8 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
   클라이언트를 실행하고 비식별 로그 증거를 수집하는 Windows 절차
 - [eft-raid-event-service.md](eft-raid-event-service.md): EftRaidEventService가
   제공하는 이벤트와 사용법
+- [2026-08-game-mode-selector-ux-review.html](2026-08-game-mode-selector-ux-review.html): 활성
+  프로필 선택 UI의 UX 검토와 인터랙티브 개선안
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
   마커 API 분석
 

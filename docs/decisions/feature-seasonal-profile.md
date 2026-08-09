@@ -8,6 +8,11 @@
 > reverses a decision here appends `Superseded by <doc>` below this line, in the PR
 > that reverses it.
 
+> Superseded in part by `feature-profile-log-auto-switch.md` (2026-08-09): R3 and
+> the seasonal pin decision are reversed. Every exact, known session-profile hint
+> may switch away from any current profile; only unknown or partial evidence keeps
+> the current selection. Every other decision here stands.
+
 ## Summary
 
 Escape from Tarkov 1.1 introduced seasonal characters, but the app offers only PvP
