@@ -10,184 +10,355 @@
 
 ## Summary
 
-Three ideas carry the change. First, "which profile am I on" stops being derived
-from `GameMode`: `ProfileService` gains its own `AppProfile` concept with a third
-member, and `GameMode` goes back to meaning only "what the game log said". Second,
-the auto-switch suppression lives in exactly one place, a pure decision function
-in `ProfileService` that the singleton and the unit tests both call, so the pinning
-rule is testable without constructing the log-watching singleton. Third, the reset
-gains the pieces it was missing rather than a new mechanism: the profile-scoped
-clears already exist on the progress and inventory services, so the work is calling
-them together, adding two profile-scoped deletes for `ProfileSettings` and
-`RaidHistory`, and reloading the settings cache afterwards. `RaidHistory` needs a
-new column before it can be reset by profile, for the reason in Current Behavior.
+The app gains an `AppProfile` identity with `PvpZone`, `PveZone`, and
+`PvpSeason`, separate from `GameMode`, which continues to describe PvP/PvE game
+rules. Log evidence is represented by a third type, `SessionProfileHint`, so a
+seasonal signature can be expressed without inventing a game mode the log did not
+report. A pure resolver applies automatic detections and makes the seasonal pinning
+rule directly testable.
+
+Profile ownership is captured when each mutation or raid starts, never later inside
+an asynchronous continuation. One ordered write coordinator makes those writes and
+reset commands deterministic. Reset becomes one SQLite transaction across
+all profile-owned tables, followed by cache replacement only after commit. Raid history
+gets a nullable app-profile column, and bounded quest sync passes its cutoff into the
+directory parser so old log files are not opened merely to discard their events.
 
 ## Non-Goals
 
-- No raid-history UI. This phase attributes rows so a reset can scope its delete;
-  displaying them stays out of scope (nothing reads `RaidHistory` today).
+- No raid-history UI. This phase attributes rows so reset can scope its delete;
+  displaying them stays out of scope.
 - No new storage architecture. The seasonal profile is a third `ProfileId` value in
   the existing profile-keyed tables.
-- No change to how quest events map to tasks in `LogSyncService`; only the sync
-  window changes.
-- No migration of any existing row to the seasonal profile. Pre-existing data stays
-  exactly where it is.
+- No per-season archive or user-created profile. The new profile is the one rolling
+  seasonal container decided in `feature-eft-1-1-roadmap.md`.
+- No change to how quest log events map to tasks. Only file/event eligibility and
+  profile ownership change.
+- No migration of an existing row to the seasonal profile. Pre-existing data stays
+  where it is.
+- No season-aware quest, hideout, or item content. Those are later roadmap phases.
 
 ## Current Behavior / Root Cause
 
-Verified in this session against the working tree.
+Verified against the working tree before implementation.
 
-- **The app profile is a projection of `GameMode`.** `ProfileService.ActiveProfileId`
-  is `_activeGameMode == GameMode.PVE ? "pve" : "pvp"`, and `GameMode` (in
-  `Models/EftRaidEvent.cs`) has exactly `Unknown`, `PVP`, `PVE`. The active mode
-  persists to the global `UserSettings` key `app.activeGameMode` as the literal
-  `"PVE"` or `"PVP"`; `InitializeAsync` reads it back with `saved == "PVE" ? PVE :
-  PVP`, so any unrecognized value already falls back to PvP.
-- **The auto-switch is one branch.** `EftRaidEventService.ParseApplicationLogLine`
-  matches `Session mode: (Pve|Pvp|Regular)` and raises `SessionModeDetected`;
-  `ProfileService.OnRaidEvent` reacts with `SetActiveGameMode(mode, isAuto: true)`.
-  `ScanLogFileForProfile` raises the same event during the startup scan, so the
-  auto-switch also fires once at launch from the last session line in the newest
-  log. `regular` maps to `PVP`, which is why a Kord Breach session lands in the PvP
-  profile.
-- **Profile-scoped stores already work.** `QuestProgress`, `ObjectiveProgress`,
-  `ItemInventory`, `HideoutProgress`, and `ProfileSettings` all carry `ProfileId`
-  in their primary key, and `QuestProgressService`, `HideoutProgressService`,
-  `ItemInventoryService`, and `SettingsService` each subscribe to
-  `ActiveProfileChanged` and reload. Adding a third `ProfileId` value needs no
-  schema change for any of them.
-- **`RaidHistory.ProfileId` is not the app profile.** It is written from
-  `EftRaidInfo.ProfileId`, which `ParseApplicationLogLine` fills with the 24-hex
-  EFT PMC or SCAV profile id parsed out of `TRACE-NetworkGameCreate` (or
-  `SelectProfile` on the fallback paths). The table's only mode-ish column is
-  `GameMode`, an int copied from `_currentGameMode`. So raid rows carry no app
-  profile at all, and the column name that looks like attribution is taken by a
-  different identifier. This corrects `feature-eft-1-1-roadmap.spec.md`, which
-  reads `RaidHistory`'s nullable `ProfileId` as app-profile attribution; the
-  roadmap's phase-1 scope is unchanged by the correction, but the mechanism is.
-- **Nothing reads raid history.** `GetRaidHistoryAsync`, `GetRaidStatisticsAsync`,
-  and `CleanupRaidHistoryAsync` have no callers outside `UserDataDbService`. Raid
-  history is write-only today, which is why the PRD states attribution as a data
-  guarantee rather than an on-screen one.
-- **Reset clears two stores out of five.** `MainWindow.BtnResetProgress_Click`
-  calls `QuestProgressService.ResetAllProgress` (quest plus objective) and
-  `HideoutProgressService.ResetAllProgress`, both already scoped to
-  `ActiveProfileId`. `ItemInventoryService.ResetAllInventory` exists, is equally
-  scoped, and is never called. Nothing clears `ProfileSettings` or `RaidHistory`.
-  The confirmation is a `MessageBox` with a hardcoded Korean-plus-English string,
-  bypassing `LocalizationService` entirely.
-- **The sync range is collected and dropped.** `SettingsService.SyncDaysRange`
-  persists to `app.syncDaysRange` and `LogSyncService.SyncFromLogsAsync` takes a
-  `daysRange` parameter that filters events by `e.Timestamp >= cutoffDate`, but
-  `MainWindow.PerformQuestSync` calls `SyncFromLogsAsync(logPath, progress)` and
-  lets the parameter default to `0`, which means "all logs".
-- **Profile-specific settings are already enumerated.**
-  `SettingsService.ProfileSpecificKeys` lists the eight keys that live in
-  `ProfileSettings` (`app.playerLevel`, `app.scavRep`, `app.showLevelLockedQuests`,
-  `app.dspDecodeCount`, `app.playerFaction`, `app.hasEodEdition`,
-  `app.hasUnheardEdition`, `app.prestigeLevel`); everything else is global in
-  `UserSettings`. `LoadProfileSettings` refreshes the cache on
-  `ActiveProfileChanged` and fires the per-value events the UI listens to.
-- **The switcher is a two-button toggle.** `MainWindow.xaml` holds `BtnPvP` and
-  `BtnPvE` (`ToggleButton`, `GameModeToggleStyle`) plus the `TxtAutoIndicator`
-  badge; `UpdateGameModeUI` sets `IsChecked` from the mode. The button contents are
-  the literal strings `PvP` and `PvE` in XAML, while their tooltips come from
-  `LocalizationService.HeaderPvpTooltip` / `HeaderPveTooltip`.
+- **The app profile is a projection of `GameMode`.**
+  `ProfileService.ActiveProfileId` is `_activeGameMode == GameMode.PVE ? "pve" :
+  "pvp"`, and `GameMode` has only `Unknown`, `PVP`, and `PVE`. The active value is
+  stored globally as `app.activeGameMode = PVE|PVP`; initialization treats every
+  unrecognized value as PvP.
+- **The auto-switch consumes only PvP/PvE.**
+  `EftRaidEventService.ParseApplicationLogLine` matches
+  `Session mode: (Pve|Pvp|Regular)`. `ProfileService.OnRaidEvent` reads
+  `CurrentGameMode` and calls `SetActiveGameMode(mode, isAuto: true)`. The startup
+  scan raises the same event from the last session line, so a Kord Breach session
+  currently lands in PvP at launch as well as during live monitoring.
+- **The table schemas are profile-scoped, but not every asynchronous write is.**
+  `QuestProgress`, `ObjectiveProgress`, `ItemInventory`, `HideoutProgress`, and
+  `ProfileSettings` include `ProfileId` in their keys. However, several quest and
+  objective entry points start untracked work and read
+  `ProfileService.ActiveProfileId` inside that later work. A switch between mutation
+  and execution can redirect the write. Inventory already captures the profile in
+  `_pendingSaves`, but its debounce buffer can outlive a reset.
+- **Profile reloads can complete out of order.** The four profile-aware services
+  subscribe to `ActiveProfileChanged` and start asynchronous reloads that consult
+  the global active profile. A slow earlier reload can apply after a newer switch.
+- **`RaidHistory.ProfileId` is the EFT character id, not the app profile.** It is
+  populated from `EftRaidInfo.ProfileId`, the 24-hex PMC or SCAV id parsed from
+  `TRACE-NetworkGameCreate` or fallback `SelectProfile` paths. `GameMode` is the
+  only mode-like raid column, so no row records whether the app profile was PvP Zone,
+  PvE Zone, or PvP Season. This corrects the interpretation in
+  `feature-eft-1-1-roadmap.spec.md`; its phase-1 scope remains unchanged.
+- **Raid saves are queued without ownership.** Raid-end paths wrap
+  `SaveRaidHistoryAsync(_currentRaid)` in `Task.Run`. Reading the active app profile
+  in the database method would therefore attribute the row at task execution, not
+  when the raid happened.
+- **Nothing reads raid history today.** `GetRaidHistoryAsync`,
+  `GetRaidStatisticsAsync`, and `CleanupRaidHistoryAsync` have no external callers.
+- **Reset clears only quest/objective and hideout data.** The button does not call
+  `ItemInventoryService.ResetAllInventory`, and nothing clears `ProfileSettings` or
+  `RaidHistory`. Existing reset methods perform independent deletes, swallow
+  database exceptions, and update memory before durable success. Pending inventory,
+  quest, or raid writes can run after a delete and recreate rows.
+- **The sync range is collected and dropped by the UI path.**
+  `SettingsService.SyncDaysRange` persists to `app.syncDaysRange`, and
+  `SyncFromLogsAsync` accepts `daysRange`, but `MainWindow.PerformQuestSync` omits it
+  and gets the default `0` (all history). Even when a caller supplies a bound, the
+  service parses every push-notifications file and filters events afterwards.
+- **Profile settings are already enumerated.** `SettingsService.ProfileSpecificKeys`
+  contains level, scav reputation, level-lock visibility, DSP count, faction,
+  editions, and prestige. Other settings remain global in `UserSettings`.
+- **The switcher is a two-button toggle.** `MainWindow.xaml` has literal `PvP` and
+  `PvE` contents, localized tooltips, and an Auto badge.
+- **The database singletons are not unit-test isolated by an environment change.**
+  `UserDataDbService` captures `AppEnv.ConfigPath` in its private singleton
+  constructor. `TARKOVHELPER_CONFIG_PATH` correctly isolates a child app process in
+  E2E tests, but changing it per unit-test class cannot recreate an already-built
+  `Lazy<T>` singleton.
 
 ## Design
 
-### Profile identity
+### Profile identity and detected-session hints
 
-`Models/EftRaidEvent.cs` keeps `GameMode` exactly as it is: a parsed log fact with
-`Unknown`, `PVP`, `PVE`. A new `AppProfile` enum (`Models/AppProfile.cs`) carries
-the app-level choice: `PvpZone`, `PveZone`, `PvpSeason`.
+`Models/AppProfile.cs` introduces the app-level choice:
 
-`ProfileService` changes shape around it:
+```
+AppProfile.PvpZone
+AppProfile.PveZone
+AppProfile.PvpSeason
+```
+
+`Models/EftRaidEvent.cs` keeps `GameMode.Unknown`, `GameMode.PVP`, and
+`GameMode.PVE` unchanged and adds the parsed session classification:
+
+```
+SessionProfileHint.Unknown
+SessionProfileHint.PvpZone
+SessionProfileHint.PveZone
+SessionProfileHint.PvpSeason
+```
+
+The existing tokens map `Pve` to `PveZone` and `Pvp`/`Regular` to `PvpZone`. If the
+real seasonal log capture identifies a stable signature, that evidence maps to
+`PvpSeason`. Both PvP hints imply `GameMode.PVP` for raid rules and persistence;
+the hint answers which app profile the session belongs to, not how the game plays.
+
+The type split keeps log evidence, storage selection, and game rules from being
+collapsed into one enum:
+
+```mermaid
+flowchart LR
+  Log["EFT log evidence"] --> Hint["SessionProfileHint"]
+  Current["Current AppProfile"] --> Resolver["ResolveDetectedProfile"]
+  Hint --> Resolver
+  Resolver --> Choice["AppProfile and ProfileId"]
+  Choice --> Stores["Profile-scoped stores"]
+  Hint --> Rules["GameMode: PVP or PVE"]
+  Rules --> RaidRules["RaidHistory.GameMode"]
+```
+
+`ProfileService` changes as follows:
 
 - `SeasonProfileId = "season"` joins `PvpProfileId` and `PveProfileId`.
-- `ActiveProfile` (type `AppProfile`) replaces `_activeGameMode` as the stored
-  state; `ActiveProfileId` maps it to the id string. `ActiveGameMode` stays as a
-  computed property (`PvpSeason` and `PvpZone` both report `GameMode.PVP`), since
-  a seasonal raid does run under PvP rules and callers that ask about game rules
-  should keep getting that answer.
-- `ProfileChangedEventArgs` gains an `AppProfile Profile` property and keeps its
-  existing `GameMode` and `IsAutoDetected` members, so the four services that
-  subscribe only to reload (`QuestProgressService`, `HideoutProgressService`,
-  `ItemInventoryService`, `SettingsService`) need no change at all, and only the
-  `MainWindow` handler, which actually renders the selection, reads the new
-  property.
-- `SetActiveProfile(AppProfile profile, bool isAuto = false)` is the single mutator.
-  `SetActiveGameMode(GameMode, bool)` stays as the log-facing adapter, mapping a
-  detected mode to a profile and applying the pinning rule below; its two
-  `MainWindow` call sites are replaced by `SetActiveProfile`.
-- `GetProfileId(GameMode)` gains an `AppProfile` overload; the `GameMode` overload
-  stays for `ConfigMigrationService` and the JSON migration paths, which
-  deliberately target `pvp`.
-- Persistence keeps the key `app.activeGameMode` and writes `"PVP"`, `"PVE"`, or
-  `"SEASON"`. `InitializeAsync` parses the three values and falls back to
-  `PvpZone`, which is what an older build already does with a value it does not
-  recognize.
+- `ActiveProfile` replaces `_activeGameMode` as stored state. `ActiveProfileId` maps
+  the enum to its string id. `ActiveGameMode` remains computed: both PvP profiles
+  report `GameMode.PVP`.
+- `ProfileChangedEventArgs` carries `AppProfile Profile`, `string ProfileId`, the
+  computed `GameMode`, `IsAutoDetected`, and a monotonic `Revision`.
+- `SetActiveProfile(AppProfile profile, bool isAuto = false)` is the manual/state
+  mutator. Main-window buttons and the Debug Toolbox call it directly.
+- `ApplyDetectedProfile(SessionProfileHint hint)` is the log-facing adapter. Both
+  live detection and the startup scan use it.
+- `GetProfileId(AppProfile)` is added. The `GameMode` overload remains only for
+  legacy JSON/config migration, where PvP deliberately means the permanent `pvp`
+  profile.
+- The existing key `app.activeGameMode` stores `PVP`, `PVE`, or `SEASON`.
+  `ParsePersistedProfile` and `SerializeProfile` are pure helpers; an unknown value
+  falls back to `PvpZone`, matching old-build behavior.
 
-The pinning rule is a pure static function so it can be tested without the
-singleton:
+The pure resolution function is:
 
 ```
-AppProfile ResolveDetectedProfile(AppProfile current, GameMode detected)
+ProfileResolution ResolveDetectedProfile(
+    AppProfile current,
+    SessionProfileHint detected)
 ```
 
-It returns `current` unchanged when `current` is `PvpSeason` (the suspension) or
-when `detected` is `Unknown`, and otherwise maps `PVP` to `PvpZone` and `PVE` to
-`PveZone`. `OnRaidEvent` and `SetActiveGameMode` both route through it.
+`ProfileResolution` contains `Profile` and `DetectionApplied`.
 
-### Reset
+- `Unknown` returns the current profile with `DetectionApplied = false`.
+- While current is `PvpSeason`, `PvpZone` and `PveZone` hints are suppressed and
+  return seasonal with `DetectionApplied = false`.
+- A `PvpSeason` hint is applied normally, including from a permanent profile.
+- From either permanent profile, recognized permanent hints map as they do today.
 
-A new `ProfileResetService` (`Services/ProfileResetService.cs`) owns the whole
-scope in one place, so no caller has to remember the list:
+A suppressed hint does not change `IsAutoDetected`, persist a value, raise
+`ActiveProfileChanged`, or show the Auto badge. A genuine seasonal hint may mark an
+already-selected seasonal profile as auto-detected because the log then confirmed
+the selection.
 
-1. `QuestProgressService.ResetAllProgress()` (quest plus objective, in-memory and DB)
-2. `HideoutProgressService.ResetAllProgress()`
-3. `ItemInventoryService.ResetAllInventory()`
-4. `UserDataDbService.ClearProfileSettingsAsync(profileId)` (new)
-5. `UserDataDbService.ClearRaidHistoryForProfileAsync(profileId)` (new)
-6. `SettingsService.ReloadProfileSettings()` (new public entry point wrapping the
-   existing private `LoadProfileSettings` plus the same change-event fan-out
-   `OnActiveProfileChanged` already performs)
+Writes to `app.activeGameMode` are serialized. Each queued persistence operation
+reads the current enum only after entering the serializer, so rapid switches cannot
+finish out of order and leave an older selection stored for the next launch.
 
-Step 6 is the ripple that makes step 4 correct: `SettingsService` caches the
-profile values in fields, so deleting the rows without a reload leaves the drawer
-showing the old level and reputation until the next profile switch.
+### Mutation ownership, write ordering, and reload ordering
 
-`MainWindow.BtnResetProgress_Click` becomes a localized confirmation naming the
-profile and listing the six categories, then one `ProfileResetService` call, then
-the existing `LoadAndShowQuestListAsync` refresh.
+Every profile-scoped mutation captures `AppProfile` and `ProfileId` synchronously,
+before any task, timer, event dispatch, or database await. The captured id travels
+with the command. An asynchronous persistence helper must not consult
+`ProfileService.ActiveProfileId` to decide where an existing mutation belongs.
+
+A new `ProfileDataWriteCoordinator` owns one ordered asynchronous queue for all
+profile-scoped writes. Quest, objective, hideout, inventory, profile-setting,
+attributed raid-history, and reset writes enter that queue when the app accepts the
+operation. The single queue matches SQLite's single-writer behavior, prevents
+cross-profile connection lock races, and gives reset a total order. A failed entry is
+observed and logged but does not poison the queue tail; reset failures are returned to
+their awaiting caller.
+
+Service changes:
+
+- `QuestProgressService` passes captured ids into every batch, single quest,
+  objective save, and delete helper. Fire-and-forget UI entry points enqueue
+  immediately instead of starting an untracked `Task.Run`.
+- `ItemInventoryService` retains dirty-time ownership. Flushing its debounce buffer
+  moves the captured entries into the coordinator while holding `_lock`, then clears
+  the buffer before releasing the lock.
+- `HideoutProgressService` and `SettingsService` use explicit ids even where the
+  current path happens to block synchronously.
+- Raid-end handling enqueues immediately and no longer wraps the enqueue in
+  `Task.Run`.
+
+`ProfileService` increments `Revision` for every applied state change. Profile-change
+handlers capture the event revision and target, obtain data into local temporary
+state, then apply it only if both still match the service's current state. The
+revision check covers rapid round trips such as PvP Zone -> PvP Season -> PvP Zone,
+where target equality alone cannot distinguish the stale first PvP reload from the
+newest one.
+
+### Atomic profile reset
+
+`ProfileResetService.ResetAsync(AppProfile target)` owns the entire reset. The
+main-window handler captures the target and localized label before confirmation, so
+the dialog and operation refer to the same profile.
+
+The sequence is:
+
+1. If the target has a raid in `Matching`, `Connecting`, or `InRaid`, refuse the
+   reset with a localized message. This avoids assigning a raid that spans the reset
+   boundary to either side by accident.
+2. After confirmation, acquire a profile-change lease from `ProfileService` and
+   disable reset, profile-switching, and profile-editing controls. The lease defers
+   both manual and automatic changes and prevents a second reset.
+3. Stop the inventory debounce timer and move all pending target-profile entries
+   into the ordered queue. Other write types were enqueued at mutation time.
+4. Enqueue the reset behind those writes. `UserDataDbService.ResetProfileDataAsync`
+   uses one connection and one SQLite transaction to delete the target from:
+   `QuestProgress`, `ObjectiveProgress`, `HideoutProgress`, `ItemInventory`,
+   `ProfileSettings`, and `RaidHistory WHERE AppProfileId = @profileId`.
+5. Commit only after all six deletes succeed. Exceptions propagate to the UI; the
+   transaction rolls back and the app shows a localized failure dialog.
+6. After commit, call non-persisting `ApplyProfileReset(profileId)` methods that
+   replace quest/objective, hideout, inventory, and profile-settings caches with
+   their canonical empty/default state and raise their normal change events. Then
+   show success and release the lease. The newest deferred detection is re-evaluated
+   after release.
+
+The coordinator places reset after every already-accepted write and before every
+later write. Only a committed transaction changes the caches:
+
+```mermaid
+sequenceDiagram
+  actor User
+  participant Reset as ProfileResetService
+  participant Inventory as Inventory debounce
+  participant Queue as Write coordinator
+  participant DB as user_data.db
+  participant Caches as Service caches
+
+  User->>Reset: Confirm reset(target)
+  Note over Reset,Queue: Profile-change lease is held
+  Reset->>Inventory: Flush pending target entries
+  Inventory->>Queue: Enqueue captured writes
+  Reset->>Queue: Enqueue reset(target)
+  Queue->>DB: Finish earlier writes
+  Queue->>DB: BEGIN and delete six owned table sets
+  alt Any delete fails
+    DB-->>Queue: ROLLBACK and error
+    Queue-->>Reset: Failure
+    Note over Caches: Remain unchanged
+  else All deletes succeed
+    DB-->>Queue: COMMIT
+    Queue-->>Reset: Success
+    Reset->>Caches: ApplyProfileReset(target)
+  end
+  Reset-->>User: Localized result
+```
+
+No cache is cleared before commit, and the post-commit cache path performs no I/O or
+persistence that can partially reset the database. A rollback therefore leaves
+durable and visible state intact. Writes accepted before reset are ordered before the
+transaction and then deleted; writes accepted after it are ordered after it and
+represent new data.
+`UserSettings`, other profile ids, and unattributed raid rows are never included.
+
+Resetting all `ProfileSettings` rows covers profile data added there by later phases,
+including trader loyalty. A future profile-owned table must be added to the same
+transaction and its reset isolation test.
 
 ### Raid attribution
 
-`RaidHistory` gains `AppProfileId TEXT` (nullable, no default) via an additive
-`ALTER TABLE` in `UserDataDbService.CreateTablesAsync`, guarded by the same
-`pragma_table_info` check `MigrateToProfileSchemaAsync` already uses. Existing rows
-keep `NULL`, which is what makes the PRD's R7 true by construction.
-`SaveRaidHistoryAsync` writes `ProfileService.Instance.ActiveProfileId` into it,
-and `ClearRaidHistoryForProfileAsync` deletes `WHERE AppProfileId = @profileId`,
-so `NULL` rows can never be caught by a reset. An index on `AppProfileId` is not
-added: the only query is a delete on a table nothing reads.
+`RaidHistory` gains `AppProfileId TEXT NULL` alongside the existing EFT-character
+`ProfileId`. The fresh-database `CREATE TABLE` statement includes the column. For an
+existing database, `CreateTablesAsync` runs a guarded `pragma_table_info` check after
+the table exists and applies `ALTER TABLE RaidHistory ADD COLUMN AppProfileId TEXT`
+only when needed. Existing rows remain `NULL`, which makes R7 true by construction.
 
-### Sync window
+`EftRaidInfo` gains `string? AppProfileId`. Each path that first creates a raid
+(`TRACE-NetworkGameCreate`, scene-preset fallback, and transit fallback) copies
+`ProfileService.ActiveProfileId` at that moment. Later switches cannot change the
+owner. `SaveRaidHistoryAsync` writes `raid.AppProfileId`; it never reads current
+profile state. History reads map the new column back onto the model.
 
-`MainWindow.PerformQuestSync` passes `_settingsService.SyncDaysRange` as the third
-argument to `SyncFromLogsAsync`. No other call site exists.
+The snapshot travels with the raid even when the user switches before the queued
+save runs:
+
+```mermaid
+sequenceDiagram
+  actor User
+  participant Profile as ProfileService
+  participant Raid as EftRaidEventService
+  participant Info as EftRaidInfo
+  participant Queue as Write coordinator
+  participant DB as RaidHistory
+
+  Raid->>Profile: Read ActiveProfileId at raid creation
+  Profile-->>Raid: season
+  Raid->>Info: AppProfileId = season
+  User->>Profile: Switch to PvP Zone
+  Raid->>Queue: Enqueue ended raid with captured owner
+  Queue->>DB: INSERT AppProfileId = season
+```
+
+The coordinator orders an ended raid's save before a later reset. Reset deletes only
+`WHERE AppProfileId = @profileId`, so `NULL` legacy rows and other profiles survive.
+No new index is added: the table has no reader today, and the only new query is an
+infrequent reset delete.
+
+### Bounded log sync
+
+`MainWindow.PerformQuestSync` passes `_settingsService.SyncDaysRange` into
+`SyncFromLogsAsync`.
+
+`LogSyncService` receives a `TimeProvider`; the production singleton uses
+`TimeProvider.System`. One local `now` and cutoff are captured per sync and passed to
+`ParseLogDirectoryAsync`.
+
+For `daysRange > 0`:
+
+1. Enumerate `*push-notifications*.log` metadata.
+2. Skip files whose local `LastWriteTime` is older than the cutoff.
+3. Parse only eligible files.
+4. Retain only events whose embedded timestamp is `>= cutoff`.
+
+The file timestamp is the I/O boundary; the embedded event timestamp is the import
+boundary within an eligible file. For `daysRange == 0`, all files and events remain
+eligible. Progress reports both eligible and total file counts, for example
+`Scanning 3/42 log files from the last 7 days`, so manual verification can distinguish
+file skipping from post-parse event filtering.
+
+An internal constructor accepts a test `TimeProvider`. Boundary tests therefore use
+the same fixed instant for file and event comparisons instead of racing separate
+calls to `DateTime.Now`.
 
 ### UI and localization
 
-`MainWindow.xaml` replaces the two-button toggle with three `ToggleButton`s
-(`BtnPvpZone`, `BtnPveZone`, `BtnPvpSeason`) in the same `Border`, keeping
-`GameModeToggleStyle` and `TxtAutoIndicator`. Button contents move out of XAML into
-`ApplyLocalization`, since the labels are now translated. `UpdateGameModeUI` becomes
-`UpdateProfileUI(AppProfile, bool isAuto)` and sets the three `IsChecked` values
-from the active profile.
+`MainWindow.xaml` replaces `BtnPvP` and `BtnPvE` with `BtnPvpZone`, `BtnPveZone`,
+and `BtnPvpSeason`, preserving `GameModeToggleStyle` and `TxtAutoIndicator`. Button
+content moves into `ApplyLocalization`. `UpdateProfileUI(AppProfile, bool)` checks
+exactly one button and displays Auto only for an applied detection.
 
-New `LocalizationService.Header.cs` strings, values fixed by the game's own client
-in each language (see the PRD's label decision):
+Profile labels match the game client:
 
 | Key | EN | KO | JA |
 | --- | --- | --- | --- |
@@ -195,154 +366,226 @@ in each language (see the PRD's label decision):
 | `HeaderPveZone` | PvE Zone | PvE 존 | PvE ゾーン |
 | `HeaderPvpSeason` | PvP Season | 시즌 PvP | PvP シーズン |
 
-`HeaderPvpTooltip` and `HeaderPveTooltip` keep their keys with their wording
-updated to the new labels, and `HeaderPvpSeasonTooltip` joins them. The reset
-dialog adds `ResetProfileTitle`, `ResetProfileConfirmFormat` (one `{0}` for the
-profile label), `ResetProfileScopeList`, and `ResetProfileDoneFormat`. Every new
-key joins the `HeaderKeys` array in `LocalizationHeaderStringsTests`, and the
-format keys join `FormatKeys`.
+Existing PvP/PvE tooltip keys retain their names with updated wording, and
+`HeaderPvpSeasonTooltip` is added. Reset adds `ResetProfileTitle`,
+`ResetProfileConfirmFormat`, `ResetProfileScopeList`, `ResetProfileDoneFormat`,
+`ResetProfileFailedFormat`, and `ResetProfileInRaid`. The confirmation format names
+the captured profile and lists quest/objective progress, hideout progress, item
+inventory, profile settings, and attributed raid history. All keys have EN/KO/JA
+values and join the localization key/format guard tests.
+
+### Test seams
+
+Unit tests do not change `TARKOVHELPER_CONFIG_PATH` in the shared test process.
+`UserDataDbService` gains an internal constructor with an explicit database path;
+`ProfileResetService`, `ProfileDataWriteCoordinator`, and `LogSyncService` gain
+internal dependency-injection constructors. Production singleton creation stays
+unchanged. The existing `<InternalsVisibleTo Include="TarkovHelper.Tests" />` item in
+`TarkovHelper.csproj` exposes these seams.
+
+Pure profile resolution and persistence helpers require neither a singleton nor a
+database. Database integration tests create an independent object graph and file.
+Only E2E tests use `TARKOVHELPER_CONFIG_PATH`, by setting it on the child app process
+before launch.
 
 ### File list
 
 - `TarkovHelper/Models/AppProfile.cs` (new)
+- `TarkovHelper/Models/EftRaidEvent.cs` (`SessionProfileHint`, event payload,
+  `EftRaidInfo.AppProfileId`)
 - `TarkovHelper/Services/ProfileService.cs`
+- `TarkovHelper/Services/ProfileDataWriteCoordinator.cs` (new)
 - `TarkovHelper/Services/ProfileResetService.cs` (new)
-- `TarkovHelper/Services/UserDataDbService.cs` (`AppProfileId` column, its
-  migration, `ClearProfileSettingsAsync`, `ClearRaidHistoryForProfileAsync`,
-  `SaveRaidHistoryAsync`)
-- `TarkovHelper/Services/SettingsService.cs` (`ReloadProfileSettings`)
+- `TarkovHelper/Services/UserDataDbService.cs` (schema migration, raid mapping,
+  transactional reset, explicit-path test constructor)
+- `TarkovHelper/Services/QuestProgressService.cs`
+- `TarkovHelper/Services/HideoutProgressService.cs`
+- `TarkovHelper/Services/ItemInventoryService.cs`
+- `TarkovHelper/Services/SettingsService.cs`
+- `TarkovHelper/Services/EftRaidEventService.cs`
+- `TarkovHelper/Services/LogSyncService.cs`
 - `TarkovHelper/Services/LocalizationService.Header.cs`
 - `TarkovHelper/MainWindow.xaml`, `TarkovHelper/MainWindow.xaml.cs`
+- `TarkovHelper/Debug/TestMenu.cs`
 - `TarkovHelper.Tests/ProfileSwitchingTests.cs` (new)
-- `TarkovHelper.Tests/ProfileResetTests.cs` (new)
+- `TarkovHelper.Tests/ProfileWriteOrderingTests.cs` (new)
+- `TarkovHelper.Tests/ProfileResetTests.cs` (new, orchestration with fakes)
+- `TarkovHelper.Tests/ProfileResetDatabaseTests.cs` (new)
+- `TarkovHelper.Tests/RaidAttributionTests.cs` (new)
 - `TarkovHelper.Tests/LogSyncRangeTests.cs` (new)
+- `TarkovHelper.Tests/UserDataSchemaMigrationTests.cs` (new)
 - `TarkovHelper.Tests/SeasonalProfileE2ETests.cs` (new)
 - `TarkovHelper.Tests/LocalizationHeaderStringsTests.cs`
 
 ## Technical Decisions
 
-**A separate `AppProfile` enum instead of a third `GameMode` member.** Adding
-`GameMode.Season = 3` would be a smaller diff and was the first instinct, but
-`GameMode` is a parsed log fact that is also persisted as an integer in
-`RaidHistory.GameMode`: a new member would let a value the log can never produce
-be written into stored rows, and would make every `GameMode` switch in the parser
-answer a question the parser cannot answer. Splitting the two concepts costs one
-small enum and keeps `GameMode` meaning exactly what `Session mode:` said.
+**App profile, session hint, and game mode are three concepts.** `AppProfile` is the
+user-visible storage selection. `SessionProfileHint` is what the parser can infer
+about that selection. `GameMode` is the PvP/PvE rules fact persisted on a raid.
+Adding `Season` to `GameMode` was rejected because it would let the parser and raid
+table hold a mode the existing log may never report; passing only `GameMode` to the
+resolver was rejected because it cannot represent a discovered seasonal signature.
 
-**The suspension is a pure function, not a flag.** The alternative was a
-`_seasonPinned` boolean set when the user picks the seasonal profile and cleared
-when they leave it, but that is derived state that can disagree with the active
-profile, and it is the kind of thing a later refactor silently drops.
-`ResolveDetectedProfile(current, detected)` has no state to fall out of sync: the
-active profile is the pin. It is also directly unit-testable, which the singleton
-is not: its constructor wires itself to the `EftRaidEventService` singleton, and
-every mutation writes through `UserDataDbService`, so exercising the rule through
-`SetActiveGameMode` would mean standing up a real user database to assert a
-decision that touches no data.
+**Pinning is a resolver result, not a mutable flag.** A separate `_seasonPinned`
+boolean could disagree with the active profile. `ResolveDetectedProfile` derives the
+decision from its inputs and returns `DetectionApplied`, which also prevents a
+suppressed hint from falsely turning on the Auto badge.
 
-**`AppProfileId` as a new column rather than reusing `RaidHistory.ProfileId`.**
-Reusing the existing column would need the EFT profile id to move elsewhere and
-would silently change the meaning of every stored row, including for anyone who
-downgrades. A new nullable column is additive, leaves old rows untouched, and
-makes "unattributed" a representable state rather than an inference.
+**Ownership is captured at mutation time.** Resolving the profile inside an async
+save was smaller but incorrect: a manual or automatic switch can occur before the
+continuation runs. Every command therefore carries an immutable target id.
 
-**Reset is one service, not a widened button handler.** Chaining five calls in
-`BtnResetProgress_Click` would work and would be less code, but the reset scope is
-exactly the thing later phases extend (the roadmap's loyalty phase adds
-profile-scoped trader levels, which land in `ProfileSettings` and are therefore
-covered automatically). A named service is where that scope is discoverable, and
-it gives the reset scope one test target instead of a UI handler.
+**One ordered queue is the reset boundary.** Merely awaiting the current reset
+methods does not cover debounced or already-scheduled writes. A queue per profile was
+considered, but all profiles share one SQLite file and SQLite ultimately serializes
+their commits; parallel queues would add lock contention without useful write
+parallelism. One queue gives reset a simple total order and ordinary callers still do
+not block the UI.
 
-**The sync window stays a single global setting.** Making `SyncDaysRange`
-profile-scoped was considered, since a fresh seasonal profile wants a narrower
-window than a long-lived PvP one. Declined for this phase: the setting is a
-troubleshooting control, per-profile copies would need drawer UI that the PRD does
-not ask for, and the honest fix is making the existing control work. Recorded here
-so the option is on the record if season starts prove to need it.
+**Reset deletion is one database transaction.** Calling six existing service methods
+would allow partial durable success, and those methods currently hide failures. One
+transaction gives rollback a precise meaning. Service caches change only after
+commit so memory never advertises a reset that the database rejected.
+
+**Reset is unavailable during an active raid.** Allowing it would require a product
+rule for whether a raid that starts before reset and ends afterwards belongs before
+or after the boundary. Blocking is explicit, recoverable, and avoids silently
+choosing either interpretation.
+
+**`AppProfileId` is a new raid column.** Reusing `RaidHistory.ProfileId` would change
+the meaning of stored EFT character ids and break downgrade compatibility. A nullable
+additive column preserves every old row and represents unattributed history directly.
+
+**Raid ownership is captured when the raid object is created.** Save-time ownership
+can change and task scheduling is nondeterministic. Raid-start capture matches R4's
+active-when-it-happened language and makes every construction path testable.
+
+**The sync window remains global and enters file selection.** Making
+`SyncDaysRange` profile-specific would add settings UI outside this PRD. Filtering
+only after parsing prevents re-import but still violates the promise not to scan all
+history, so the cutoff is applied to file eligibility and again to event timestamps.
+
+**Tests construct dependencies rather than resetting singletons.** Per-test
+environment mutation is process-global and ordering-dependent. Internal constructors
+reuse production code while giving every database and clock test deterministic
+ownership.
 
 ## Open Questions
 
-- Does a Kord Breach session leave a distinguishable signature in the client logs
-  (a new `Session mode:` token, a distinct server address range, a different PMC
-  profile id from `SelectProfile`)? Settled by capturing an application log from a
-  real seasonal session and diffing it against a permanent-profile one. If a
-  signature exists, `EftRaidEventService`'s regex and `ResolveDetectedProfile`
-  learn it and the auto-switch selects the seasonal profile directly; if not, the
-  pinning above is the shipped behavior. Either outcome is appended here.
-- Does the seasonal character report a different PMC profile id? If it does, that
-  id is a second, independent signature, and it would also mean
-  `eft.pmcProfileId` in `UserSettings` flips between characters, which the SCAV id
-  derivation in `EftProfileInfo.IsScavProfile` assumes is stable within a session.
-  Checked as part of the same log capture.
+- Does a Kord Breach session leave a stable signature in application logs, such as a
+  new `Session mode:` token, a distinct server/address field, or another session
+  marker? Settle this by capturing a real seasonal session and diffing it against a
+  permanent PvP session. If it exists, map it to
+  `SessionProfileHint.PvpSeason`; otherwise manual selection plus pinning is the
+  shipped behavior. Append the outcome and a redacted fixture pattern here before
+  merge.
+- Does the seasonal character report a different PMC profile id? Check the
+  `SelectProfile` and `TRACE-NetworkGameCreate` values in the same capture. If it
+  changes, record whether `eft.pmcProfileId` and SCAV derivation remain valid across
+  character switches and add the corresponding parser/profile test.
+
+These are unresolved external facts, not missing type-system paths: the design can
+represent either outcome. The phase is not verified until the observed result is
+recorded and fixture-tested.
 
 ## Test Strategy
 
-- **Unit, `ProfileSwitchingTests`**: `ResolveDetectedProfile` as a matrix. A
-  detected `PVP` or `PVE` while the active profile is `PvpSeason` returns
-  `PvpSeason` (the pin, both directions, which is the bug the PRD's rejected
-  half-suppression would reintroduce); a detected `Unknown` never changes the
-  profile; from `PvpZone` or `PveZone` a detection maps as it does today
-  (`Regular` and `Pvp` to `PvpZone`, `Pve` to `PveZone`). Plus round-tripping the
-  three persisted strings through the `InitializeAsync` parse, including an
-  unrecognized value falling back to `PvpZone`.
-- **Unit, `ProfileResetTests`**: against a temp `user_data.db` (a fresh
-  `TARKOVHELPER_CONFIG_PATH` per test class, as `E2EHarnessIsolationTests` does
-  for its temp directory), seed all five stores plus raid rows under two profiles
-  and one raid row with `NULL AppProfileId`; reset one profile; assert that
-  profile's rows are gone, the other profile's rows are untouched (isolation in
-  both directions), the `NULL` row survives, and the `UserSettings` rows are
-  untouched. This is the guard that keeps a later "clear everything" refactor from
-  widening past the active profile.
-- **Unit, `LogSyncRangeTests`**: `SyncFromLogsAsync` against a log fixture
-  spanning old and recent events returns only the in-window events for
-  `daysRange > 0` and every event for `0`, including the boundary case of an
-  event exactly at the cutoff. These are also the first fixture-based tests for
-  `LogSyncService`, which the roadmap's phase-1 scope calls for.
-- **E2E, `SeasonalProfileE2ETests`**: launch against a throwaway config, mark a
-  quest done under PvP Zone, switch to PvP Season, assert the quest reads as not
-  done, mark a different quest done, switch back, and assert the first is still
-  done and the second is not. This is the PRD's R2 end to end.
-- **Not automated**: two things, both stated rather than quietly skipped. The
-  seasonal log signature needs a real Kord Breach session, so it is answered by
-  capture and recorded in Open Questions; whatever it settles gets its own
-  fixture-based parser test in the same PR. And the one-argument wiring in
-  `PerformQuestSync` sits inside a private `async void` UI handler with no seam
-  worth inventing for it, so it is covered by the manual check in Verification
-  (a sync with the range set to a few days reports the filtered count in the
-  progress line) rather than by a test that would only assert a mock.
+- **`ProfileSwitchingTests`**: matrix
+  `ResolveDetectedProfile(AppProfile, SessionProfileHint)`, including Unknown,
+  seasonal suppression in both directions, genuine seasonal detection, and
+  `DetectionApplied`. Test pure parse/serialize round trips for `PVP`, `PVE`, and
+  `SEASON`, plus unknown fallback.
+- **`ProfileWriteOrderingTests`**: a quest/objective mutation immediately followed
+  by a switch writes the captured original id; pre-reset writes finish before and
+  are deleted by reset; post-reset writes survive; an inventory entry still in the
+  debounce buffer cannot reappear after reset; a failed queue entry does not poison
+  the next entry.
+- **`ProfileResetTests`**: injected fakes prove lease acquisition/release, pending
+  flush before reset, no cache change or success on failure, canonical cache reset
+  after commit, and active-raid refusal.
+- **`ProfileResetDatabaseTests`**: seed all six profile-owned tables for two profiles,
+  one unattributed raid, and global settings. Reset one profile and assert exact
+  isolation. A SQLite trigger that aborts one delete proves every earlier delete
+  rolls back.
+- **`RaidAttributionTests`**: create a raid under one profile, switch before ending,
+  delay persistence, and assert the start owner is stored. Verify all three raid
+  construction paths and that an ended raid queued before reset is removed.
+- **`LogSyncRangeTests`**: fixed `TimeProvider`, old/eligible files, and
+  old/boundary/new events. Assert old files are not scanned, exact-boundary events
+  are included, old events in eligible files are excluded, and `0` scans all.
+- **`UserDataSchemaMigrationTests`**: a fresh database has `AppProfileId`; upgrading
+  the previous schema adds it once and preserves rows as `NULL`; initializing twice
+  is a no-op.
+- **`SeasonalProfileE2ETests`**: launch a child app with isolated config, verify three
+  localized profile controls, seed or edit representative quest, hideout, inventory,
+  collector, and drawer state under two profiles, and verify visible two-way
+  isolation. Reset seasonal, verify its pages/defaults are empty, switch to PvP, and
+  verify PvP plus global settings survived. Decline confirmation and verify no rows
+  changed.
+- **Parser fixture**: the real seasonal capture produces a fixture test whether its
+  result is a positive signature or confirmed indistinguishability.
+- **Not automated**: live game behavior and the private main-window sync wiring are
+  manually verified below. Unit tests cover their pure/parser dependencies; a mock
+  that only confirms a method argument would not prove the game or UI path.
+
+Requirement coverage:
+
+| Requirement | Evidence |
+| --- | --- |
+| R1 | localization guards plus profile-control/page E2E |
+| R2 | captured-write ordering tests, reset DB isolation, and two-way E2E |
+| R3 | resolver matrix, startup/live parser fixture, and manual live pin check |
+| R4 | raid-start attribution and queue-order tests |
+| R5 | transactional reset, rollback tests, and reset E2E |
+| R6 | localized dialog guards, orchestration failure tests, and decline/success E2E |
+| R7 | legacy-null migration and reset DB tests |
+| R8 | file/event cutoff tests plus manual eligible-file progress check |
+| R9 | schema migration tests and existing-profile E2E seed verification |
 
 ## Verification
 
 - `dotnet build TarkovHelper.sln`: clean.
-- `dotnet test TarkovHelper.Tests --filter "Category!=E2E"`: full non-E2E suite
-  green, including the new unit tests and the decision-doc invariants.
-- `dotnet test TarkovHelper.Tests --filter "FullyQualifiedName~SeasonalProfileE2E"`:
-  the isolation path on a real app launch.
-- Manual, on a Debug build launched as
-  `dotnet TarkovHelper/bin/Debug/net8.0-windows/TarkovHelper.dll`: the switcher
-  shows three localized labels in each of EN, KO, and JA; selecting PvP Season and
-  then starting the game does not move the selection off it; Reset Progress names
-  the active profile and, after confirming, leaves the drawer at default level and
-  reputation; and a quest sync with the range set to a few days reports the
-  filtered event count in its progress line instead of scanning every log.
+- `dotnet test TarkovHelper.Tests/TarkovHelper.Tests.csproj --filter
+  "Category!=E2E"`: full non-E2E suite green, including ordering races, rollback,
+  migration, parser, localization, and decision-doc invariants.
+- `dotnet test TarkovHelper.Tests/TarkovHelper.Tests.csproj --filter
+  "FullyQualifiedName~SeasonalProfileE2E"`: visible isolation, confirmation decline,
+  complete reset, and preservation path green against a child-process app.
+- Manual Debug build launched as
+  `dotnet TarkovHelper/bin/Debug/net8.0-windows/TarkovHelper.dll`:
+  - EN/KO/JA each show the three exact labels and localized reset text.
+  - Starting the game while PvP Season is selected does not move the selection or
+    turn on Auto for a suppressed permanent-profile hint.
+  - Reset during Matching/Connecting/InRaid is refused; reset after the raid commits
+    and leaves every active-profile page and drawer field at defaults.
+  - With sync range set to a few days, progress reports fewer eligible files than the
+    total and no older quest event is imported. Range `0` reports/scans all files.
+  - The redacted seasonal and permanent log captures produce the documented
+    `SessionProfileHint` result.
 
 ## Risks & Migration
 
-- **Schema.** The `AppProfileId` column is added by `ALTER TABLE` on an
-  app-owned database, guarded by a `pragma_table_info` check so a second launch is
-  a no-op. Existing rows keep `NULL`.
-- **Downgrade.** A build without this change reads `app.activeGameMode = "SEASON"`
-  and falls back to PvP, so it shows the PvP profile and writes into it. Seasonal
-  rows stay in the database untouched, and re-upgrading restores the view. Worth
-  stating because the app auto-updates: the failure mode is invisible seasonal
-  data, not lost seasonal data.
-- **The startup auto-switch fires before the user can act.**
-  `ScanLogFileForProfile` raises `SessionModeDetected` during monitoring startup,
-  after `ProfileService.InitializeAsync` has restored the saved profile. The
-  ordering matters: if the pin were applied only to live events, a restart while
-  on the seasonal profile would silently switch to PvP from the last log line.
-  Routing both paths through `ResolveDetectedProfile` is what closes this, and the
-  unit matrix covers it.
-- **Rollback.** The app side rolls back by releasing the prior build; the column
-  and any `season` rows are inert to it (see Downgrade). No data publish is
-  involved in this phase.
+- **Schema.** Fresh creation includes `AppProfileId`; existing databases receive one
+  guarded additive column. Existing raid rows remain `NULL`, and no existing PvP/PvE
+  row moves or changes value.
+- **Downgrade.** An older build treats `app.activeGameMode = SEASON` as PvP and can
+  write permanent PvP data while downgraded. Seasonal rows and the extra raid column
+  remain inert and reappear after upgrading; no data is deleted by downgrade.
+- **Write ordering.** Every profile-scoped persistence path must use the coordinator.
+  A direct database write added later can bypass reset ordering, so the ordering tests
+  and file-level review guard this invariant.
+- **Reload ordering.** Profile changes remain responsive because reloads are async,
+  but results apply only to their captured active target. The E2E switch path must
+  wait for visible target data rather than use fixed delays.
+- **File timestamps.** Bounded file selection assumes `LastWriteTime` is a usable
+  upper bound for ordinary EFT-created logs. Copied files with a newer timestamp are
+  safely parsed and filtered by embedded event time; manually backdated or corrupted
+  metadata can skip a recent event. Range `0` remains the recovery path.
+- **Startup detection.** The startup scan runs after saved-profile initialization and
+  uses the same resolver as live events. Otherwise the last PvP-shaped line could
+  pull a restored seasonal selection into permanent PvP before user interaction.
+- **Live-raid reset.** Blocking is a new safety limitation. If product review wants a
+  different boundary rule, append that decision to the sibling PRD before changing
+  implementation.
+- **Rollback.** Releasing the prior app build leaves the column and `season` rows
+  unused. No asset-database publish or content migration is part of this phase.
