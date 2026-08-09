@@ -149,7 +149,6 @@ public partial class MainWindow : Window
         MenuPveZone.Header = _loc.HeaderPveZone;
         MenuPvpSeason.Header = _loc.HeaderPvpSeason;
         TxtActiveProfileLabel.Text = _loc.HeaderActiveProfile;
-        TxtCompactActiveProfileLabel.Text = _loc.HeaderActiveProfile;
         BtnPvpZone.ToolTip = _loc.HeaderPvpTooltip;
         BtnPveZone.ToolTip = _loc.HeaderPveTooltip;
         BtnPvpSeason.ToolTip = _loc.HeaderPvpSeasonTooltip;
@@ -700,9 +699,7 @@ public partial class MainWindow : Window
         };
         selectedButton.Tag = "AutomaticCue";
 
-        CompactProfileCheck.Visibility = Visibility.Collapsed;
-        CompactProfileAutomaticSignal.Visibility = Visibility.Visible;
-        CompactProfileAutomaticSignal.BeginAnimation(OpacityProperty, new DoubleAnimation
+        CompactProfileAutomatic.BeginAnimation(OpacityProperty, new DoubleAnimation
         {
             From = 0.35,
             To = 1,
@@ -726,12 +723,10 @@ public partial class MainWindow : Window
     private void ClearAutomaticProfileTransitionCue()
     {
         _profileTransitionCueTimer.Stop();
-        BtnPvpZone.Tag = null;
-        BtnPveZone.Tag = null;
-        BtnPvpSeason.Tag = null;
-        CompactProfileAutomaticSignal.BeginAnimation(OpacityProperty, null);
-        CompactProfileAutomaticSignal.Visibility = Visibility.Collapsed;
-        CompactProfileCheck.Visibility = Visibility.Visible;
+        CompactProfileAutomatic.BeginAnimation(OpacityProperty, null);
+        UpdateProfileSourceUI(
+            ProfileService.Instance.ActiveProfile,
+            ProfileService.Instance.IsAutoDetected);
         TxtProfileTransitionAnnouncement.Text = string.Empty;
     }
 
@@ -741,6 +736,32 @@ public partial class MainWindow : Window
         AppProfile.PvpSeason => _loc.HeaderPvpSeason,
         _ => _loc.HeaderPvpZone
     };
+
+    private void UpdateProfileSourceUI(AppProfile profile, bool isAutoDetected)
+    {
+        BtnPvpZone.Tag = null;
+        BtnPveZone.Tag = null;
+        BtnPvpSeason.Tag = null;
+
+        var selectedButton = profile switch
+        {
+            AppProfile.PveZone => BtnPveZone,
+            AppProfile.PvpSeason => BtnPvpSeason,
+            _ => BtnPvpZone
+        };
+        selectedButton.Tag = isAutoDetected ? "AutoSelected" : null;
+
+        CompactProfileCheck.Visibility = isAutoDetected
+            ? Visibility.Hidden : Visibility.Visible;
+        CompactProfileAutomatic.Visibility = isAutoDetected
+            ? Visibility.Visible : Visibility.Hidden;
+
+        var sourceDescription = isAutoDetected
+            ? _loc.HeaderProfileSourceAutomatic
+            : _loc.HeaderProfileSourceManual;
+        BtnActiveProfileMenu.ToolTip = $"{_loc.HeaderProfileMenuTooltip}\n{sourceDescription}";
+        AutomationProperties.SetItemStatus(BtnActiveProfileMenu, sourceDescription);
+    }
 
     /// <summary>
     /// Update the wide radio group and compact checked menu from one active profile.
@@ -756,13 +777,7 @@ public partial class MainWindow : Window
             MenuPvpZone.IsChecked = profile == AppProfile.PvpZone;
             MenuPveZone.IsChecked = profile == AppProfile.PveZone;
             MenuPvpSeason.IsChecked = profile == AppProfile.PvpSeason;
-            IcoMenuPvp.Visibility = profile == AppProfile.PvpZone
-                ? Visibility.Visible : Visibility.Hidden;
-            IcoMenuPve.Visibility = profile == AppProfile.PveZone
-                ? Visibility.Visible : Visibility.Hidden;
-            IcoMenuSeason.Visibility = profile == AppProfile.PvpSeason
-                ? Visibility.Visible : Visibility.Hidden;
-
+            UpdateProfileSourceUI(profile, ProfileService.Instance.IsAutoDetected);
             var profileName = GetProfileDisplayName(profile);
             TxtCompactActiveProfile.Text = profileName;
             AutomationProperties.SetName(

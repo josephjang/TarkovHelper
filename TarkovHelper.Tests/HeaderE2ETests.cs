@@ -26,6 +26,7 @@ public sealed class HeaderE2ETests : E2ETestBase
         app.WaitForElementVisibility("BtnActiveProfileMenu", visible: true);
         app.WaitForElementVisibility("BtnPvpZone", visible: false);
         Assert.Equal("Active profile: PvP Zone", app.GetElementText("BtnActiveProfileMenu"));
+        Assert.Equal("User selected", app.GetItemStatus("BtnActiveProfileMenu"));
 
         app.ResizeWindow(700, 700);
         app.WaitForElementVisibility("BtnActiveProfileMenu", visible: true);

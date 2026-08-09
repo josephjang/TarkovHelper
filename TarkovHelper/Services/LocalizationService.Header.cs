@@ -105,6 +105,20 @@ public partial class LocalizationService
         _ => "Select active profile"
     };
 
+    public string HeaderProfileSourceManual => CurrentLanguage switch
+    {
+        AppLanguage.KO => "사용자 선택",
+        AppLanguage.JA => "ユーザー選択",
+        _ => "User selected"
+    };
+
+    public string HeaderProfileSourceAutomatic => CurrentLanguage switch
+    {
+        AppLanguage.KO => "게임 로그 자동 선택",
+        AppLanguage.JA => "ゲームログによる自動選択",
+        _ => "Auto-selected from game logs"
+    };
+
     /// <summary>{0} = localized profile name.</summary>
     public string HeaderProfileChangedFromLogsFormat => CurrentLanguage switch
     {
