@@ -137,6 +137,7 @@ $RECYCLE.BIN/
 .DS_Store
 
 # Claude
+.claude/settings.local.json
 nul
 
 _NCrunch*
