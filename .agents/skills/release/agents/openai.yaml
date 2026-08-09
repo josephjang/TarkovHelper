@@ -1,0 +1,7 @@
+interface:
+  display_name: "Release TarkovHelper"
+  short_description: "Run the guarded TarkovHelper release workflow"
+  default_prompt: "Use $release to publish a specified TarkovHelper version."
+
+policy:
+  allow_implicit_invocation: false
