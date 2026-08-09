@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     private readonly SettingsService _settingsService = SettingsService.Instance;
     private readonly LogSyncService _logSyncService = LogSyncService.Instance;
     private bool _isLoading;
+    private bool _isUpdatingProfileUI;
 
     // 시작 로딩(_isLoading) 중 눌린 탭 — 로딩이 끝나면 Window_Loaded가 재생한다
     private object? _pendingTabDuringLoad;
@@ -57,9 +58,9 @@ public partial class MainWindow : Window
         _settingsService.HasUnheardEditionChanged += OnEditionChanged;
         _settingsService.PrestigeLevelChanged += OnPrestigeLevelChanged;
 
-        // Reflect game mode (PvP/PvE) changes in the title bar toggle
+        // Reflect app-profile changes in the title bar toggle.
         ProfileService.Instance.ActiveProfileChanged += (_, args) =>
-            Dispatcher.Invoke(() => UpdateGameModeUI(args.GameMode, args.IsAutoDetected));
+            Dispatcher.Invoke(() => UpdateProfileUI(args.Profile, args.IsAutoDetected));
 
         // Sync/raid status chip. Subscribed in the constructor (not Window_Loaded) so
         // events fired during AutoStartLogMonitoring aren't missed; named handlers so
@@ -133,9 +134,16 @@ public partial class MainWindow : Window
         AutomationProperties.SetName(BtnProfile, _loc.HeaderProfileName);
         AutomationProperties.SetName(BtnSettings, _loc.Settings);
 
-        // Title bar tooltips and badges
-        BtnPvP.ToolTip = _loc.HeaderPvpTooltip;
-        BtnPvE.ToolTip = _loc.HeaderPveTooltip;
+        // Title bar profile labels, tooltips, and badges
+        BtnPvpZone.Content = _loc.HeaderPvpZone;
+        BtnPveZone.Content = _loc.HeaderPveZone;
+        BtnPvpSeason.Content = _loc.HeaderPvpSeason;
+        BtnPvpZone.ToolTip = _loc.HeaderPvpTooltip;
+        BtnPveZone.ToolTip = _loc.HeaderPveTooltip;
+        BtnPvpSeason.ToolTip = _loc.HeaderPvpSeasonTooltip;
+        AutomationProperties.SetName(BtnPvpZone, _loc.HeaderPvpZone);
+        AutomationProperties.SetName(BtnPveZone, _loc.HeaderPveZone);
+        AutomationProperties.SetName(BtnPvpSeason, _loc.HeaderPvpSeason);
         TxtAutoIndicator.Text = _loc.HeaderAutoBadge;
         TxtAutoIndicator.ToolTip = _loc.HeaderAutoBadgeTooltip;
         BtnProfile.ToolTip = _loc.HeaderProfileTooltip;
@@ -178,8 +186,8 @@ public partial class MainWindow : Window
         await UserDataDbService.Instance.InitializeAsync();
         await ProfileService.Instance.InitializeAsync();
 
-        // Reflect the loaded game mode in the title bar toggle
-        UpdateGameModeUI(ProfileService.Instance.ActiveGameMode, ProfileService.Instance.IsAutoDetected);
+        // Reflect the loaded app profile in the title bar toggle.
+        UpdateProfileUI(ProfileService.Instance.ActiveProfile, ProfileService.Instance.IsAutoDetected);
 
         // Apply saved language setting to UI
         CmbLanguage.SelectedIndex = _loc.CurrentLanguage switch
@@ -598,29 +606,82 @@ public partial class MainWindow : Window
         }
     }
 
-    #region Game Mode (PvP / PvE)
+    #region App Profile
 
-    private void BtnPvP_Click(object sender, RoutedEventArgs e)
+    private void BtnPvpZone_Click(object sender, RoutedEventArgs e)
     {
-        ProfileService.Instance.SetActiveGameMode(GameMode.PVP);
+        ProfileService.Instance.SetActiveProfile(AppProfile.PvpZone);
         // Re-sync in case the click toggled the already-active button (no event fires then)
-        UpdateGameModeUI(ProfileService.Instance.ActiveGameMode, ProfileService.Instance.IsAutoDetected);
+        UpdateProfileUI(ProfileService.Instance.ActiveProfile, ProfileService.Instance.IsAutoDetected);
     }
 
-    private void BtnPvE_Click(object sender, RoutedEventArgs e)
+    private void BtnPveZone_Click(object sender, RoutedEventArgs e)
     {
-        ProfileService.Instance.SetActiveGameMode(GameMode.PVE);
-        UpdateGameModeUI(ProfileService.Instance.ActiveGameMode, ProfileService.Instance.IsAutoDetected);
+        ProfileService.Instance.SetActiveProfile(AppProfile.PveZone);
+        UpdateProfileUI(ProfileService.Instance.ActiveProfile, ProfileService.Instance.IsAutoDetected);
+    }
+
+    private void BtnPvpSeason_Click(object sender, RoutedEventArgs e)
+    {
+        ProfileService.Instance.SetActiveProfile(AppProfile.PvpSeason);
+        UpdateProfileUI(ProfileService.Instance.ActiveProfile, ProfileService.Instance.IsAutoDetected);
+    }
+
+    // TogglePattern is the native UI Automation pattern for WPF ToggleButton. Handle
+    // Checked as well as Click so keyboard and accessibility clients select profiles
+    // through the same manual path as pointer users.
+    private void BtnPvpZone_Checked(object sender, RoutedEventArgs e)
+    {
+        if (!_isUpdatingProfileUI)
+            ProfileService.Instance.SetActiveProfile(AppProfile.PvpZone);
+    }
+
+    private void BtnPveZone_Checked(object sender, RoutedEventArgs e)
+    {
+        if (!_isUpdatingProfileUI)
+            ProfileService.Instance.SetActiveProfile(AppProfile.PveZone);
+    }
+
+    private void BtnPvpSeason_Checked(object sender, RoutedEventArgs e)
+    {
+        if (!_isUpdatingProfileUI)
+            ProfileService.Instance.SetActiveProfile(AppProfile.PvpSeason);
+    }
+
+    private void ProfileButton_Unchecked(object sender, RoutedEventArgs e)
+    {
+        if (_isUpdatingProfileUI) return;
+
+        // A profile is always selected. This also turns an auto-detected selection
+        // into an explicit manual choice when an accessibility client toggles the
+        // already-selected button, matching an ordinary pointer click.
+        ProfileService.Instance.SetActiveProfile(ProfileService.Instance.ActiveProfile);
+        UpdateProfileUI(ProfileService.Instance.ActiveProfile, ProfileService.Instance.IsAutoDetected);
     }
 
     /// <summary>
-    /// Update the title bar PvP/PvE toggle to reflect the active game mode.
+    /// Update the title bar toggle to reflect the active app profile.
     /// </summary>
-    private void UpdateGameModeUI(GameMode mode, bool isAuto)
+    private void UpdateProfileUI(AppProfile profile, bool isAuto)
     {
-        BtnPvP.IsChecked = mode == GameMode.PVP;
-        BtnPvE.IsChecked = mode == GameMode.PVE;
-        TxtAutoIndicator.Visibility = isAuto ? Visibility.Visible : Visibility.Collapsed;
+        _isUpdatingProfileUI = true;
+        try
+        {
+            BtnPvpZone.IsChecked = profile == AppProfile.PvpZone;
+            BtnPveZone.IsChecked = profile == AppProfile.PveZone;
+            BtnPvpSeason.IsChecked = profile == AppProfile.PvpSeason;
+            AutomationProperties.SetItemStatus(
+                BtnPvpZone, profile == AppProfile.PvpZone ? "Selected" : "Unselected");
+            AutomationProperties.SetItemStatus(
+                BtnPveZone, profile == AppProfile.PveZone ? "Selected" : "Unselected");
+            AutomationProperties.SetItemStatus(
+                BtnPvpSeason, profile == AppProfile.PvpSeason ? "Selected" : "Unselected");
+            TxtAutoIndicator.Visibility = isAuto ? Visibility.Visible : Visibility.Collapsed;
+        }
+        finally
+        {
+            _isUpdatingProfileUI = false;
+        }
     }
 
     #endregion

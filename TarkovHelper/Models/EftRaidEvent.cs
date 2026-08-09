@@ -21,6 +21,18 @@ public enum GameMode
 }
 
 /// <summary>
+/// App-profile evidence parsed from a session-mode log line. This remains separate
+/// from <see cref="GameMode"/> because both PvP hints use PvP game rules.
+/// </summary>
+public enum SessionProfileHint
+{
+    Unknown = 0,
+    PvpZone = 1,
+    PveZone = 2,
+    PvpSeason = 3
+}
+
+/// <summary>
 /// 레이드 상태
 /// </summary>
 public enum RaidState
@@ -297,6 +309,11 @@ public class EftRaidEventArgs : EventArgs
     /// 현재 레이드 정보
     /// </summary>
     public EftRaidInfo? RaidInfo { get; init; }
+
+    /// <summary>
+    /// App-profile evidence for <see cref="EftRaidEventType.SessionModeDetected"/>.
+    /// </summary>
+    public SessionProfileHint SessionProfileHint { get; init; }
 
     /// <summary>
     /// 이벤트 발생 시간
