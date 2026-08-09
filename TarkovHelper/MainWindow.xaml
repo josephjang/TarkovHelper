@@ -40,20 +40,15 @@
                                       VerticalAlignment="Center">
                                     <Path x:Name="SelectedCheck"
                                           Data="M 2,8 L 6,12 L 14,3"
-                                          Stroke="{TemplateBinding Foreground}"
-                                          StrokeThickness="2" StrokeStartLineCap="Round"
+                                          Stroke="{StaticResource AccentBrush}"
+                                          StrokeThickness="2.4" StrokeStartLineCap="Round"
                                           StrokeEndLineCap="Round" Stretch="Uniform"
-                                          Visibility="Collapsed"/>
-                                    <Grid x:Name="AutomaticSignal" Visibility="Collapsed" Opacity="0.75">
-                                        <Ellipse Width="3" Height="3"
-                                                 Fill="{TemplateBinding Foreground}"/>
-                                        <Ellipse Width="8" Height="8"
-                                                 Stroke="{TemplateBinding Foreground}"
-                                                 StrokeThickness="1"/>
-                                        <Ellipse Width="14" Height="14"
-                                                 Stroke="{TemplateBinding Foreground}"
-                                                 StrokeThickness="1" Opacity="0.65"/>
-                                    </Grid>
+                                          Visibility="Hidden"/>
+                                    <Path x:Name="AutomaticBolt" Width="13" Height="15"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Data="M 9,1 L 3,9 L 7,9 L 5,15 L 13,6 L 9,6 Z"
+                                          Fill="{StaticResource AccentBrush}"
+                                          Stretch="Uniform" Visibility="Hidden"/>
                                 </Grid>
                                 <TextBlock Text="{TemplateBinding Content}"
                                            Foreground="{TemplateBinding Foreground}"
@@ -67,30 +62,161 @@
                                 <Setter TargetName="border" Property="Background" Value="{StaticResource BackgroundMediumBrush}"/>
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="{StaticResource AccentBrush}"/>
-                                <Setter Property="Foreground" Value="{StaticResource BackgroundDarkBrush}"/>
+                                <Setter TargetName="border" Property="Background" Value="{StaticResource BackgroundMediumBrush}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
                                 <Setter TargetName="SelectedCheck" Property="Visibility" Value="Visible"/>
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource TextPrimaryBrush}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}"/>
+                                <Setter TargetName="border" Property="BorderThickness" Value="2"/>
                             </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsChecked" Value="True"/>
+                                    <Condition Property="Tag" Value="AutoSelected"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="SelectedCheck" Property="Visibility" Value="Hidden"/>
+                                <Setter TargetName="AutomaticBolt" Property="Visibility" Value="Visible"/>
+                            </MultiTrigger>
                             <MultiTrigger>
                                 <MultiTrigger.Conditions>
                                     <Condition Property="IsChecked" Value="True"/>
                                     <Condition Property="Tag" Value="AutomaticCue"/>
                                 </MultiTrigger.Conditions>
-                                <Setter TargetName="SelectedCheck" Property="Visibility" Value="Collapsed"/>
-                                <Setter TargetName="AutomaticSignal" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="SelectedCheck" Property="Visibility" Value="Hidden"/>
+                                <Setter TargetName="AutomaticBolt" Property="Visibility" Value="Visible"/>
                                 <MultiTrigger.EnterActions>
                                     <BeginStoryboard>
                                         <Storyboard AutoReverse="True" RepeatBehavior="2x">
-                                            <DoubleAnimation Storyboard.TargetName="AutomaticSignal"
+                                            <DoubleAnimation Storyboard.TargetName="AutomaticBolt"
                                                              Storyboard.TargetProperty="Opacity"
                                                              From="0.35" To="1" Duration="0:0:0.25"/>
                                         </Storyboard>
                                     </BeginStoryboard>
                                 </MultiTrigger.EnterActions>
                             </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- The compact popup is a visual continuation of its trigger, not a system menu. -->
+        <Style x:Key="ActiveProfileContextMenuStyle" TargetType="ContextMenu">
+            <Setter Property="Background" Value="{StaticResource BackgroundLightBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="2"/>
+            <Setter Property="HasDropShadow" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContextMenu">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <StackPanel IsItemsHost="True"
+                                        KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ActiveProfileMenuItemStyle" TargetType="MenuItem">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+            <Setter Property="FontFamily" Value="{DynamicResource AppFont}"/>
+            <Setter Property="FontSize" Value="{DynamicResource FontSizeXSmall}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="MinHeight" Value="30"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Border x:Name="itemBorder"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="3" Padding="{TemplateBinding Padding}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="16"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Path x:Name="SelectedCheck" Width="16" Height="16"
+                                      HorizontalAlignment="Left" VerticalAlignment="Center"
+                                      Data="M 2,8 L 6,12 L 14,3"
+                                      Stroke="{StaticResource AccentBrush}"
+                                      StrokeThickness="2.4" StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round" Stretch="Uniform"
+                                      Visibility="Hidden"/>
+                                <TextBlock Grid.Column="1" Text="{TemplateBinding Header}"
+                                           Margin="6,0,0,0"
+                                           FontFamily="{TemplateBinding FontFamily}"
+                                           FontSize="{TemplateBinding FontSize}"
+                                           FontWeight="{TemplateBinding FontWeight}"
+                                           Foreground="{TemplateBinding Foreground}"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="itemBorder" Property="Background" Value="{StaticResource BackgroundHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="SelectedCheck" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="itemBorder" Property="Background" Value="{StaticResource BackgroundMediumBrush}"/>
+                                <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsChecked" Value="True"/>
+                                    <Condition Property="IsHighlighted" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="itemBorder" Property="Background" Value="{StaticResource BackgroundHoverBrush}"/>
+                            </MultiTrigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Compact selector uses the same selected-state palette as the wide segments. -->
+        <Style x:Key="ActiveProfileMenuButtonStyle" TargetType="Button"
+               BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="{StaticResource BackgroundLightBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter
+                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{StaticResource BackgroundMediumBrush}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}"/>
+                                <Setter Property="Foreground" Value="{StaticResource AccentHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{StaticResource BackgroundPressedBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}"/>
+                                <Setter TargetName="border" Property="BorderThickness" Value="2"/>
+                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -166,7 +292,7 @@
                              A real Button (not a Border with a mouse handler) so it gets keyboard
                              focus, a UIA automation peer with InvokePattern, and press-capture
                              click semantics for free. -->
-                        <Button x:Name="ChipSyncStatus" Padding="8,5" Margin="0,0,12,0"
+                        <Button x:Name="ChipSyncStatus" MinHeight="30" Padding="8,4" Margin="0,0,12,0"
                                 VerticalAlignment="Center"
                                 Click="ChipSyncStatus_Click"
                                 AutomationProperties.Name="Sync status"
@@ -182,19 +308,20 @@
                         </Button>
 
                         <!-- Wide profile selector: one-click, exact-one radio group. -->
-                        <StackPanel x:Name="WideProfileSelector" Margin="0,0,12,0"
-                                    VerticalAlignment="Center"
+                        <StackPanel x:Name="WideProfileSelector" Orientation="Horizontal"
+                                    Margin="0,0,12,0" VerticalAlignment="Center"
                                     AutomationProperties.Name="Active profile">
                             <TextBlock x:Name="TxtActiveProfileLabel" Text="Active profile"
                                        FontSize="{DynamicResource FontSizeTiny}"
                                        Foreground="{StaticResource TextSecondaryBrush}"
-                                       Margin="2,0,0,2"/>
-                            <Border Background="{StaticResource BackgroundLightBrush}"
-                                    CornerRadius="4" Padding="2">
+                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <Border MinHeight="30" Padding="1"
+                                    Background="{StaticResource BackgroundLightBrush}"
+                                    CornerRadius="4" VerticalAlignment="Center">
                                 <StackPanel Orientation="Horizontal">
                                     <RadioButton x:Name="BtnPvpZone" GroupName="ActiveProfile"
                                                  Style="{StaticResource GameModeRadioStyle}"
-                                                 Padding="8,4" FontSize="{DynamicResource FontSizeXSmall}"
+                                                 Padding="7,3" FontSize="{DynamicResource FontSizeXSmall}"
                                                  FontWeight="SemiBold"
                                                  AutomationProperties.PositionInSet="1"
                                                  AutomationProperties.SizeOfSet="3"
@@ -202,7 +329,7 @@
                                                  Click="BtnPvpZone_Click"/>
                                     <RadioButton x:Name="BtnPveZone" GroupName="ActiveProfile"
                                                  Style="{StaticResource GameModeRadioStyle}"
-                                                 Padding="8,4" FontSize="{DynamicResource FontSizeXSmall}"
+                                                 Padding="7,3" FontSize="{DynamicResource FontSizeXSmall}"
                                                  FontWeight="SemiBold"
                                                  AutomationProperties.PositionInSet="2"
                                                  AutomationProperties.SizeOfSet="3"
@@ -210,7 +337,7 @@
                                                  Click="BtnPveZone_Click"/>
                                     <RadioButton x:Name="BtnPvpSeason" GroupName="ActiveProfile"
                                                  Style="{StaticResource GameModeRadioStyle}"
-                                                 Padding="8,4" FontSize="{DynamicResource FontSizeXSmall}"
+                                                 Padding="7,3" FontSize="{DynamicResource FontSizeXSmall}"
                                                  FontWeight="SemiBold"
                                                  AutomationProperties.PositionInSet="3"
                                                  AutomationProperties.SizeOfSet="3"
@@ -221,40 +348,24 @@
                         </StackPanel>
 
                         <!-- Compact/minimal selector: fixed-width trigger plus checked menu. -->
-                        <Button x:Name="BtnActiveProfileMenu" Width="172" Padding="8,4"
+                        <Button x:Name="BtnActiveProfileMenu" Width="172" MinHeight="30" Padding="8,3"
+                                Style="{StaticResource ActiveProfileMenuButtonStyle}"
                                 Margin="0,0,12,0" VerticalAlignment="Center"
                                 Visibility="Collapsed" Click="BtnActiveProfileMenu_Click"
                                 AutomationProperties.Name="Active profile">
                             <Button.ContextMenu>
                                 <ContextMenu x:Name="ActiveProfileContextMenu" Width="172"
-                                             Placement="Bottom">
+                                             Style="{StaticResource ActiveProfileContextMenuStyle}"
+                                             Placement="Bottom" VerticalOffset="2">
                                     <MenuItem x:Name="MenuPvpZone" IsCheckable="True"
-                                              FontSize="{DynamicResource FontSizeXSmall}"
-                                              Click="MenuPvpZone_Click">
-                                        <MenuItem.Icon>
-                                            <TextBlock x:Name="IcoMenuPvp" Text="&#xE73E;"
-                                                       FontFamily="{StaticResource IconFont}"
-                                                       FontSize="{DynamicResource FontSizeTiny}"/>
-                                        </MenuItem.Icon>
-                                    </MenuItem>
+                                              Style="{StaticResource ActiveProfileMenuItemStyle}"
+                                              Click="MenuPvpZone_Click"/>
                                     <MenuItem x:Name="MenuPveZone" IsCheckable="True"
-                                              FontSize="{DynamicResource FontSizeXSmall}"
-                                              Click="MenuPveZone_Click">
-                                        <MenuItem.Icon>
-                                            <TextBlock x:Name="IcoMenuPve" Text="&#xE73E;"
-                                                       FontFamily="{StaticResource IconFont}"
-                                                       FontSize="{DynamicResource FontSizeTiny}"/>
-                                        </MenuItem.Icon>
-                                    </MenuItem>
+                                              Style="{StaticResource ActiveProfileMenuItemStyle}"
+                                              Click="MenuPveZone_Click"/>
                                     <MenuItem x:Name="MenuPvpSeason" IsCheckable="True"
-                                              FontSize="{DynamicResource FontSizeXSmall}"
-                                              Click="MenuPvpSeason_Click">
-                                        <MenuItem.Icon>
-                                            <TextBlock x:Name="IcoMenuSeason" Text="&#xE73E;"
-                                                       FontFamily="{StaticResource IconFont}"
-                                                       FontSize="{DynamicResource FontSizeTiny}"/>
-                                        </MenuItem.Icon>
-                                    </MenuItem>
+                                              Style="{StaticResource ActiveProfileMenuItemStyle}"
+                                              Click="MenuPvpSeason_Click"/>
                                 </ContextMenu>
                             </Button.ContextMenu>
                             <Grid>
@@ -263,34 +374,28 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock x:Name="CompactProfileCheck" Text="&#xE73E;"
-                                           FontFamily="{StaticResource IconFont}"
-                                           FontSize="{DynamicResource FontSizeTiny}"
-                                           VerticalAlignment="Center"/>
-                                <Grid x:Name="CompactProfileAutomaticSignal" Width="14" Height="14"
-                                      VerticalAlignment="Center" Visibility="Collapsed" Opacity="0.75">
-                                    <Ellipse Width="3" Height="3"
-                                             Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-                                    <Ellipse Width="8" Height="8"
-                                             Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                             StrokeThickness="1"/>
-                                    <Ellipse Width="14" Height="14"
-                                             Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                             StrokeThickness="1" Opacity="0.65"/>
+                                <Grid Width="16" Height="16" VerticalAlignment="Center">
+                                    <Path x:Name="CompactProfileCheck"
+                                          Data="M 2,8 L 6,12 L 14,3"
+                                          Stroke="{StaticResource AccentBrush}"
+                                          StrokeThickness="2.4" StrokeStartLineCap="Round"
+                                          StrokeEndLineCap="Round" Stretch="Uniform"/>
+                                    <Path x:Name="CompactProfileAutomatic" Width="13" Height="15"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Data="M 9,1 L 3,9 L 7,9 L 5,15 L 13,6 L 9,6 Z"
+                                          Fill="{StaticResource AccentBrush}"
+                                          Stretch="Uniform" Visibility="Hidden"/>
                                 </Grid>
-                                <StackPanel Grid.Column="1" Margin="6,0" HorizontalAlignment="Left">
-                                    <TextBlock x:Name="TxtCompactActiveProfileLabel" Text="Active profile"
-                                               FontSize="{DynamicResource FontSizeTiny}"
-                                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                               Opacity="0.72"/>
-                                    <TextBlock x:Name="TxtCompactActiveProfile" Text="PvP Zone"
-                                               FontSize="{DynamicResource FontSizeXSmall}"
-                                               FontWeight="SemiBold"
-                                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-                                </StackPanel>
+                                <TextBlock x:Name="TxtCompactActiveProfile" Grid.Column="1"
+                                           Text="PvP Zone" Margin="6,0"
+                                           FontSize="{DynamicResource FontSizeXSmall}"
+                                           FontWeight="SemiBold"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"/>
                                 <TextBlock Grid.Column="2" Text="&#xE70D;"
                                            FontFamily="{StaticResource IconFont}"
                                            FontSize="{DynamicResource FontSizeTiny}"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                            VerticalAlignment="Center"/>
                             </Grid>
                         </Button>
@@ -302,7 +407,7 @@
                                    AutomationProperties.LiveSetting="Polite"/>
 
                         <!-- Profile chip: person glyph + level summary; opens the profile drawer -->
-                        <Button x:Name="BtnProfile" Padding="10,6"
+                        <Button x:Name="BtnProfile" MinHeight="30" Padding="9,4"
                                 Margin="0,0,12,0" Click="BtnProfile_Click"
                                 AutomationProperties.Name="Player profile"
                                 ToolTip="Player profile — level, Scav Rep, DSP, edition, prestige">
@@ -324,7 +429,7 @@
                         </Button>
 
                         <!-- Settings -->
-                        <Button x:Name="BtnSettings" Padding="10,6"
+                        <Button x:Name="BtnSettings" MinHeight="30" Padding="9,3"
                                 Click="BtnSettings_Click"
                                 AutomationProperties.Name="Settings"
                                 ToolTip="Settings">

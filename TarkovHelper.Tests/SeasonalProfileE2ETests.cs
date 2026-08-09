@@ -91,6 +91,11 @@ public sealed class SeasonalProfileE2ETests : E2ETestBase
         AppendSessionMode(applicationLog, "Regular");
         WaitUntil(() => IsProfileSelected(app, "BtnPvpZone"),
             "Regular evidence to replace PvP Season", timeoutSeconds: 60);
+
+        app.ResizeWindow(900, 700);
+        app.WaitForElementVisibility("BtnActiveProfileMenu", visible: true);
+        Assert.Equal("Auto-selected from game logs",
+            app.GetItemStatus("BtnActiveProfileMenu"));
     }
 
     private static void WaitForProfileControls(AppDriver app)
