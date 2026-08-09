@@ -52,7 +52,7 @@ public sealed class SeasonalProfileE2ETests : E2ETestBase
     }
 
     [E2EFact]
-    public void Log_detection_selects_season_pins_it_and_resumes_after_manual_leave()
+    public void Log_detection_switches_symmetrically_between_all_profiles()
     {
         var configDir = NewConfigDir();
         E2EDb.CreateUserDataDb(configDir);
@@ -73,25 +73,24 @@ public sealed class SeasonalProfileE2ETests : E2ETestBase
             "EFT log monitoring to start", timeoutSeconds: 60);
         WaitUntil(() => IsProfileSelected(app, "BtnPvpSeason"),
             "PvpSeason startup evidence to select PvP Season");
-        app.WaitForElementVisibility("TxtAutoIndicator", visible: true);
+        WaitUntil(() => app.GetElementText("TxtProfileTransitionAnnouncement") ==
+            "Profile changed to PvP Season from game logs",
+            "the automatic season transition to be announced");
 
-        // Clicking the selected season profile makes the choice manual and clears Auto.
-        ClickProfile(app, "BtnPvpSeason");
-        app.WaitForElementVisibility("TxtAutoIndicator", visible: false);
-
-        // A permanent-profile hint is ignored while the visible destination is season.
+        // Exact known evidence replaces every current profile, including season.
         AppendSessionMode(applicationLog, "Pve");
-        Thread.Sleep(2_000);
-        Assert.True(IsProfileSelected(app, "BtnPvpSeason"));
-        Assert.False(app.IsElementVisible("TxtAutoIndicator"));
+        WaitUntil(() => IsProfileSelected(app, "BtnPveZone"),
+            "Pve evidence to replace PvP Season", timeoutSeconds: 60);
+        WaitUntil(() => app.GetElementText("TxtProfileTransitionAnnouncement") ==
+            "Profile changed to PvE Zone from game logs",
+            "the automatic PvE transition to be announced");
 
-        // Leaving season manually restores the existing automatic switching behavior.
-        ClickProfile(app, "BtnPveZone");
-        WaitUntil(() => IsProfileSelected(app, "BtnPveZone"), "PvE Zone to become selected manually");
+        AppendSessionMode(applicationLog, "PvpSeason");
+        WaitUntil(() => IsProfileSelected(app, "BtnPvpSeason"),
+            "PvpSeason evidence to replace PvE Zone", timeoutSeconds: 60);
         AppendSessionMode(applicationLog, "Regular");
         WaitUntil(() => IsProfileSelected(app, "BtnPvpZone"),
-            "Regular evidence to auto-select PvP Zone after leaving season", timeoutSeconds: 60);
-        app.WaitForElementVisibility("TxtAutoIndicator", visible: true);
+            "Regular evidence to replace PvP Season", timeoutSeconds: 60);
     }
 
     private static void WaitForProfileControls(AppDriver app)
@@ -102,7 +101,7 @@ public sealed class SeasonalProfileE2ETests : E2ETestBase
     }
 
     private static void ClickProfile(AppDriver app, string automationId)
-        => app.ToggleElement(automationId);
+        => app.SelectElement(automationId);
 
     private static bool IsProfileSelected(AppDriver app, string automationId)
         => app.GetItemStatus(automationId) == "Selected";

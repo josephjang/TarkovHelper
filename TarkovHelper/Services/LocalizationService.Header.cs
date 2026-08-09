@@ -91,18 +91,26 @@ public partial class LocalizationService
         _ => "Switch to PvP Season"
     };
 
-    public string HeaderAutoBadge => CurrentLanguage switch
+    public string HeaderActiveProfile => CurrentLanguage switch
     {
-        AppLanguage.KO => "자동",
-        AppLanguage.JA => "自動",
-        _ => "Auto"
+        AppLanguage.KO => "활성 프로필",
+        AppLanguage.JA => "アクティブプロフィール",
+        _ => "Active profile"
     };
 
-    public string HeaderAutoBadgeTooltip => CurrentLanguage switch
+    public string HeaderProfileMenuTooltip => CurrentLanguage switch
     {
-        AppLanguage.KO => "게임 로그에서 프로필을 자동으로 감지했습니다",
-        AppLanguage.JA => "ゲームログからプロフィールを自動検出しました",
-        _ => "Profile auto-detected from game logs"
+        AppLanguage.KO => "활성 프로필 선택",
+        AppLanguage.JA => "アクティブプロフィールを選択",
+        _ => "Select active profile"
+    };
+
+    /// <summary>{0} = localized profile name.</summary>
+    public string HeaderProfileChangedFromLogsFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO => "게임 로그에 따른 프로필 전환: {0}",
+        AppLanguage.JA => "ゲームログによりプロフィールを{0}に切り替えました",
+        _ => "Profile changed to {0} from game logs"
     };
 
     public string HeaderProfileTooltip => CurrentLanguage switch

@@ -86,3 +86,15 @@ provides confirmation without asking users to learn a second state model.
   and parser fixtures remain the guardrail.
 - More automatic transitions expose the existing SPA-1 and SPA-2 timing defects more
   often. Those defects retain their separate remediation scope.
+
+## Implementation Status (2026-08-09)
+
+Implemented in the application after the documentation-only decision change:
+
+- Removed the PvP Season suppression exception from log-based resolution.
+- Replaced persistent source text with a fixed-slot transient signal and a polite
+  accessibility announcement.
+- Delivered a wide exact-one radio selector and a fixed-width checked menu for
+  compact and minimal header layouts.
+- Added unit and E2E coverage for symmetric transitions and responsive selector
+  behavior.

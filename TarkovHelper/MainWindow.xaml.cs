@@ -10,6 +10,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using TarkovHelper.Debug;
 using TarkovHelper.Models;
 using TarkovHelper.Pages;
@@ -27,6 +28,7 @@ public partial class MainWindow : Window
     private readonly HideoutProgressService _hideoutProgressService = HideoutProgressService.Instance;
     private readonly SettingsService _settingsService = SettingsService.Instance;
     private readonly LogSyncService _logSyncService = LogSyncService.Instance;
+    private readonly DispatcherTimer _profileTransitionCueTimer;
     private bool _isLoading;
     private bool _isUpdatingProfileUI;
 
@@ -58,9 +60,14 @@ public partial class MainWindow : Window
         _settingsService.HasUnheardEditionChanged += OnEditionChanged;
         _settingsService.PrestigeLevelChanged += OnPrestigeLevelChanged;
 
-        // Reflect app-profile changes in the title bar toggle.
-        ProfileService.Instance.ActiveProfileChanged += (_, args) =>
-            Dispatcher.Invoke(() => UpdateProfileUI(args.Profile, args.IsAutoDetected));
+        _profileTransitionCueTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(1400)
+        };
+        _profileTransitionCueTimer.Tick += ProfileTransitionCueTimer_Tick;
+
+        // Reflect app-profile changes in both responsive selector variants.
+        ProfileService.Instance.ActiveProfileChanged += OnActiveProfileChanged;
 
         // Sync/raid status chip. Subscribed in the constructor (not Window_Loaded) so
         // events fired during AutoStartLogMonitoring aren't missed; named handlers so
@@ -134,18 +141,23 @@ public partial class MainWindow : Window
         AutomationProperties.SetName(BtnProfile, _loc.HeaderProfileName);
         AutomationProperties.SetName(BtnSettings, _loc.Settings);
 
-        // Title bar profile labels, tooltips, and badges
+        // Title bar profile labels and tooltips
         BtnPvpZone.Content = _loc.HeaderPvpZone;
         BtnPveZone.Content = _loc.HeaderPveZone;
         BtnPvpSeason.Content = _loc.HeaderPvpSeason;
+        MenuPvpZone.Header = _loc.HeaderPvpZone;
+        MenuPveZone.Header = _loc.HeaderPveZone;
+        MenuPvpSeason.Header = _loc.HeaderPvpSeason;
+        TxtActiveProfileLabel.Text = _loc.HeaderActiveProfile;
+        TxtCompactActiveProfileLabel.Text = _loc.HeaderActiveProfile;
         BtnPvpZone.ToolTip = _loc.HeaderPvpTooltip;
         BtnPveZone.ToolTip = _loc.HeaderPveTooltip;
         BtnPvpSeason.ToolTip = _loc.HeaderPvpSeasonTooltip;
         AutomationProperties.SetName(BtnPvpZone, _loc.HeaderPvpZone);
         AutomationProperties.SetName(BtnPveZone, _loc.HeaderPveZone);
         AutomationProperties.SetName(BtnPvpSeason, _loc.HeaderPvpSeason);
-        TxtAutoIndicator.Text = _loc.HeaderAutoBadge;
-        TxtAutoIndicator.ToolTip = _loc.HeaderAutoBadgeTooltip;
+        AutomationProperties.SetName(WideProfileSelector, _loc.HeaderActiveProfile);
+        BtnActiveProfileMenu.ToolTip = _loc.HeaderProfileMenuTooltip;
         BtnProfile.ToolTip = _loc.HeaderProfileTooltip;
         BtnSettings.ToolTip = _loc.Settings;
         ChipSyncStatus.ToolTip = _loc.SyncStatusTooltip;
@@ -159,6 +171,7 @@ public partial class MainWindow : Window
 
         // Language-dependent composite texts (profile chip, status chip, version chip)
         UpdatePlayerLevelUI();
+        UpdateProfileUI(ProfileService.Instance.ActiveProfile);
         UpdateSyncStatusChip();
         UpdateVersionChipUI();
     }
@@ -187,7 +200,7 @@ public partial class MainWindow : Window
         await ProfileService.Instance.InitializeAsync();
 
         // Reflect the loaded app profile in the title bar toggle.
-        UpdateProfileUI(ProfileService.Instance.ActiveProfile, ProfileService.Instance.IsAutoDetected);
+        UpdateProfileUI(ProfileService.Instance.ActiveProfile);
 
         // Apply saved language setting to UI
         CmbLanguage.SelectedIndex = _loc.CurrentLanguage switch
@@ -609,60 +622,130 @@ public partial class MainWindow : Window
     #region App Profile
 
     private void BtnPvpZone_Click(object sender, RoutedEventArgs e)
-    {
-        ProfileService.Instance.SetActiveProfile(AppProfile.PvpZone);
-        // Re-sync in case the click toggled the already-active button (no event fires then)
-        UpdateProfileUI(ProfileService.Instance.ActiveProfile, ProfileService.Instance.IsAutoDetected);
-    }
+        => SelectProfileManually(AppProfile.PvpZone);
 
     private void BtnPveZone_Click(object sender, RoutedEventArgs e)
-    {
-        ProfileService.Instance.SetActiveProfile(AppProfile.PveZone);
-        UpdateProfileUI(ProfileService.Instance.ActiveProfile, ProfileService.Instance.IsAutoDetected);
-    }
+        => SelectProfileManually(AppProfile.PveZone);
 
     private void BtnPvpSeason_Click(object sender, RoutedEventArgs e)
-    {
-        ProfileService.Instance.SetActiveProfile(AppProfile.PvpSeason);
-        UpdateProfileUI(ProfileService.Instance.ActiveProfile, ProfileService.Instance.IsAutoDetected);
-    }
+        => SelectProfileManually(AppProfile.PvpSeason);
 
-    // TogglePattern is the native UI Automation pattern for WPF ToggleButton. Handle
-    // Checked as well as Click so keyboard and accessibility clients select profiles
-    // through the same manual path as pointer users.
+    // SelectionItemPattern is the native UI Automation pattern for WPF RadioButton.
+    // Checked covers selection through accessibility clients; Click also covers an
+    // explicit click on the already-selected profile.
     private void BtnPvpZone_Checked(object sender, RoutedEventArgs e)
     {
         if (!_isUpdatingProfileUI)
-            ProfileService.Instance.SetActiveProfile(AppProfile.PvpZone);
+            SelectProfileManually(AppProfile.PvpZone);
     }
 
     private void BtnPveZone_Checked(object sender, RoutedEventArgs e)
     {
         if (!_isUpdatingProfileUI)
-            ProfileService.Instance.SetActiveProfile(AppProfile.PveZone);
+            SelectProfileManually(AppProfile.PveZone);
     }
 
     private void BtnPvpSeason_Checked(object sender, RoutedEventArgs e)
     {
         if (!_isUpdatingProfileUI)
-            ProfileService.Instance.SetActiveProfile(AppProfile.PvpSeason);
+            SelectProfileManually(AppProfile.PvpSeason);
     }
 
-    private void ProfileButton_Unchecked(object sender, RoutedEventArgs e)
+    private void BtnActiveProfileMenu_Click(object sender, RoutedEventArgs e)
     {
-        if (_isUpdatingProfileUI) return;
-
-        // A profile is always selected. This also turns an auto-detected selection
-        // into an explicit manual choice when an accessibility client toggles the
-        // already-selected button, matching an ordinary pointer click.
-        ProfileService.Instance.SetActiveProfile(ProfileService.Instance.ActiveProfile);
-        UpdateProfileUI(ProfileService.Instance.ActiveProfile, ProfileService.Instance.IsAutoDetected);
+        ActiveProfileContextMenu.PlacementTarget = BtnActiveProfileMenu;
+        ActiveProfileContextMenu.IsOpen = true;
     }
+
+    private void MenuPvpZone_Click(object sender, RoutedEventArgs e)
+        => SelectProfileManually(AppProfile.PvpZone);
+
+    private void MenuPveZone_Click(object sender, RoutedEventArgs e)
+        => SelectProfileManually(AppProfile.PveZone);
+
+    private void MenuPvpSeason_Click(object sender, RoutedEventArgs e)
+        => SelectProfileManually(AppProfile.PvpSeason);
+
+    private void SelectProfileManually(AppProfile profile)
+    {
+        ClearAutomaticProfileTransitionCue();
+        ProfileService.Instance.SetActiveProfile(profile);
+
+        // Re-sync when the already-active manual profile was selected and no service
+        // event was necessary.
+        UpdateProfileUI(ProfileService.Instance.ActiveProfile);
+    }
+
+    private void OnActiveProfileChanged(object? sender, ProfileChangedEventArgs args)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            UpdateProfileUI(args.Profile);
+            if (args.IsAutoDetected)
+            {
+                ShowAutomaticProfileTransitionCue(args.Profile);
+            }
+        });
+    }
+
+    private void ShowAutomaticProfileTransitionCue(AppProfile profile)
+    {
+        ClearAutomaticProfileTransitionCue();
+
+        var selectedButton = profile switch
+        {
+            AppProfile.PveZone => BtnPveZone,
+            AppProfile.PvpSeason => BtnPvpSeason,
+            _ => BtnPvpZone
+        };
+        selectedButton.Tag = "AutomaticCue";
+
+        CompactProfileCheck.Visibility = Visibility.Collapsed;
+        CompactProfileAutomaticSignal.Visibility = Visibility.Visible;
+        CompactProfileAutomaticSignal.BeginAnimation(OpacityProperty, new DoubleAnimation
+        {
+            From = 0.35,
+            To = 1,
+            Duration = TimeSpan.FromMilliseconds(250),
+            AutoReverse = true,
+            RepeatBehavior = new RepeatBehavior(2)
+        });
+
+        var profileName = GetProfileDisplayName(profile);
+        var announcement = string.Format(_loc.HeaderProfileChangedFromLogsFormat, profileName);
+        TxtProfileTransitionAnnouncement.Text = string.Empty;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+            TxtProfileTransitionAnnouncement.Text = announcement);
+
+        _profileTransitionCueTimer.Start();
+    }
+
+    private void ProfileTransitionCueTimer_Tick(object? sender, EventArgs e)
+        => ClearAutomaticProfileTransitionCue();
+
+    private void ClearAutomaticProfileTransitionCue()
+    {
+        _profileTransitionCueTimer.Stop();
+        BtnPvpZone.Tag = null;
+        BtnPveZone.Tag = null;
+        BtnPvpSeason.Tag = null;
+        CompactProfileAutomaticSignal.BeginAnimation(OpacityProperty, null);
+        CompactProfileAutomaticSignal.Visibility = Visibility.Collapsed;
+        CompactProfileCheck.Visibility = Visibility.Visible;
+        TxtProfileTransitionAnnouncement.Text = string.Empty;
+    }
+
+    private string GetProfileDisplayName(AppProfile profile) => profile switch
+    {
+        AppProfile.PveZone => _loc.HeaderPveZone,
+        AppProfile.PvpSeason => _loc.HeaderPvpSeason,
+        _ => _loc.HeaderPvpZone
+    };
 
     /// <summary>
-    /// Update the title bar toggle to reflect the active app profile.
+    /// Update the wide radio group and compact checked menu from one active profile.
     /// </summary>
-    private void UpdateProfileUI(AppProfile profile, bool isAuto)
+    private void UpdateProfileUI(AppProfile profile)
     {
         _isUpdatingProfileUI = true;
         try
@@ -670,13 +753,32 @@ public partial class MainWindow : Window
             BtnPvpZone.IsChecked = profile == AppProfile.PvpZone;
             BtnPveZone.IsChecked = profile == AppProfile.PveZone;
             BtnPvpSeason.IsChecked = profile == AppProfile.PvpSeason;
+            MenuPvpZone.IsChecked = profile == AppProfile.PvpZone;
+            MenuPveZone.IsChecked = profile == AppProfile.PveZone;
+            MenuPvpSeason.IsChecked = profile == AppProfile.PvpSeason;
+            IcoMenuPvp.Visibility = profile == AppProfile.PvpZone
+                ? Visibility.Visible : Visibility.Hidden;
+            IcoMenuPve.Visibility = profile == AppProfile.PveZone
+                ? Visibility.Visible : Visibility.Hidden;
+            IcoMenuSeason.Visibility = profile == AppProfile.PvpSeason
+                ? Visibility.Visible : Visibility.Hidden;
+
+            var profileName = GetProfileDisplayName(profile);
+            TxtCompactActiveProfile.Text = profileName;
+            AutomationProperties.SetName(
+                BtnActiveProfileMenu, $"{_loc.HeaderActiveProfile}: {profileName}");
             AutomationProperties.SetItemStatus(
                 BtnPvpZone, profile == AppProfile.PvpZone ? "Selected" : "Unselected");
             AutomationProperties.SetItemStatus(
                 BtnPveZone, profile == AppProfile.PveZone ? "Selected" : "Unselected");
             AutomationProperties.SetItemStatus(
                 BtnPvpSeason, profile == AppProfile.PvpSeason ? "Selected" : "Unselected");
-            TxtAutoIndicator.Visibility = isAuto ? Visibility.Visible : Visibility.Collapsed;
+            AutomationProperties.SetItemStatus(
+                MenuPvpZone, profile == AppProfile.PvpZone ? "Selected" : "Unselected");
+            AutomationProperties.SetItemStatus(
+                MenuPveZone, profile == AppProfile.PveZone ? "Selected" : "Unselected");
+            AutomationProperties.SetItemStatus(
+                MenuPvpSeason, profile == AppProfile.PvpSeason ? "Selected" : "Unselected");
         }
         finally
         {
@@ -2121,6 +2223,12 @@ public partial class MainWindow : Window
         // title goes too.
         var full = mode == HeaderLayoutMode.Full;
         TxtSyncStatus.Visibility = full ? Visibility.Visible : Visibility.Collapsed;
+        WideProfileSelector.Visibility = full ? Visibility.Visible : Visibility.Collapsed;
+        BtnActiveProfileMenu.Visibility = full ? Visibility.Collapsed : Visibility.Visible;
+        if (full)
+        {
+            ActiveProfileContextMenu.IsOpen = false;
+        }
         var glyphVisibility = full ? Visibility.Visible : Visibility.Collapsed;
         _tabGlyphs ??= new[] { IcoTabQuests, IcoTabHideout, IcoTabItems, IcoTabCollector, IcoTabMap };
         foreach (var glyph in _tabGlyphs)
@@ -2548,6 +2656,9 @@ public partial class MainWindow : Window
         _logSyncService.MonitoringStatusChanged -= OnLogMonitoringStatusChanged;
         EftRaidEventService.Instance.MonitoringStateChanged -= OnRaidMonitoringStateChanged;
         EftRaidEventService.Instance.RaidEvent -= OnRaidEvent;
+        ProfileService.Instance.ActiveProfileChanged -= OnActiveProfileChanged;
+        _profileTransitionCueTimer.Stop();
+        _profileTransitionCueTimer.Tick -= ProfileTransitionCueTimer_Tick;
         UpdateService.Instance.UpdateCheckStarted -= OnUpdateCheckStarted;
         UpdateService.Instance.UpdateCheckCompleted -= OnUpdateCheckCompleted;
 
