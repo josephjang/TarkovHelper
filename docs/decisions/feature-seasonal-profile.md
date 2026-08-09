@@ -91,10 +91,11 @@ after which the next seasonal PvP-shaped session would land in permanent PvP aga
 A separate season-mode toggle was rejected because it would split what the user sees
 from where data lands. The active seasonal profile is the pin.
 
-**Positive seasonal detection remains possible.** If a real Kord Breach log contains
-a stable signature, the app may automatically select PvP Season from either permanent
-profile. An ambiguous PvP-shaped line never overrides an already-selected seasonal
-profile. The technical model represents both outcomes without changing `GameMode`.
+**Positive seasonal detection uses the observed client token.** A real
+EFT 1.1.0.0.46657 capture records `Session mode: PvpSeason` for Kord Breach, so the app
+automatically selects PvP Season from either permanent profile. An ambiguous
+PvP-shaped line never overrides an already-selected seasonal profile. The technical
+model keeps this profile hint separate from `GameMode.PVP`.
 
 **Complete profile reset is a separate product decision.** The existing action is
 already scoped to the active profile for the stores it clears. Expanding its meaning,
@@ -104,9 +105,10 @@ third profile. SPA-3, SPA-4, and SPA-6 preserve the analysis for that later PRD/
 
 ## Risks
 
-- Forgetting to select PvP Season leaves the existing permanent-PvP contamination
-  path unchanged. Manual selection is the known floor until log evidence proves a
-  reliable seasonal signature.
+- Automatic selection relies on the observed `PvpSeason` log token. If a later client
+  removes or renames it, forgetting to select PvP Season leaves the existing
+  permanent-PvP contamination path unchanged; manual selection and pinning remain the
+  fallback.
 - Forgetting to switch back writes permanent-profile play into seasonal under the
   same existing persistence behavior.
 - The app inherits known async ownership and reload races. They are not newly caused

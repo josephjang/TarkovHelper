@@ -1,6 +1,8 @@
 # EFT 로그 분석 패턴 가이드
 
 이 문서는 Escape from Tarkov 게임 로그에서 레이드 정보를 추출하는 방법을 설명합니다.
+현재 클라이언트에서 새 로그 증거를 안전하게 수집하는 절차는
+[EFT Live Log Capture Runbook](eft-live-log-capture-runbook.md)을 참고하세요.
 
 ## 로그 폴더 구조
 

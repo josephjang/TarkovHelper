@@ -25,8 +25,12 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
   (TarkovDBEditor가 생성, TarkovHelper가 소비)
 - [database-update-mechanism.md](database-update-mechanism.md): 앱과 DB의
   자동 업데이트 메커니즘
+- [eft-1-1-profile-selection-log-analysis.md](eft-1-1-profile-selection-log-analysis.md):
+  EFT 1.1의 시즌/영구/PvE 프로필 전환 로그 캡처와 파서 결론
 - [eft-log-patterns.md](eft-log-patterns.md): EFT 게임 로그 폴더 구조와
   레이드 정보 추출 패턴
+- [eft-live-log-capture-runbook.md](eft-live-log-capture-runbook.md): 현재 EFT
+  클라이언트를 실행하고 비식별 로그 증거를 수집하는 Windows 절차
 - [eft-raid-event-service.md](eft-raid-event-service.md): EftRaidEventService가
   제공하는 이벤트와 사용법
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
