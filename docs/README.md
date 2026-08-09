@@ -36,6 +36,11 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
 
 - [assessments/2026-08-code-health.md](assessments/2026-08-code-health.md):
   TarkovHelper 앱과 솔루션 툴링 전반의 코드 품질 평가 (34개 finding)
+- [assessments/2026-08-seasonal-profile-amplified-issues.md](assessments/2026-08-seasonal-profile-amplified-issues.md):
+  Seasonal Profile 추가로 영향이 커지는 기존 문제와 후속 작업 경계 (6개 finding)
+- [assessments/2026-08-seasonal-profile-adjacent-issues.md](assessments/2026-08-seasonal-profile-adjacent-issues.md):
+  Seasonal Profile 분석에서 확인했지만 영향이 특별히 커지지 않는 인접 문제
+  (4개 finding)
 
 ## 관례
 

@@ -2,199 +2,118 @@
 
 - **Created**: 2026-08-08
 
-> The sibling `feature-seasonal-profile.spec.md`, if it exists, holds the technical
-> design. Write this on the work's branch and merge it in the same PR as the work.
-> Nothing is kept current: fields are written once, discoveries are appended. A
-> later change that reverses a decision here appends `Superseded by <doc>` below
-> this line, in the PR that reverses it.
+> The sibling `feature-seasonal-profile.spec.md` holds the technical design. Write
+> this on the work's branch and merge it in the same PR as the work. Nothing is kept
+> current: fields are written once, discoveries are appended. A later change that
+> reverses a decision here appends `Superseded by <doc>` below this line, in the PR
+> that reverses it.
 
 ## Summary
 
-Escape from Tarkov 1.1 introduced seasonal characters, and the app currently
-records seasonal play into the permanent PvP profile: active data corruption
-that worsens with every seasonal raid. This phase, the first of
-`feature-eft-1-1-roadmap.md`, adds a third profile ("PvP Season") next to PvP
-and PvE. Selecting it pins the app there: no automatic profile switching can pull
-data back into a permanent profile. The reset action becomes a complete profile
-reset ("start the new season" in one click), and the log sync range setting,
-which today is silently ignored, takes effect so a fresh profile is not
-re-polluted by old logs. This phase ships alone in its own release, before any
-data work: it stops ongoing damage and depends on nothing upstream.
+Escape from Tarkov 1.1 introduced seasonal characters, but the app offers only PvP
+and PvE profiles. A seasonal session therefore looks like permanent PvP and the app
+has no seasonal data view or destination.
+
+This change adds one rolling profile, PvP Season, alongside PvP Zone and PvE Zone.
+The user selects it from the title bar, every profile-aware page loads the third
+profile id, and automatic PvP/PvE detection cannot move the app away while seasonal
+is selected. Existing reset behavior is unchanged. Redefining the current partial,
+active-profile reset as a complete profile reset is a separate product decision.
 
 ## Problem
 
-The app decides which profile a raid belongs to by watching the game, and it
-only knows PvP and PvE. A Kord Breach seasonal raid looks like ordinary PvP to
-it, so seasonal quest completions are silently written into the permanent PvP
-profile. The wrongness compounds: the app's primary user is playing the season
-now, and every session mixes more seasonal progress into a profile that is
-supposed to outlive the season. Recorded raids are worse off still: they carry
-no app profile at all, so nothing distinguishes a seasonal raid from a
-permanent one even in principle.
+`ProfileService` equates app profile with `GameMode`, so it can express only PvP and
+PvE. Kord Breach currently reports a PvP-shaped session under the known log patterns,
+which selects permanent PvP. The user cannot tell the app that seasonal progress
+belongs elsewhere, and there is no third profile to inspect.
 
-The season also starts from scratch in game, but the app has no blank slate to
-offer. There is no third profile to switch to, and the reset button does not
-actually produce one: it clears quest and hideout progress but leaves item
-inventory, profile settings (level, reputation, faction, edition, prestige,
-DSP count), and raid history behind. Even a user willing to sacrifice a
-permanent profile for the season cannot get a clean start.
-
-Finally, a quest sync always reads the entire log history, regardless of the
-sync range setting in the app's settings. Even a freshly reset profile gets
-its pre-reset completions re-imported by the next full sync.
+The existing profile-keyed tables can already store another `ProfileId`, so the
+missing capability is identity and control rather than a new data architecture. The
+main product risk is automatic switching: adding a button alone is insufficient if
+the next `Pvp` or `Pve` log line can immediately select a permanent profile again.
 
 ## Goals
 
-- Seasonal play is recorded in a profile of its own, isolated from PvP and PvE
-  in both directions.
-- Once the user has chosen the seasonal profile, no automatic behavior writes
-  seasonal data into a permanent profile.
-- Starting a new season is one action that yields a genuinely blank profile.
-- A blank profile stays blank: log sync respects the configured range instead
-  of resurrecting the entire history.
+- Offer a seasonal profile whose stored rows are keyed separately from PvP and PvE.
+- Make the visible profile selection the destination users can reason about.
+- Keep PvP Season selected until the user manually leaves it, unless a real seasonal
+  signature positively confirms the same selection.
+- Preserve existing PvP/PvE rows and behavior on upgrade.
 
 ## Non-Goals
 
-- **Per-season archived profiles.** One rolling seasonal profile, reset each
-  season; decided in `feature-eft-1-1-roadmap.md`.
-- **User-created profiles.** The switcher stays a fixed choice: PvE Zone,
-  PvP Zone, PvP Season.
-- **Season-aware content.** Quest, hideout, and item data changes belong to the
-  later phases of the roadmap; this phase changes where progress is recorded,
-  not what the data says.
-- **Guaranteed automatic seasonal detection.** Whether the game's logs identify
-  a seasonal session is an open question this phase answers by observation; the
-  committed floor is manual selection that automation cannot override.
-- **Backup or export before reset.** The enumerated confirmation is the guard;
-  a data export feature would be its own decision.
+- **A general rewrite of profile persistence.** Late-bound async write ownership and
+  stale reload ordering are tracked as SPA-1 and SPA-2 in
+  `2026-08-seasonal-profile-amplified-issues.md`.
+- **Changing Reset Progress.** The current action already targets the active profile
+  but clears only quest, objective, and hideout progress. Defining and implementing a
+  complete profile reset, including raid attribution and localized confirmation,
+  requires a separate PRD/spec and is tracked as SPA-3, SPA-4, and SPA-6.
+- **Fixing or optimizing log sync range.** The ignored setting and full-history file
+  scan are tracked as SPA-5 and SPT-2 in the two linked assessments.
+- **General persistence/test infrastructure.** Latest-wins active-profile storage,
+  injectable clocks, and singleton test seams are tracked in
+  `2026-08-seasonal-profile-adjacent-issues.md`.
+- **Per-season archived profiles.** One rolling seasonal profile is reused each
+  season; archive/export is a separate product decision.
+- **User-created profiles.** The switcher remains the fixed three choices.
+- **Season-aware content.** Quest, hideout, and item data changes belong to later
+  `feature-eft-1-1-roadmap.md` phases.
+- **Guaranteed automatic seasonal detection.** Manual selection plus pinning is the
+  committed floor. Real log evidence may add positive detection in this phase.
 
 ## Requirements / Acceptance Criteria
 
-- R1: The title-bar profile switcher offers "PvP Season" alongside the
-  existing two profiles, and all three labels match the game's profile
-  selection screen ("PvE Zone", "PvP Zone", "PvP Season") in each supported
-  language (EN/KO/JA). Selecting it switches every page (quests, hideout,
-  items, collector, raid history) to the seasonal profile's data.
-- R2: Isolation holds in both directions: quest and objective progress, hideout
-  progress, item inventory, and profile settings recorded under the seasonal
-  profile are invisible under PvP and PvE, and vice versa.
-- R3: While the seasonal profile is selected, the app never switches profiles
-  on its own: a raid that would previously flip the switcher to PvP or PvE
-  leaves the seasonal profile active, and that session's quest events are
-  recorded under it. Manually selecting PvP or PvE restores today's automatic
-  switching.
-- R4: Every raid the app records from now on is attributed to the profile that
-  was active when it happened, so a reset removes that profile's raids and
-  leaves the other profiles' raids alone. No screen displays raid history
-  today, so this is a data guarantee rather than something visible in the app;
-  it exists so the reset in R5 can be scoped and a later raid-history view is
-  correct by construction.
-- R5: Reset Progress resets the active profile completely: quest and objective
-  progress, hideout progress, item inventory, profile settings, and the
-  profile's attributed raids are cleared in one action, leaving the profile as
-  if freshly created. App-wide settings (language, window layout, sync options)
-  and the other profiles are untouched.
-- R6: The reset confirmation names the profile being reset and lists everything
-  that will be cleared; declining changes nothing. The dialog is localized
-  (EN/KO/JA).
-- R7: Raid history recorded before the app attributed raids to profiles
-  survives every reset.
-- R8: The sync range setting takes effect: a full quest sync reads only logs
-  within the configured window, so raids older than the window are not
-  re-imported.
-- R9: Updating the app changes nothing for existing PvP/PvE data until the user
-  selects the seasonal profile or runs a reset; there are no migration side
-  effects.
+- R1: The title-bar switcher offers PvP Zone, PvE Zone, and PvP Season. Labels match
+  the game in EN/KO/JA.
+- R2: Selecting PvP Season makes every existing profile-aware page use the `season`
+  profile id. No existing PvP/PvE row is copied, moved, or re-keyed.
+- R3: While PvP Season is selected, automatic permanent-PvP and PvE detections leave
+  the selection unchanged. Manually selecting PvP Zone or PvE Zone restores current
+  automatic switching behavior.
+- R4: The selected profile persists across restart as `PVP`, `PVE`, or `SEASON`.
+  An unknown stored value falls back to PvP Zone.
+- R5: Updating the app has no data migration side effects for existing PvP/PvE
+  profile tables. Until the user selects PvP Season, the visible profile and data are
+  the same as before the update.
 
 ## Product Decisions
 
-**Labels follow the game's profile selection screen.** The 1.1 profile
-selection names the three characters "PvE Zone", "PvP Zone", and "PvP Season",
-and shows the current season's title ("Kord Breach") separately as a subtitle.
-The app adopts the same vocabulary: the new profile is "PvP Season", and the
-existing PvP/PvE switcher labels become "PvP Zone" and "PvE Zone", so the
-user never maps between the app's words and the game's. A generic app-invented
-label ("Season") was the earlier draft and is dropped for the same reason.
-Naming the profile after the season ("Kord Breach") stays rejected: the
-profile is a rolling container that outlives any one season
-(`feature-eft-1-1-roadmap.md` decided rolling reuse), and the game itself
-treats the season name as a subtitle, not the mode name. KO/JA labels follow
-the game's own localization of these terms, confirmed from the 1.1 client's
-profile selection screen in each language (2026-08-08). Korean: "PvE 존",
-"PvP 존", "시즌 PvP". Japanese: "PvE ゾーン", "PvP ゾーン", "PvP シーズン".
-Note the Korean client reverses the word order of "PvP Season" while the
-Japanese client keeps it, so the labels are per-language strings taken from
-the game, not translations of one English pattern.
+**Labels follow the game's profile selection screen.** The app uses PvE Zone, PvP
+Zone, and PvP Season rather than generic PvE/PvP/Season labels. The seasonal title
+such as Kord Breach is not used as the profile name because this is one rolling
+container. Confirmed client labels (2026-08-08): Korean `PvE 존`, `PvP 존`,
+`시즌 PvP`; Japanese `PvE ゾーン`, `PvP ゾーン`, `PvP シーズン`.
 
-**Selecting the seasonal profile suspends all automatic switching.** The app
-cannot tell a seasonal raid from a permanent PvP raid in the logs (as known
-today), so any automation that reacts to a PvP-shaped session while the user
-plays the season is a corruption path. Two alternatives were rejected.
-Suppressing only the PvP-shaped detection while keeping the PvE auto-switch
-reintroduces the bug it exists to fix: one detected PvE session moves the app
-off the seasonal profile, and the next seasonal raid then auto-switches to PvP
-and contaminates it again. A separate "season mode" toggle that redirects
-PvP-shaped sessions independently of the visible profile splits "what am I
-looking at" from "where does data land" into two controls that can disagree.
-Full suspension gives one rule a user can hold: seasonal is manual, and while
-you are there, nothing moves you. The risk direction is deliberate: with the
-profile pinned, a forgotten switch writes permanent progress into the seasonal
-profile, which the next season reset wipes anyway; the old behavior wrote
-seasonal progress into a permanent profile, which lives forever. Prefer the
-recoverable mistake.
+**Selecting PvP Season suspends permanent-profile auto-switching.** Suppressing only
+PvP-shaped detection is insufficient: one PvE detection could move the app away,
+after which the next seasonal PvP-shaped session would land in permanent PvP again.
+A separate season-mode toggle was rejected because it would split what the user sees
+from where data lands. The active seasonal profile is the pin.
 
-**Whether seasonal sessions are log-identifiable is answered, not assumed.**
-This phase captures logs from a real Kord Breach session (the primary user is
-playing it) and records the finding in the sibling spec. If a seasonal
-signature exists, automatic switching learns it: a seasonal session then
-selects the seasonal profile the way PvP and PvE sessions do today, and the
-pinning above becomes a safety net rather than the primary mechanism. If not,
-R3's pinning is the shipped behavior and this stays a known limitation.
+**Positive seasonal detection remains possible.** If a real Kord Breach log contains
+a stable signature, the app may automatically select PvP Season from either permanent
+profile. An ambiguous PvP-shaped line never overrides an already-selected seasonal
+profile. The technical model represents both outcomes without changing `GameMode`.
 
-**Reset means "factory-new profile", uniformly for every profile.** Widening
-the reset only for the seasonal profile was rejected: one button with two
-meanings, and the current partial clear is a gap, not a feature. Nobody asks
-to reset their progress but keep the inventory that progress earned; the
-roadmap already scopes the full clear (its R4 there). The scope is structural,
-"everything the profile owns", so per-profile data added by later phases
-(trader loyalty levels) is covered without revisiting this decision. The
-confirmation dialog enumerates the scope and, unlike today's hardcoded
-Korean-plus-English text, is properly localized.
-
-**Unattributable history is never destroyed.** Raid history recorded before
-the app attributed raids to profiles has no owner on record, and since
-attribution starts with this change, that is every raid recorded so far. A
-reset deletes only what the profile provably owns; deleting unattributed
-history would be irreversible guesswork, and assigning it all to PvP would be
-a guess that quietly becomes wrong for anyone who played PvE. The consequence:
-the first reset after this update deletes no raid history at all, and those
-rows keep surviving later resets.
-
-**The existing sync range setting is honored, not replaced by a hidden bound.**
-An automatic bound at the profile's last reset time was considered and
-declined: it is hidden state, and it would surprise a user intentionally
-re-syncing further back. The range setting already exists in the settings UI
-and is silently ignored on the main sync path; making it effective is the
-smaller, honest fix. If season boundaries prove to need more than a day-based
-window, that experience reopens this.
+**Complete profile reset is a separate product decision.** The existing action is
+already scoped to the active profile for the stores it clears. Expanding its meaning,
+deciding every owned data category, attributing raid history, and defining legacy-row
+preservation changes the reset product contract rather than merely accommodating a
+third profile. SPA-3, SPA-4, and SPA-6 preserve the analysis for that later PRD/spec.
 
 ## Risks
 
-- Forgetting to select the seasonal profile at season start corrupts PvP
-  exactly as today: the pinning only protects after the first manual switch.
-  Accepted: one manual action per season is the floor, and the log-capture
-  question above may remove even that.
-- Forgetting to switch back writes permanent-profile play into the seasonal
-  profile. Accepted as the deliberately chosen risk direction: the next season
-  reset wipes it.
-- The widened reset destroys more than the old button did. Mitigated by the
-  confirmation that names the profile and enumerates the scope; accepted
-  beyond that, since a reset that keeps half the data is the bug this phase
-  fixes.
-- Historic seasonal sessions already in the log window are PvP-shaped, so a
-  full sync can still re-import them into the PvP profile. Bounded by the now
-  effective range setting; accepted until the seasonal-signature question is
-  answered.
-- The seasonal profile shows standard hideout data even though the season
-  changes hideout economics (found-in-raid requirements disabled). Accepted
-  v1 limitation, recorded in `feature-eft-1-1-roadmap.md`.
+- Forgetting to select PvP Season leaves the existing permanent-PvP contamination
+  path unchanged. Manual selection is the known floor until log evidence proves a
+  reliable seasonal signature.
+- Forgetting to switch back writes permanent-profile play into seasonal under the
+  same existing persistence behavior.
+- The app inherits known async ownership and reload races. They are not newly caused
+  by this feature, but more profile switching makes them more visible; see SPA-1 and
+  SPA-2.
+- Reset Progress remains the current active-profile, quest/objective/hideout-only
+  action. The UI must not describe it as a complete seasonal reset or Start New Season.
+- Historic and future raid rows remain unattributed to an app profile in this phase.
+- PvP Season shows standard content even where seasonal economics differ. Content
+  changes remain later roadmap work.
