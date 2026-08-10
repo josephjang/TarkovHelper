@@ -35,27 +35,36 @@
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="3" Padding="{TemplateBinding Padding}">
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                <Grid Width="16" Height="16" Margin="0,0,5,0"
-                                      VerticalAlignment="Center">
-                                    <Path x:Name="SelectedCheck"
-                                          Data="M 2,8 L 6,12 L 14,3"
-                                          Stroke="{StaticResource AccentBrush}"
-                                          StrokeThickness="2.4" StrokeStartLineCap="Round"
-                                          StrokeEndLineCap="Round" Stretch="Uniform"
-                                          Visibility="Hidden"/>
-                                    <Path x:Name="AutomaticBolt" Width="13" Height="15"
-                                          HorizontalAlignment="Center" VerticalAlignment="Center"
-                                          Data="M 9,1 L 3,9 L 7,9 L 5,15 L 13,6 L 9,6 Z"
-                                          Fill="{StaticResource AccentBrush}"
-                                          Stretch="Uniform" Visibility="Hidden"/>
-                                </Grid>
-                                <TextBlock Text="{TemplateBinding Content}"
-                                           Foreground="{TemplateBinding Foreground}"
-                                           FontSize="{TemplateBinding FontSize}"
-                                           FontWeight="{TemplateBinding FontWeight}"
-                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </StackPanel>
+                            <Grid>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Grid Width="16" Height="16" Margin="0,0,5,0"
+                                          VerticalAlignment="Center">
+                                        <Path x:Name="SelectedCheck"
+                                              Data="M 2,8 L 6,12 L 14,3"
+                                              Stroke="{StaticResource AccentBrush}"
+                                              StrokeThickness="2.4" StrokeStartLineCap="Round"
+                                              StrokeEndLineCap="Round" Stretch="Uniform"
+                                              Visibility="Hidden"/>
+                                        <Path x:Name="AutomaticBolt" Width="13" Height="15"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Data="M 9,1 L 3,9 L 7,9 L 5,15 L 13,6 L 9,6 Z"
+                                              Fill="{StaticResource AccentBrush}"
+                                              Stretch="Uniform" Visibility="Hidden"/>
+                                    </Grid>
+                                    <TextBlock Text="{TemplateBinding Content}"
+                                               Foreground="{TemplateBinding Foreground}"
+                                               FontSize="{TemplateBinding FontSize}"
+                                               FontWeight="{TemplateBinding FontWeight}"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <!-- Focus ring drawn as an overlay inside the existing border, so
+                                     showing it costs no layout space. Growing the border itself
+                                     would widen the focused segment and shift its siblings. -->
+                                <Border x:Name="focusRing" Margin="-2"
+                                        BorderBrush="{StaticResource AccentHoverBrush}"
+                                        BorderThickness="1" CornerRadius="2"
+                                        IsHitTestVisible="False" Visibility="Collapsed"/>
+                            </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -68,17 +77,12 @@
                                 <Setter TargetName="SelectedCheck" Property="Visibility" Value="Visible"/>
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}"/>
-                                <Setter TargetName="border" Property="BorderThickness" Value="2"/>
+                                <Setter TargetName="focusRing" Property="Visibility" Value="Visible"/>
                             </Trigger>
-                            <MultiTrigger>
-                                <MultiTrigger.Conditions>
-                                    <Condition Property="IsChecked" Value="True"/>
-                                    <Condition Property="Tag" Value="AutoSelected"/>
-                                </MultiTrigger.Conditions>
-                                <Setter TargetName="SelectedCheck" Property="Visibility" Value="Hidden"/>
-                                <Setter TargetName="AutomaticBolt" Property="Visibility" Value="Visible"/>
-                            </MultiTrigger>
+                            <!-- There is deliberately no lasting "AutoSelected" marker state.
+                                 PRD R6: the selector does not persist Manual/Auto/Pinned source
+                                 state; an automatic change gets a brief cue and an accessible
+                                 announcement, then the selector returns to its neutral look. -->
                             <MultiTrigger>
                                 <MultiTrigger.Conditions>
                                     <Condition Property="IsChecked" Value="True"/>
@@ -86,15 +90,24 @@
                                 </MultiTrigger.Conditions>
                                 <Setter TargetName="SelectedCheck" Property="Visibility" Value="Hidden"/>
                                 <Setter TargetName="AutomaticBolt" Property="Visibility" Value="Visible"/>
+                                <!-- FillBehavior=Stop and the paired RemoveStoryboard are both
+                                     required: AutoReverse with RepeatBehavior="2x" ends on the
+                                     From value (0.35), so a held animation would pin the bolt
+                                     at 35% opacity for the rest of the session, and an
+                                     EnterActions clock is not released when the trigger exits. -->
                                 <MultiTrigger.EnterActions>
-                                    <BeginStoryboard>
-                                        <Storyboard AutoReverse="True" RepeatBehavior="2x">
+                                    <BeginStoryboard x:Name="AutomaticCuePulse">
+                                        <Storyboard AutoReverse="True" RepeatBehavior="2x"
+                                                    FillBehavior="Stop">
                                             <DoubleAnimation Storyboard.TargetName="AutomaticBolt"
                                                              Storyboard.TargetProperty="Opacity"
                                                              From="0.35" To="1" Duration="0:0:0.25"/>
                                         </Storyboard>
                                     </BeginStoryboard>
                                 </MultiTrigger.EnterActions>
+                                <MultiTrigger.ExitActions>
+                                    <RemoveStoryboard BeginStoryboardName="AutomaticCuePulse"/>
+                                </MultiTrigger.ExitActions>
                             </MultiTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -151,9 +164,14 @@
                                       StrokeThickness="2.4" StrokeStartLineCap="Round"
                                       StrokeEndLineCap="Round" Stretch="Uniform"
                                       Visibility="Hidden"/>
+                                <!-- FontFamily is deliberately not forwarded: it is an
+                                     inheritable property, so this TextBlock already picks up
+                                     the MenuItem's AppFont from the Setter above, and the
+                                     font-policy test (FontAssetsTests) allows only the three
+                                     approved family literals in XAML. -->
                                 <TextBlock Grid.Column="1" Text="{TemplateBinding Header}"
                                            Margin="6,0,0,0"
-                                           FontFamily="{TemplateBinding FontFamily}"
+                                           TextTrimming="CharacterEllipsis"
                                            FontSize="{TemplateBinding FontSize}"
                                            FontWeight="{TemplateBinding FontWeight}"
                                            Foreground="{TemplateBinding Foreground}"
@@ -319,7 +337,16 @@
                                     Background="{StaticResource BackgroundLightBrush}"
                                     CornerRadius="4" VerticalAlignment="Center">
                                 <StackPanel Orientation="Horizontal">
+                                    <!-- Content carries an EN default so the selector is
+                                         readable from InitializeComponent onward; the
+                                         localized label replaces it in UpdateAllLocalizedText.
+                                         IsChecked is deliberately NOT set here: it would raise
+                                         Checked during InitializeComponent, before the
+                                         constructor builds _profileTransitionCueTimer, and the
+                                         handler dereferences that timer. The constructor
+                                         renders the initial selection instead. -->
                                     <RadioButton x:Name="BtnPvpZone" GroupName="ActiveProfile"
+                                                 Content="PvP Zone"
                                                  Style="{StaticResource GameModeRadioStyle}"
                                                  Padding="7,3" FontSize="{DynamicResource FontSizeXSmall}"
                                                  FontWeight="SemiBold"
@@ -328,6 +355,7 @@
                                                  Checked="BtnPvpZone_Checked"
                                                  Click="BtnPvpZone_Click"/>
                                     <RadioButton x:Name="BtnPveZone" GroupName="ActiveProfile"
+                                                 Content="PvE Zone"
                                                  Style="{StaticResource GameModeRadioStyle}"
                                                  Padding="7,3" FontSize="{DynamicResource FontSizeXSmall}"
                                                  FontWeight="SemiBold"
@@ -336,6 +364,7 @@
                                                  Checked="BtnPveZone_Checked"
                                                  Click="BtnPveZone_Click"/>
                                     <RadioButton x:Name="BtnPvpSeason" GroupName="ActiveProfile"
+                                                 Content="PvP Season"
                                                  Style="{StaticResource GameModeRadioStyle}"
                                                  Padding="7,3" FontSize="{DynamicResource FontSizeXSmall}"
                                                  FontWeight="SemiBold"
@@ -348,22 +377,31 @@
                         </StackPanel>
 
                         <!-- Compact/minimal selector: fixed-width trigger plus checked menu. -->
-                        <Button x:Name="BtnActiveProfileMenu" Width="172" MinHeight="30" Padding="8,3"
+                        <!-- MinWidth, not Width: the label is localized and scales with the
+                             user's BaseFontSize (10..28), so a hard 172 px cut the JA label off
+                             from base 23 up. MinWidth keeps the stable default width the
+                             fixed-marker-slot design wants while still growing when it must. -->
+                        <Button x:Name="BtnActiveProfileMenu" MinWidth="172" MinHeight="30" Padding="8,3"
                                 Style="{StaticResource ActiveProfileMenuButtonStyle}"
                                 Margin="0,0,12,0" VerticalAlignment="Center"
                                 Visibility="Collapsed" Click="BtnActiveProfileMenu_Click"
                                 AutomationProperties.Name="Active profile">
                             <Button.ContextMenu>
-                                <ContextMenu x:Name="ActiveProfileContextMenu" Width="172"
+                                <ContextMenu x:Name="ActiveProfileContextMenu" MinWidth="172"
                                              Style="{StaticResource ActiveProfileContextMenuStyle}"
                                              Placement="Bottom" VerticalOffset="2">
+                                    <!-- EN Header defaults for the same reason as the wide
+                                         RadioButtons above; UpdateAllLocalizedText replaces them. -->
                                     <MenuItem x:Name="MenuPvpZone" IsCheckable="True"
+                                              Header="PvP Zone"
                                               Style="{StaticResource ActiveProfileMenuItemStyle}"
                                               Click="MenuPvpZone_Click"/>
                                     <MenuItem x:Name="MenuPveZone" IsCheckable="True"
+                                              Header="PvE Zone"
                                               Style="{StaticResource ActiveProfileMenuItemStyle}"
                                               Click="MenuPveZone_Click"/>
                                     <MenuItem x:Name="MenuPvpSeason" IsCheckable="True"
+                                              Header="PvP Season"
                                               Style="{StaticResource ActiveProfileMenuItemStyle}"
                                               Click="MenuPvpSeason_Click"/>
                                 </ContextMenu>
@@ -388,6 +426,7 @@
                                 </Grid>
                                 <TextBlock x:Name="TxtCompactActiveProfile" Grid.Column="1"
                                            Text="PvP Zone" Margin="6,0"
+                                           TextTrimming="CharacterEllipsis"
                                            FontSize="{DynamicResource FontSizeXSmall}"
                                            FontWeight="SemiBold"
                                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"

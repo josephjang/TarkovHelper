@@ -87,14 +87,22 @@ provides confirmation without asking users to learn a second state model.
 - More automatic transitions expose the existing SPA-1 and SPA-2 timing defects more
   often. Those defects retain their separate remediation scope.
 
-## Implementation Status (2026-08-09)
+## Appended: what "later" means in R5 (2026-08-10)
 
-Implemented in the application after the documentation-only decision change:
+R5 says a later exact known hint may replace a manual choice. "Later" means later in
+evidence-application order, not later in wall-clock time. The startup scan replays the
+last `Session mode` line of the newest log folder on every launch, so that replayed line
+replaces the stored manual selection even when the folder is days old.
 
-- Removed the PvP Season suppression exception from log-based resolution.
-- Replaced persistent source text with a fixed-slot transient signal and a polite
-  accessibility announcement.
-- Delivered a wide exact-one radio selector and a fixed-width checked menu for
-  compact and minimal header layouts.
-- Added unit and E2E coverage for symmetric transitions and responsive selector
-  behavior.
+This is deliberate. The selected profile represents the active EFT data destination, and
+EFT persists its own profile selection across launches, so the last observed token is
+normally still the destination EFT will use next. A manual choice is therefore not durable
+across a restart when the newest log folder names a different profile.
+
+The consequence accepted here is that a user who manually selects a profile the logs
+disagree with sees it replaced at the next launch. Two alternatives were considered and
+rejected for now: bounding replay to the current EFT session by folder recency, and
+persisting a timestamp beside `app.activeGameMode` so replayed evidence older than the
+stored selection loses. Either can be revisited if the accepted behavior proves confusing;
+the startup-scan event now carries the log line's own timestamp rather than the scan time,
+which is the precondition for any recency rule.

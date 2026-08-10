@@ -28,8 +28,10 @@ EFT 게임 로그를 실시간 모니터링하여 레이드 이벤트를 감지�
 EFT는 동일 계정에 대해 PMC와 SCAV에 서로 다른 프로파일 ID를 부여합니다:
 
 - 프로파일 ID는 **24자리 hex 문자열**
-- PMC와 SCAV는 **마지막 hex 문자만 다름**
-- **SCAV ID = PMC ID + 1** (hex)
+- **SCAV ID = PMC ID + 1** (24자리 전체에 대한 hex 증가, 자리올림 포함)
+- 자리올림이 없는 경우에만 마지막 hex 문자 하나만 달라 보입니다. 캡처된 사례가 모두
+  그런 경우여서 이전에는 "마지막 문자만 다름"으로 적혀 있었습니다. 자세한 근거는
+  `eft-log-patterns.md`를, 구현은 `EftProfileInfo.NextProfileId`를 참고하세요.
 
 ```
 예시:

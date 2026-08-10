@@ -20,6 +20,7 @@ public class LocalizationHeaderStringsTests
         "HeaderPvpTooltip", "HeaderPveTooltip", "HeaderPvpSeasonTooltip",
         "HeaderActiveProfile", "HeaderProfileMenuTooltip", "HeaderProfileChangedFromLogsFormat",
         "HeaderProfileSourceManual", "HeaderProfileSourceAutomatic",
+        "HeaderProfileSelected", "HeaderProfileUnselected",
         "HeaderProfileTooltip", "HeaderProfileName", "HeaderLevelShort", "HeaderVersionTooltipIdle",
         "HeaderVersionTooltipInstall", "HeaderVersionTooltipCheckFailed",
         "HeaderUpdateAvailableFormat", "HeaderChecking",

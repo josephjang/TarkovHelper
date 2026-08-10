@@ -13,6 +13,18 @@
 > removed. Exact known hints resolve symmetrically from every current profile.
 > Every other technical decision here stands.
 
+> Also superseded in part by `feature-profile-log-auto-switch.md` R6 (2026-08-10): the
+> "UI and localization" section below describes a selector that keeps
+> `GameModeToggleStyle` and `TxtAutoIndicator`, moves label text to an
+> `ApplyLocalization` method, and exposes `UpdateProfileUI(AppProfile, bool)`. The
+> delivered selector is a responsive pair instead: a wide exact-one radio group styled
+> by `GameModeRadioStyle` plus a compact checked menu, with no `TxtAutoIndicator` and no
+> persistent Manual/Auto source state, localized from `UpdateAllLocalizedText` and
+> rendered by `UpdateProfileUI(AppProfile)`. `ProfileResolution` and
+> `ResolveDetectedProfile(current, hint)` named here were also replaced by
+> `TryResolveDetectedProfile(hint, out profile)`, which cannot see the current profile
+> and so cannot reintroduce a pin.
+
 ## Summary
 
 `ProfileService` gains an app-level `AppProfile` with `PvpZone`, `PveZone`, and
