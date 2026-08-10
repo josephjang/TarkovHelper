@@ -26,6 +26,18 @@ public static class HeaderLayout
     /// Below this width the sync-status text is hidden (dot + tooltip remain) and the
     /// tab glyphs are dropped — text-only tabs fit down to the window minimum.
     /// </summary>
+    /// <remarks>
+    /// Known limitation: this is a width-only decision, blind to language and to the user's
+    /// BaseFontSize (10..28). Measured worst case is Japanese at the DEFAULT font size, where
+    /// the title bar needs about 1001 px while Full mode already starts at 1000, and at base 28
+    /// it needs about 1488 px. Fixing it properly means choosing the variant from the wide
+    /// selector's measured DesiredSize against the available title-bar width, and re-running
+    /// that from BaseFontSizeChanged and LanguageChanged (today ApplyHeaderLayout is reached
+    /// only from Window_SizeChanged, so neither event re-evaluates the choice). Both halves have
+    /// to land together, because re-subscribing alone changes nothing while GetMode stays
+    /// width-only. The compact selector's labels use MinWidth + CharacterEllipsis so the
+    /// current mechanism degrades visibly rather than silently.
+    /// </remarks>
     public const double CompactThreshold = 1000;
 
     /// <summary>Below this width the brand title is hidden as well.</summary>

@@ -94,20 +94,36 @@ public sealed class SeasonalProfileE2ETests : E2ETestBase
 
         app.ResizeWindow(900, 700);
         app.WaitForElementVisibility("BtnActiveProfileMenu", visible: true);
-        Assert.Equal("Auto-selected from game logs",
-            app.GetItemStatus("BtnActiveProfileMenu"));
+
+        // PRD R6: an automatic change gets a brief cue and an announcement, then the selector
+        // returns to its neutral resting state. By now the 1400 ms cue has long expired, so no
+        // lasting "Auto-selected from game logs" source label may survive.
+        Assert.Equal(string.Empty, app.GetItemStatus("BtnActiveProfileMenu"));
+        WaitUntil(() => app.GetElementText("TxtProfileTransitionAnnouncement") == string.Empty,
+            "the transient transition announcement to clear");
     }
 
+    /// <summary>
+    /// AppDriver.Launch returns as soon as the titled window exists, which is before
+    /// Window_Loaded finishes awaiting the user-DB and profile initialization. GetElementText is
+    /// a one-shot read, so these must poll rather than assert immediately.
+    /// </summary>
     private static void WaitForProfileControls(AppDriver app)
     {
-        Assert.Equal("PvP Zone", app.GetElementText("BtnPvpZone"));
-        Assert.Equal("PvE Zone", app.GetElementText("BtnPveZone"));
-        Assert.Equal("PvP Season", app.GetElementText("BtnPvpSeason"));
+        WaitUntil(() => app.GetElementText("BtnPvpZone") == "PvP Zone",
+            "the PvP Zone label to render");
+        WaitUntil(() => app.GetElementText("BtnPveZone") == "PvE Zone",
+            "the PvE Zone label to render");
+        WaitUntil(() => app.GetElementText("BtnPvpSeason") == "PvP Season",
+            "the PvP Season label to render");
+        WaitUntil(() => !string.IsNullOrEmpty(app.GetItemStatus("BtnPvpZone")),
+            "the profile selection state to be published");
     }
 
     private static void ClickProfile(AppDriver app, string automationId)
         => app.SelectElement(automationId);
 
+    // ItemStatus is localized; these tests launch a fresh config dir, so the app is in EN.
     private static bool IsProfileSelected(AppDriver app, string automationId)
         => app.GetItemStatus(automationId) == "Selected";
 

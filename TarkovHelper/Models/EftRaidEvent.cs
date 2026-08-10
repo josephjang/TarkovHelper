@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Numerics;
+
 namespace TarkovHelper.Models;
 
 /// <summary>
@@ -70,37 +73,58 @@ public class EftProfileInfo
     public DateTime UpdatedAt { get; set; }
 
     /// <summary>
-    /// 주어진 프로파일 ID가 SCAV인지 확인
+    /// Width of an EFT profile id, in hex characters. Recorded in
+    /// <c>docs/eft-raid-event-service.md</c>; a value of any other width is not an identity
+    /// this code can reason about, so derivation refuses it rather than guessing.
+    /// </summary>
+    public const int ProfileIdHexLength = 24;
+
+    /// <summary>
+    /// The id immediately after <paramref name="profileId"/>, i.e. the SCAV profile derived
+    /// from a PMC profile. Returns null when the input is not exactly
+    /// <see cref="ProfileIdHexLength"/> hex characters, or when the increment would need a
+    /// wider id.
+    /// <para>
+    /// This is a FULL-WIDTH increment with carry, so a PMC id ending in <c>f</c> yields
+    /// <c>...10</c> rather than wrapping that nibble back to <c>0</c>. The repo's captured
+    /// evidence (see <c>docs/eft-log-patterns.md</c>) contains only non-carry pairs, where
+    /// "only the last hex character differs" and "PMC + 1" agree; they diverge exactly when
+    /// the last nibble is <c>f</c>. Carry is the inference that follows from the id being a
+    /// 24-hex ObjectId whose trailing bytes are a counter, and it is the only reading under
+    /// which derivation and recognition can agree.
+    /// </para>
+    /// </summary>
+    public static string? NextProfileId(string? profileId)
+    {
+        if (string.IsNullOrEmpty(profileId) || profileId.Length != ProfileIdHexLength)
+            return null;
+
+        foreach (var c in profileId)
+        {
+            var isHex = c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F';
+            if (!isHex) return null;
+        }
+
+        // Leading "0" keeps BigInteger.Parse from reading the value as negative.
+        var next = BigInteger.Parse("0" + profileId, NumberStyles.HexNumber) + BigInteger.One;
+        var formatted = next.ToString("x" + ProfileIdHexLength, CultureInfo.InvariantCulture);
+
+        // Full-width overflow (all-f) would need a 25th digit: not a representable identity.
+        return formatted.Length == ProfileIdHexLength ? formatted : null;
+    }
+
+    /// <summary>
+    /// 주어진 프로파일 ID가 SCAV인지 확인.
+    /// Compared case-insensitively: the capturing regex uses RegexOptions.IgnoreCase, so a
+    /// stored id may differ from a logged one only in case.
     /// </summary>
     public bool IsScavProfile(string profileId)
     {
-        if (string.IsNullOrEmpty(PmcProfileId) || string.IsNullOrEmpty(profileId))
-            return false;
+        if (string.IsNullOrEmpty(profileId)) return false;
 
-        if (profileId.Length != PmcProfileId.Length)
-            return false;
-
-        // 마지막 문자만 비교
-        var pmcBase = PmcProfileId[..^1];
-        var raidBase = profileId[..^1];
-
-        if (pmcBase != raidBase)
-            return false;
-
-        // SCAV 프로파일 ID는 PMC의 마지막 hex 문자 + 1
-        var pmcLast = PmcProfileId[^1];
-        var raidLast = profileId[^1];
-
-        try
-        {
-            var pmcHex = Convert.ToInt32(pmcLast.ToString(), 16);
-            var raidHex = Convert.ToInt32(raidLast.ToString(), 16);
-            return raidHex == pmcHex + 1;
-        }
-        catch
-        {
-            return false;
-        }
+        var derived = NextProfileId(PmcProfileId);
+        return derived != null
+            && string.Equals(profileId, derived, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

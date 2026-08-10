@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.IO;
+using System.Text;
 using System.Text.RegularExpressions;
 using TarkovHelper.Models;
 using TarkovHelper.Services.Logging;
@@ -20,8 +21,11 @@ public sealed class EftRaidEventService : IDisposable
 
     // Legacy SelectProfile and EFT 1.1's completed two-phase selection. Prepare-only
     // lines are deliberately excluded because an interrupted transition may never commit.
+    // The leading \b is what rejects PrepareSelectedProfileLocally and
+    // NotCompleteSelectedProfile; the trailing \b only stops the account id running into
+    // more word characters, so a trailing ',' or ')' still parses as it did before EFT 1.1.
     private static readonly Regex CompletedProfileSelectionRegex = new(
-        @"\b(?:SelectProfile|CompleteSelectedProfile)\s+ProfileId:([a-f0-9]+)\s+AccountId:(\d+)(?:\s|$)",
+        @"\b(?:SelectProfile|CompleteSelectedProfile)\s+ProfileId:([a-fA-F0-9]{24})\s+AccountId:(\d+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Match the complete token so PvpSeason cannot fall through to the Pvp prefix.
@@ -190,7 +194,9 @@ public sealed class EftRaidEventService : IDisposable
     // 현재 상태
     private EftProfileInfo? _currentProfile;
     private EftRaidInfo? _currentRaid;
-    private GameMode _currentGameMode = GameMode.Unknown;
+    // One field for the session fact. The game mode is derived on read (GameModeOf) rather
+    // than stored beside the hint, so the pair cannot be written out of step by the
+    // FileSystemWatcher callback and the poll timer running on different threads.
     private SessionProfileHint _currentSessionProfileHint = SessionProfileHint.Unknown;
     private string? _pendingGroupId;
 
@@ -232,15 +238,10 @@ public sealed class EftRaidEventService : IDisposable
     /// </summary>
     public EftRaidInfo? CurrentRaid => _currentRaid;
 
-    /// <summary>
-    /// 현재 게임 모드 (PVE/PVP)
-    /// </summary>
-    public GameMode CurrentGameMode => _currentGameMode;
-
-    /// <summary>
-    /// Most recent app-profile hint parsed from a session-mode line.
-    /// </summary>
-    public SessionProfileHint CurrentSessionProfileHint => _currentSessionProfileHint;
+    // No public CurrentGameMode / CurrentSessionProfileHint accessors: the session-mode
+    // facts are published on the SessionModeDetected event, which is how ProfileService
+    // consumes them. A polled accessor invites reading a value that a background parse
+    // may already have replaced, and the GameMode form cannot express PvP Season.
 
     /// <summary>
     /// 모니터링 중인지 여부
@@ -414,7 +415,10 @@ public sealed class EftRaidEventService : IDisposable
             {
                 var latestAppLog = appLogs[0];
                 _log.Debug($"Latest application log: {latestAppLog}");
-                _filePositions[latestAppLog] = new FileInfo(latestAppLog).Length;
+                // End of the last COMPLETE line, not raw file length: EFT may be mid-write, and
+                // a cursor inside a partial line would make the first incremental read parse a
+                // truncated token (see FrameCompletedLines).
+                _filePositions[latestAppLog] = CompletedPrefixLength(latestAppLog);
                 _log.Debug($"Set file position to: {_filePositions[latestAppLog]}");
                 ScanLogFileForProfile(latestAppLog);
             }
@@ -427,7 +431,7 @@ public sealed class EftRaidEventService : IDisposable
             _log.Debug($"Found {netLogs.Count} network logs");
             if (netLogs.Count > 0)
             {
-                _filePositions[netLogs[0]] = new FileInfo(netLogs[0]).Length;
+                _filePositions[netLogs[0]] = CompletedPrefixLength(netLogs[0]);
                 _log.Debug($"Latest network log: {netLogs[0]}, position: {_filePositions[netLogs[0]]}");
             }
         }
@@ -489,7 +493,10 @@ public sealed class EftRaidEventService : IDisposable
             string? lastPmcProfileId = null;
             string? lastAccountId = null;
             SessionProfileHint lastProfileHint = SessionProfileHint.Unknown;
-            GameMode lastGameMode = GameMode.Unknown;
+            // When the evidence was WRITTEN, taken from the line itself. The live path already
+            // does this; the scan used to stamp DateTime.Now, which destroyed the age of a
+            // replayed line before any consumer could see it.
+            var lastProfileHintAt = DateTime.Now;
 
             string? line;
             while ((line = reader.ReadLine()) != null)
@@ -503,11 +510,11 @@ public sealed class EftRaidEventService : IDisposable
                 }
 
                 // Session mode 감지
-                if (TryParseSessionProfile(line, out var profileHint, out var gameMode))
+                if (TryParseSessionProfile(line, out var profileHint))
                 {
                     lastProfileHint = profileHint;
-                    lastGameMode = gameMode;
-                    _log.Debug($"[Scan] Found Session mode: {lastProfileHint} ({lastGameMode})");
+                    lastProfileHintAt = ExtractTimestamp(line);
+                    _log.Debug($"[Scan] Found Session mode: {lastProfileHint} ({GameModeOf(lastProfileHint)})");
                 }
             }
 
@@ -519,34 +526,37 @@ public sealed class EftRaidEventService : IDisposable
                 if (existingProfile?.PmcProfileId != lastPmcProfileId)
                 {
                     var scavId = CalculateScavProfileId(lastPmcProfileId);
-                    _currentProfile = new EftProfileInfo
+                    // Snapshot into a local: the live tail path and LoadProfileFromDbAsync
+                    // both assign this field from other threads, so a lambda closing over
+                    // it could persist a different identity than the one just parsed.
+                    var scannedProfile = new EftProfileInfo
                     {
                         PmcProfileId = lastPmcProfileId,
                         ScavProfileId = scavId,
                         AccountId = lastAccountId,
                         UpdatedAt = DateTime.Now
                     };
+                    _currentProfile = scannedProfile;
                     _log.Debug($"[Scan] Profile set: PMC={lastPmcProfileId}, SCAV={scavId}");
 
-                    Task.Run(() => SaveProfileToDbAsync(_currentProfile));
-                    ProfileChanged?.Invoke(this, new EftProfileEventArgs { ProfileInfo = _currentProfile });
+                    Task.Run(() => SaveProfileToDbAsync(scannedProfile));
+                    ProfileChanged?.Invoke(this, new EftProfileEventArgs { ProfileInfo = scannedProfile });
                 }
             }
 
-            if (lastGameMode != GameMode.Unknown)
+            if (lastProfileHint != SessionProfileHint.Unknown)
             {
-                _currentGameMode = lastGameMode;
                 _currentSessionProfileHint = lastProfileHint;
-                _log.Debug($"[Scan] Session profile set: {_currentSessionProfileHint} ({_currentGameMode})");
+                _log.Debug($"[Scan] Session profile set: {lastProfileHint} ({GameModeOf(lastProfileHint)})");
 
                 // Propagate the detected mode so the active profile auto-switches at startup,
                 // not only on a live session line appended while monitoring.
                 RaidEvent?.Invoke(this, new EftRaidEventArgs
                 {
                     EventType = EftRaidEventType.SessionModeDetected,
-                    SessionProfileHint = _currentSessionProfileHint,
-                    Timestamp = DateTime.Now,
-                    Message = $"Session profile: {_currentSessionProfileHint}; game mode: {_currentGameMode} (startup scan)"
+                    SessionProfileHint = lastProfileHint,
+                    Timestamp = lastProfileHintAt,
+                    Message = $"Session profile: {lastProfileHint}; game mode: {GameModeOf(lastProfileHint)} (startup scan)"
                 });
             }
             _log.Debug("ScanLogFileForProfile completed");
@@ -621,7 +631,131 @@ public sealed class EftRaidEventService : IDisposable
         }
     }
 
+    /// <summary>
+    /// A line longer than this with no newline is dispatched unterminated rather than
+    /// buffered forever, so a process that died mid-line cannot stall the tail.
+    /// </summary>
+    internal const int MaxUnterminatedLineBytes = 1024 * 1024;
+
+    /// <summary>Upper bound on bytes framed per read, so one call cannot allocate a whole log.</summary>
+    internal const int MaxReadChunkBytes = 4 * 1024 * 1024;
+
+    /// <summary>
+    /// Frames the bytes appended since <paramref name="lastPosition"/> at the LAST newline and
+    /// returns only complete lines, plus the position to resume from.
+    /// <para>
+    /// EFT keeps the log open and flushes on buffer boundaries, not line boundaries, so a read
+    /// triggered by the size/last-write watcher or the 1 s poll routinely lands mid-line.
+    /// <c>StreamReader.ReadLine</c> hands back such a partial tail as if it were a whole line
+    /// and the stream position then sits past it, so the completing bytes are never re-read.
+    /// That silently defeats the anchored token patterns: a flush truncating at
+    /// <c>Session mode: Pvp</c> matches (<c>$</c> is end-of-input, not end-of-line) and
+    /// misclassifies a PvP Season session as PvP Zone, while a truncation at
+    /// <c>Session mode: PvpSea</c> loses the transition entirely.
+    /// </para>
+    /// </summary>
+    internal static (List<string> Lines, long NextPosition) FrameCompletedLines(
+        Stream stream, long lastPosition)
+    {
+        var lines = new List<string>();
+        if (lastPosition < 0) lastPosition = 0;
+        if (stream.Length <= lastPosition) return (lines, lastPosition);
+
+        // Bound the buffer: a first read of an existing multi-megabyte log (or a log file the
+        // watcher reports as created) would otherwise allocate the whole remainder at once.
+        // Whatever is left over is picked up by the next poll.
+        var pendingLength = Math.Min(stream.Length - lastPosition, MaxReadChunkBytes);
+        stream.Seek(lastPosition, SeekOrigin.Begin);
+
+        var buffer = new byte[pendingLength];
+        var read = 0;
+        while (read < buffer.Length)
+        {
+            var chunk = stream.Read(buffer, read, buffer.Length - read);
+            if (chunk <= 0) break;
+            read += chunk;
+        }
+
+        var lastNewline = Array.LastIndexOf(buffer, (byte)'\n', read - 1);
+        int usable;
+        if (lastNewline >= 0)
+        {
+            usable = lastNewline + 1;
+        }
+        else if (read >= MaxUnterminatedLineBytes)
+        {
+            // No newline in an implausibly long span: give up on framing this one rather
+            // than re-reading the same bytes on every poll forever.
+            usable = read;
+        }
+        else
+        {
+            // Nothing complete yet — leave the whole partial tail for the next read.
+            return (lines, lastPosition);
+        }
+
+        var text = new UTF8Encoding(false).GetString(buffer, 0, usable);
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.EndsWith('\r') ? raw[..^1] : raw;
+            if (line.Length > 0) lines.Add(line);
+        }
+
+        return (lines, lastPosition + usable);
+    }
+
+    /// <summary>
+    /// Cursor for a file we intend to tail from "now": the end of its last COMPLETE line, so
+    /// the first incremental read cannot begin inside a line EFT is still writing.
+    /// </summary>
+    private static long CompletedPrefixLength(string filePath)
+    {
+        try
+        {
+            using var stream = new FileStream(
+                filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+
+            // Search backwards for the last newline instead of framing the whole file: this runs
+            // on the startup path against a log that can be many megabytes, and only the offset
+            // is wanted here, not the lines.
+            var buffer = new byte[8192];
+            var end = stream.Length;
+            while (end > 0)
+            {
+                var chunkLength = (int)Math.Min(buffer.Length, end);
+                var chunkStart = end - chunkLength;
+                stream.Seek(chunkStart, SeekOrigin.Begin);
+
+                var read = 0;
+                while (read < chunkLength)
+                {
+                    var got = stream.Read(buffer, read, chunkLength - read);
+                    if (got <= 0) break;
+                    read += got;
+                }
+
+                var index = Array.LastIndexOf(buffer, (byte)'\n', read - 1);
+                if (index >= 0) return chunkStart + index + 1;
+
+                end = chunkStart;
+            }
+
+            // No newline anywhere: nothing is a complete line yet, so tail from the beginning.
+            return 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
     private void ProcessApplicationLogChanges(string filePath)
+        => ProcessLogChanges(filePath, ParseApplicationLogLine, "application");
+
+    private void ProcessNetworkLogChanges(string filePath)
+        => ProcessLogChanges(filePath, ParseNetworkLogLine, "network");
+
+    private void ProcessLogChanges(string filePath, Action<string> parseLine, string label)
     {
         lock (_readLock)
         {
@@ -636,54 +770,14 @@ public sealed class EftRaidEventService : IDisposable
                 if (stream.Length < lastPosition) lastPosition = 0;
                 if (stream.Length <= lastPosition) return;
 
-                stream.Seek(lastPosition, SeekOrigin.Begin);
-
-                using var reader = new StreamReader(stream);
-                string? line;
-                int lineCount = 0;
-                while ((line = reader.ReadLine()) != null)
+                var (lines, nextPosition) = FrameCompletedLines(stream, lastPosition);
+                foreach (var line in lines)
                 {
-                    lineCount++;
-                    ParseApplicationLogLine(line);
+                    parseLine(line);
                 }
 
-                _filePositions[filePath] = stream.Position;
-                _log.Debug($"[Process] Processed {lineCount} lines from application log");
-            }
-            catch (Exception ex)
-            {
-                _log.Warning($"Failed to process application log: {ex.Message}");
-            }
-        }
-    }
-
-    private void ProcessNetworkLogChanges(string filePath)
-    {
-        lock (_readLock)
-        {
-            try
-            {
-                if (!File.Exists(filePath)) return;
-
-                using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-
-                var lastPosition = _filePositions.GetValueOrDefault(filePath, 0);
-                if (stream.Length < lastPosition) lastPosition = 0;
-                if (stream.Length <= lastPosition) return;
-
-                stream.Seek(lastPosition, SeekOrigin.Begin);
-
-                using var reader = new StreamReader(stream);
-                string? line;
-                int lineCount = 0;
-                while ((line = reader.ReadLine()) != null)
-                {
-                    lineCount++;
-                    ParseNetworkLogLine(line);
-                }
-
-                _filePositions[filePath] = stream.Position;
-                _log.Debug($"[Process] Processed {lineCount} lines from network log");
+                _filePositions[filePath] = nextPosition;
+                _log.Debug($"[Process] Processed {lines.Count} lines from {label} log");
             }
             catch (Exception ex)
             {
@@ -701,38 +795,41 @@ public sealed class EftRaidEventService : IDisposable
         {
             if (_currentRaid != null && _currentRaid.State != RaidState.Ended)
             {
-                _log.Debug($"[Parse] Init detected - ending current raid (fallback). Previous state: {_currentRaid.State}");
-                _currentRaid.State = RaidState.Ended;
-                _currentRaid.EndTime ??= timestamp;
+                // Snapshot the raid into a local before scheduling the save: the field is
+                // cleared below, and a lambda closing over the field would hand null to
+                // SaveRaidHistoryAsync once the worker actually ran, losing the row.
+                var endedRaid = _currentRaid;
+                _log.Debug($"[Parse] Init detected - ending current raid (fallback). Previous state: {endedRaid.State}");
+                endedRaid.State = RaidState.Ended;
+                endedRaid.EndTime ??= timestamp;
+
+                _currentRaid = null;
 
                 // 레이드 히스토리에 저장
-                Task.Run(() => SaveRaidHistoryAsync(_currentRaid));
+                Task.Run(() => SaveRaidHistoryAsync(endedRaid));
 
                 RaidEvent?.Invoke(this, new EftRaidEventArgs
                 {
                     EventType = EftRaidEventType.Disconnected,
-                    RaidInfo = _currentRaid,
+                    RaidInfo = endedRaid,
                     Timestamp = timestamp,
                     Message = "Raid ended (detected from Init)"
                 });
-
-                _currentRaid = null;
             }
         }
 
         // Session mode
-        if (TryParseSessionProfile(line, out var profileHint, out var gameMode))
+        if (TryParseSessionProfile(line, out var profileHint))
         {
             _currentSessionProfileHint = profileHint;
-            _currentGameMode = gameMode;
-            _log.Debug($"[Parse] Session mode detected: {_currentSessionProfileHint} ({_currentGameMode})");
+            _log.Debug($"[Parse] Session mode detected: {profileHint} ({GameModeOf(profileHint)})");
 
             RaidEvent?.Invoke(this, new EftRaidEventArgs
             {
                 EventType = EftRaidEventType.SessionModeDetected,
-                SessionProfileHint = _currentSessionProfileHint,
+                SessionProfileHint = profileHint,
                 Timestamp = timestamp,
-                Message = $"Session profile: {_currentSessionProfileHint}; game mode: {_currentGameMode}"
+                Message = $"Session profile: {profileHint}; game mode: {GameModeOf(profileHint)}"
             });
         }
 
@@ -745,19 +842,22 @@ public sealed class EftRaidEventService : IDisposable
             if (_currentProfile?.PmcProfileId != profileId)
             {
                 var scavId = CalculateScavProfileId(profileId);
-                _currentProfile = new EftProfileInfo
+                // Snapshot into a local so the scheduled save and the published event both
+                // carry this parsed identity even if the field is replaced meanwhile.
+                var selectedProfile = new EftProfileInfo
                 {
                     PmcProfileId = profileId,
                     ScavProfileId = scavId,
                     AccountId = accountId,
                     UpdatedAt = DateTime.Now
                 };
+                _currentProfile = selectedProfile;
                 _log.Debug($"[Parse] Profile updated: PMC={profileId}, SCAV={scavId}");
 
-                Task.Run(() => SaveProfileToDbAsync(_currentProfile));
+                Task.Run(() => SaveProfileToDbAsync(selectedProfile));
                 ProfileChanged?.Invoke(this, new EftProfileEventArgs
                 {
-                    ProfileInfo = _currentProfile,
+                    ProfileInfo = selectedProfile,
                     Timestamp = timestamp
                 });
 
@@ -815,7 +915,7 @@ public sealed class EftRaidEventService : IDisposable
             {
                 ProfileId = raidProfileId,
                 RaidType = raidType,
-                GameMode = _currentGameMode,
+                GameMode = GameModeOf(_currentSessionProfileHint),
                 MapName = mapName,
                 MapKey = mapKey,
                 ServerIp = traceMatch.Groups[4].Value,
@@ -827,7 +927,7 @@ public sealed class EftRaidEventService : IDisposable
                 State = RaidState.Matching
             };
 
-            _log.Info($"[RaidStarted] Map={mapKey}, RaidType={raidType}, GameMode={_currentGameMode}");
+            _log.Info($"[RaidStarted] Map={mapKey}, RaidType={raidType}, GameMode={GameModeOf(_currentSessionProfileHint)}");
             RaidEvent?.Invoke(this, new EftRaidEventArgs
             {
                 EventType = EftRaidEventType.RaidStarted,
@@ -852,7 +952,7 @@ public sealed class EftRaidEventService : IDisposable
                 {
                     ProfileId = _currentProfile?.PmcProfileId,
                     RaidType = RaidType.Unknown, // scene preset만으로는 PMC/SCAV 구분 불가
-                    GameMode = _currentGameMode,
+                    GameMode = GameModeOf(_currentSessionProfileHint),
                     MapName = bundleName,
                     MapKey = mapKey,
                     IsParty = !string.IsNullOrEmpty(_pendingGroupId),
@@ -908,7 +1008,7 @@ public sealed class EftRaidEventService : IDisposable
                         RaidId = raidId,
                         ProfileId = _currentProfile?.PmcProfileId,
                         RaidType = RaidType.Unknown,
-                        GameMode = _currentGameMode,
+                        GameMode = GameModeOf(_currentSessionProfileHint),
                         MapName = mapFromTransit,
                         MapKey = mapKey,
                         IsParty = !string.IsNullOrEmpty(_pendingGroupId),
@@ -940,31 +1040,31 @@ public sealed class EftRaidEventService : IDisposable
         if (transitEndMatch.Success && _currentRaid != null)
         {
             var endProfileId = transitEndMatch.Groups[1].Value;
-            _currentRaid.State = RaidState.Ended;
-            _currentRaid.EndTime = timestamp;
+            // Snapshot before scheduling: a later line in this same batch can replace
+            // _currentRaid with a freshly created raid, and a lambda closing over the
+            // field would then persist that new raid instead of the one that just ended.
+            var endedRaid = _currentRaid;
+            endedRaid.State = RaidState.Ended;
+            endedRaid.EndTime = timestamp;
 
             // 레이드 히스토리에 저장
-            Task.Run(() => SaveRaidHistoryAsync(_currentRaid));
+            Task.Run(() => SaveRaidHistoryAsync(endedRaid));
 
             RaidEvent?.Invoke(this, new EftRaidEventArgs
             {
                 EventType = EftRaidEventType.RaidEnded,
-                RaidInfo = _currentRaid,
+                RaidInfo = endedRaid,
                 Timestamp = timestamp
             });
         }
     }
 
-    internal static bool TryParseSessionProfile(
-        string line,
-        out SessionProfileHint profileHint,
-        out GameMode gameMode)
+    internal static bool TryParseSessionProfile(string line, out SessionProfileHint profileHint)
     {
         var match = SessionModeRegex.Match(line);
         if (!match.Success)
         {
             profileHint = SessionProfileHint.Unknown;
-            gameMode = GameMode.Unknown;
             return false;
         }
 
@@ -975,14 +1075,19 @@ public sealed class EftRaidEventService : IDisposable
             "pvp" or "regular" => SessionProfileHint.PvpZone,
             _ => SessionProfileHint.Unknown
         };
-        gameMode = profileHint switch
-        {
-            SessionProfileHint.PveZone => GameMode.PVE,
-            SessionProfileHint.PvpZone or SessionProfileHint.PvpSeason => GameMode.PVP,
-            _ => GameMode.Unknown
-        };
         return profileHint != SessionProfileHint.Unknown;
     }
+
+    /// <summary>
+    /// Game rules implied by a session hint. Derived rather than stored alongside the hint, so
+    /// the two cannot be written out of step by the watcher and poll threads.
+    /// </summary>
+    internal static GameMode GameModeOf(SessionProfileHint profileHint) => profileHint switch
+    {
+        SessionProfileHint.PveZone => GameMode.PVE,
+        SessionProfileHint.PvpZone or SessionProfileHint.PvpSeason => GameMode.PVP,
+        _ => GameMode.Unknown
+    };
 
     internal static bool TryParseCompletedProfileSelection(
         string line,
@@ -997,7 +1102,10 @@ public sealed class EftRaidEventService : IDisposable
             return false;
         }
 
-        profileId = match.Groups[1].Value;
+        // Normalize to lowercase at this single boundary: the pattern is case-insensitive, so
+        // the same identity can arrive in either case, and downstream comparisons (including
+        // the "is this a new profile?" check that triggers a re-save) are ordinal.
+        profileId = match.Groups[1].Value.ToLowerInvariant();
         accountId = match.Groups[2].Value;
         return true;
     }
@@ -1096,24 +1204,16 @@ public sealed class EftRaidEventService : IDisposable
         return DateTime.Now;
     }
 
-    private static string CalculateScavProfileId(string pmcProfileId)
-    {
-        if (string.IsNullOrEmpty(pmcProfileId)) return "";
-
-        var baseId = pmcProfileId[..^1];
-        var lastChar = pmcProfileId[^1];
-
-        try
-        {
-            var hex = Convert.ToInt32(lastChar.ToString(), 16);
-            var nextHex = (hex + 1) % 16;
-            return baseId + nextHex.ToString("x");
-        }
-        catch
-        {
-            return pmcProfileId;
-        }
-    }
+    /// <summary>
+    /// Derives the SCAV profile id from a PMC profile id, or null when the input is not a
+    /// usable identity. Delegates to <see cref="EftProfileInfo.NextProfileId"/> so derivation
+    /// and <see cref="EftProfileInfo.IsScavProfile"/> recognition can never disagree: the
+    /// previous local implementation incremented only the last nibble with wraparound, so for
+    /// a PMC id ending in 'f' it produced a value that IsScavProfile then rejected, leaving
+    /// every Scav raid of such an account classified as Unknown.
+    /// </summary>
+    internal static string? CalculateScavProfileId(string pmcProfileId)
+        => EftProfileInfo.NextProfileId(pmcProfileId);
 
     #endregion
 
