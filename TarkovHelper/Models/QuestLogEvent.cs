@@ -55,6 +55,18 @@ namespace TarkovHelper.Models
         /// Source log file name
         /// </summary>
         public string? SourceFile { get; set; }
+
+        /// <summary>
+        /// The profile this event belongs to, derived from the <c>Session mode</c> timeline of
+        /// the session folder it was parsed from.
+        /// <para>
+        /// Null means "no evidence" and never a default: an event from before the first mode
+        /// marker in its folder has nothing saying where it belongs, and assigning it to the
+        /// selected profile (or to any default) is exactly the misfiling this attribution
+        /// exists to stop. Consumers must drop a null-owner event and report its count.
+        /// </para>
+        /// </summary>
+        public AppProfile? OwnerProfile { get; set; }
     }
 
     /// <summary>
@@ -124,6 +136,30 @@ namespace TarkovHelper.Models
         public int AlternativeQuestCount => AlternativeQuestGroups.Count;
 
         /// <summary>
+        /// How many quest records were written to each profile, filled in by the apply step.
+        /// This is what the summary reports (PRD R2): with the review step gone, naming the
+        /// profiles that were written to is the only signal a player has that a sync went
+        /// somewhere unexpected.
+        /// </summary>
+        public Dictionary<AppProfile, int> AppliedCountsByProfile { get; set; } = new();
+
+        /// <summary>
+        /// Quests whose final state in the logs already matched what was stored for their own
+        /// profile, so nothing was written for them.
+        /// </summary>
+        public int AlreadyCurrentCount { get; set; }
+
+        /// <summary>
+        /// Quest events whose game mode could not be determined from the logs. They are not
+        /// recorded under any profile (PRD R3); the count is reported so a player can see that
+        /// something was dropped rather than silently misfiled.
+        /// </summary>
+        public int UnattributedEventCount { get; set; }
+
+        /// <summary>Total quest records written across every profile.</summary>
+        public int TotalApplied => AppliedCountsByProfile.Values.Sum();
+
+        /// <summary>
         /// Whether the sync was successful overall
         /// </summary>
         public bool Success => Errors.Count == 0 || TotalEventsFound > 0;
@@ -144,6 +180,13 @@ namespace TarkovHelper.Models
         /// (true if at least one is a prerequisite for a started/completed quest)
         /// </summary>
         public bool IsRequired { get; set; }
+
+        /// <summary>
+        /// The profile whose progress this choice resolves. The same either-or can be open in
+        /// more than one profile at once, so the group carries its owner rather than inheriting
+        /// whichever profile happens to be selected when the player answers.
+        /// </summary>
+        public AppProfile OwnerProfile { get; set; }
     }
 
     /// <summary>
@@ -300,6 +343,13 @@ namespace TarkovHelper.Models
         /// Whether this quest is selected for completion
         /// </summary>
         public bool IsSelected { get; set; } = true;
+
+        /// <summary>
+        /// The profile this change belongs to, carried from the event that produced it so the
+        /// apply step and the summary never have to re-derive it (and can never disagree about
+        /// it). Only attributed events become a change, so this is never "unknown".
+        /// </summary>
+        public AppProfile OwnerProfile { get; set; }
 
         /// <summary>
         /// Event timestamp for chronological ordering

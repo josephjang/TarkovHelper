@@ -10,7 +10,7 @@ namespace TarkovHelper.Services;
 /// 사용자 데이터를 SQLite DB (user_data.db)에 저장/로드하는 서비스.
 /// 퀘스트 진행, 목표 완료, 하이드아웃 진행, 아이템 인벤토리 등을 관리합니다.
 /// </summary>
-public sealed class UserDataDbService
+public sealed class UserDataDbService : IQuestProgressStore
 {
     private static readonly Lazy<UserDataDbService> _instance = new(() => new UserDataDbService());
     public static UserDataDbService Instance => _instance.Value;

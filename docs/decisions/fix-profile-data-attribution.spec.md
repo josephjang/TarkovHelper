@@ -339,3 +339,53 @@ frequent defect in place.
 The reload-window and sync-distribution tests are written first and confirmed failing
 against the current code, so the guard is known to reproduce the defect before the
 fix lands.
+
+## Discoveries During Implementation
+
+**Line framing moved with the parser.** `EftLogPatterns` took `FrameCompletedLines` and
+its two size constants along with the four members this spec named.
+`SessionModeTimeline` reads a log EFT is still writing, so it needs the same
+"complete lines only" framing, and leaving that behind would have reproduced the exact
+duplication the extraction decision above rejects: a flush truncating at
+`Session mode: Pvp` matches the anchored pattern and classifies a seasonal session as
+permanent PvP. `EftRaidEventService` calls the extracted copy.
+
+**`LogSyncService`'s application-log glob has never matched anything.** EFT names its
+files `<date>_<time>_<version> application.log`, so `application*.log` — anchored at
+"application" — matches nothing. Three places in `LogSyncService` use it: the map
+FileSystemWatcher filter and two `Directory.GetFiles` calls. That whole map path is
+dead as a result; `MapDetected` and `FindLastMapFromLogs` have no subscribers anywhere
+in the solution, and live map detection is `LogMapWatcherService`'s job, using
+`*application*.log`. The glob was left as it is, with a comment recording the finding,
+rather than "fixed" into making dead code do unused work. `SessionModeTimeline` uses
+the correct pattern; nothing about attribution goes through the dead path.
+
+**The startup load must not raise `ProgressChanged`.** Folding the two loads into one
+`ReloadForProfileAsync` gave the startup path a notification it never used to have.
+`QuestProgressService.Initialize` runs that load with `Task.Run(...).GetAwaiter()
+.GetResult()`, blocking the dispatcher, while `ProgressChanged` subscribers marshal
+their refresh back to it — an unconditional deadlock on startup and after every
+in-place reload. The startup load therefore passes `notify: false`, matching what the
+pre-snapshot initial load did by construction. The e2e sync test is what caught it;
+no unit test could, since the deadlock needs a real dispatcher.
+
+**The sync pass had to become per-profile, not just per-event.** Attribution alone was
+not enough. "Is this quest already recorded?" was answered from the loaded cache, which
+is correct for at most one of the profiles a run touches; every other group would have
+been judged against the wrong profile's rows and either rewritten or skipped wrongly.
+`SyncFromLogsAsync` now groups the attributed events by owner and reads each owner's
+stored rows through `IQuestProgressStore` before planning its changes. That is also
+where the already-current count comes from.
+
+**The cascade never needed derived status.** `CascadeLookups.Status` is now the
+recorded-only view rather than `GetStatus`. The core consults it solely through gates
+testing `== Done` and `== Failed`, and `GetStatus` reports either of those exactly when
+progress records it, so the two are interchangeable — and the recorded-only view keeps
+`SettingsService` (player level, faction, editions, all profile-scoped) out of a
+planner that has to run for a profile that is not the selected one.
+
+**The source scan keys on `ProfileService.Instance`, not on the type name.** The static
+members are pure maps that take their input as an argument (`GetProfileId`,
+`TryResolveDetectedProfile`, the profile-id constants); it is the instance that reports
+the selection. Matching the type name would have banned the very helpers this change
+moved everything onto.

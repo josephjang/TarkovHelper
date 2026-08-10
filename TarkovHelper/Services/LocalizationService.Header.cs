@@ -1,3 +1,5 @@
+using TarkovHelper.Models;
+
 namespace TarkovHelper.Services;
 
 /// <summary>
@@ -68,6 +70,22 @@ public partial class LocalizationService
         AppLanguage.KO => "시즌 PvP",
         AppLanguage.JA => "PvP シーズン",
         _ => "PvP Season"
+    };
+
+    /// <summary>
+    /// The localized name of a profile, for anything that names one to the user: the selector,
+    /// the automatic-transition announcement, and the sync summary. Throws rather than aliasing
+    /// an unmapped profile onto another's name, matching the profile-keyed maps in
+    /// <see cref="ProfileService"/> — a summary that silently labelled a new profile "PvP Zone"
+    /// would tell the player their data went somewhere it did not.
+    /// </summary>
+    public string ProfileName(AppProfile profile) => profile switch
+    {
+        AppProfile.PvpZone => HeaderPvpZone,
+        AppProfile.PveZone => HeaderPveZone,
+        AppProfile.PvpSeason => HeaderPvpSeason,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(profile), profile, "No display name is defined for this profile.")
     };
 
     public string HeaderPvpTooltip => CurrentLanguage switch

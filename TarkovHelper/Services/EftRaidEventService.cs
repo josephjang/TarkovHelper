@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.IO;
-using System.Text;
 using System.Text.RegularExpressions;
 using TarkovHelper.Models;
+using TarkovHelper.Services.Eft;
 using TarkovHelper.Services.Logging;
 
 namespace TarkovHelper.Services;
@@ -28,10 +28,9 @@ public sealed class EftRaidEventService : IDisposable
         @"\b(?:SelectProfile|CompleteSelectedProfile)\s+ProfileId:([a-fA-F0-9]{24})\s+AccountId:(\d+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    // Match the complete token so PvpSeason cannot fall through to the Pvp prefix.
-    private static readonly Regex SessionModeRegex = new(
-        @"Session mode:\s*(Pve|PvpSeason|Pvp|Regular)\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Session mode and the leading timestamp live in EftLogPatterns: SessionModeTimeline
+    // needs the same two patterns to attribute quest-log events, and a second copy would be a
+    // second place for a token bug to survive a fix.
 
     // Matching with group id: 솔로/파티 구분
     private static readonly Regex MatchingGroupRegex = new(
@@ -86,11 +85,6 @@ public sealed class EftRaidEventService : IDisposable
     // Timeout (network-connection)
     private static readonly Regex TimeoutRegex = new(
         @"Timeout: (Messages|Connection) timed out after not receiving any message for (\d+)ms \(address: ([\d.]+):(\d+)\)",
-        RegexOptions.Compiled);
-
-    // Timestamp 추출 (로그 라인 시작)
-    private static readonly Regex TimestampRegex = new(
-        @"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})",
         RegexOptions.Compiled);
 
     // Init: 새 게임 세션 시작 (이전 레이드 종료 감지용 fallback)
@@ -632,79 +626,6 @@ public sealed class EftRaidEventService : IDisposable
     }
 
     /// <summary>
-    /// A line longer than this with no newline is dispatched unterminated rather than
-    /// buffered forever, so a process that died mid-line cannot stall the tail.
-    /// </summary>
-    internal const int MaxUnterminatedLineBytes = 1024 * 1024;
-
-    /// <summary>Upper bound on bytes framed per read, so one call cannot allocate a whole log.</summary>
-    internal const int MaxReadChunkBytes = 4 * 1024 * 1024;
-
-    /// <summary>
-    /// Frames the bytes appended since <paramref name="lastPosition"/> at the LAST newline and
-    /// returns only complete lines, plus the position to resume from.
-    /// <para>
-    /// EFT keeps the log open and flushes on buffer boundaries, not line boundaries, so a read
-    /// triggered by the size/last-write watcher or the 1 s poll routinely lands mid-line.
-    /// <c>StreamReader.ReadLine</c> hands back such a partial tail as if it were a whole line
-    /// and the stream position then sits past it, so the completing bytes are never re-read.
-    /// That silently defeats the anchored token patterns: a flush truncating at
-    /// <c>Session mode: Pvp</c> matches (<c>$</c> is end-of-input, not end-of-line) and
-    /// misclassifies a PvP Season session as PvP Zone, while a truncation at
-    /// <c>Session mode: PvpSea</c> loses the transition entirely.
-    /// </para>
-    /// </summary>
-    internal static (List<string> Lines, long NextPosition) FrameCompletedLines(
-        Stream stream, long lastPosition)
-    {
-        var lines = new List<string>();
-        if (lastPosition < 0) lastPosition = 0;
-        if (stream.Length <= lastPosition) return (lines, lastPosition);
-
-        // Bound the buffer: a first read of an existing multi-megabyte log (or a log file the
-        // watcher reports as created) would otherwise allocate the whole remainder at once.
-        // Whatever is left over is picked up by the next poll.
-        var pendingLength = Math.Min(stream.Length - lastPosition, MaxReadChunkBytes);
-        stream.Seek(lastPosition, SeekOrigin.Begin);
-
-        var buffer = new byte[pendingLength];
-        var read = 0;
-        while (read < buffer.Length)
-        {
-            var chunk = stream.Read(buffer, read, buffer.Length - read);
-            if (chunk <= 0) break;
-            read += chunk;
-        }
-
-        var lastNewline = Array.LastIndexOf(buffer, (byte)'\n', read - 1);
-        int usable;
-        if (lastNewline >= 0)
-        {
-            usable = lastNewline + 1;
-        }
-        else if (read >= MaxUnterminatedLineBytes)
-        {
-            // No newline in an implausibly long span: give up on framing this one rather
-            // than re-reading the same bytes on every poll forever.
-            usable = read;
-        }
-        else
-        {
-            // Nothing complete yet — leave the whole partial tail for the next read.
-            return (lines, lastPosition);
-        }
-
-        var text = new UTF8Encoding(false).GetString(buffer, 0, usable);
-        foreach (var raw in text.Split('\n'))
-        {
-            var line = raw.EndsWith('\r') ? raw[..^1] : raw;
-            if (line.Length > 0) lines.Add(line);
-        }
-
-        return (lines, lastPosition + usable);
-    }
-
-    /// <summary>
     /// Cursor for a file we intend to tail from "now": the end of its last COMPLETE line, so
     /// the first incremental read cannot begin inside a line EFT is still writing.
     /// </summary>
@@ -770,7 +691,7 @@ public sealed class EftRaidEventService : IDisposable
                 if (stream.Length < lastPosition) lastPosition = 0;
                 if (stream.Length <= lastPosition) return;
 
-                var (lines, nextPosition) = FrameCompletedLines(stream, lastPosition);
+                var (lines, nextPosition) = EftLogPatterns.FrameCompletedLines(stream, lastPosition);
                 foreach (var line in lines)
                 {
                     parseLine(line);
@@ -1059,24 +980,8 @@ public sealed class EftRaidEventService : IDisposable
         }
     }
 
-    internal static bool TryParseSessionProfile(string line, out SessionProfileHint profileHint)
-    {
-        var match = SessionModeRegex.Match(line);
-        if (!match.Success)
-        {
-            profileHint = SessionProfileHint.Unknown;
-            return false;
-        }
-
-        profileHint = match.Groups[1].Value.ToLowerInvariant() switch
-        {
-            "pve" => SessionProfileHint.PveZone,
-            "pvpseason" => SessionProfileHint.PvpSeason,
-            "pvp" or "regular" => SessionProfileHint.PvpZone,
-            _ => SessionProfileHint.Unknown
-        };
-        return profileHint != SessionProfileHint.Unknown;
-    }
+    private static bool TryParseSessionProfile(string line, out SessionProfileHint profileHint)
+        => EftLogPatterns.TryParseSessionProfile(line, out profileHint);
 
     /// <summary>
     /// Game rules implied by a session hint. Derived rather than stored alongside the hint, so
@@ -1194,15 +1099,7 @@ public sealed class EftRaidEventService : IDisposable
         }
     }
 
-    private DateTime ExtractTimestamp(string line)
-    {
-        var match = TimestampRegex.Match(line);
-        if (match.Success && DateTime.TryParse(match.Groups[1].Value, out var dt))
-        {
-            return dt;
-        }
-        return DateTime.Now;
-    }
+    private static DateTime ExtractTimestamp(string line) => EftLogPatterns.ExtractTimestamp(line);
 
     /// <summary>
     /// Derives the SCAV profile id from a PMC profile id, or null when the input is not a

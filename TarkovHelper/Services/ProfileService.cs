@@ -16,10 +16,24 @@ public sealed class ProfileService
 
     private AppProfile _activeProfile = AppProfile.PvpZone;
     private bool _isAutoDetected;
+    private long _transitionRevision;
 
     public AppProfile ActiveProfile => _activeProfile;
     public string ActiveProfileId => GetProfileId(_activeProfile);
     public bool IsAutoDetected => _isAutoDetected;
+
+    /// <summary>
+    /// Monotonic counter of announced transitions, incremented once per raised
+    /// <see cref="ActiveProfileChanged"/> and carried on the event args.
+    /// <para>
+    /// Subscribers reload asynchronously, so two transitions in quick succession start two
+    /// loads that can finish in either order. The revision is what lets a subscriber discard a
+    /// load that lost the race instead of publishing the older profile's data over the newer
+    /// one's. It counts every raise, including a provenance-only re-confirmation, so it never
+    /// repeats a value across two different loads.
+    /// </para>
+    /// </summary>
+    public long TransitionRevision => Interlocked.Read(ref _transitionRevision);
 
     public event EventHandler<ProfileChangedEventArgs>? ActiveProfileChanged;
 
@@ -46,7 +60,8 @@ public sealed class ProfileService
 
         _activeProfile = profile;
         _isAutoDetected = false;
-        ActiveProfileChanged?.Invoke(this, new ProfileChangedEventArgs(profile, false, profileChanged: true));
+        ActiveProfileChanged?.Invoke(this, new ProfileChangedEventArgs(
+            profile, false, profileChanged: true, revision: Interlocked.Increment(ref _transitionRevision)));
     }
 
     public void SetActiveProfile(AppProfile profile, bool isAuto = false)
@@ -68,7 +83,8 @@ public sealed class ProfileService
         }
         _log.Info($"Switched to {profile} (auto={isAuto}, changed={profileChanged})");
 
-        ActiveProfileChanged?.Invoke(this, new ProfileChangedEventArgs(profile, isAuto, profileChanged));
+        ActiveProfileChanged?.Invoke(this, new ProfileChangedEventArgs(
+            profile, isAuto, profileChanged, revision: Interlocked.Increment(ref _transitionRevision)));
     }
 
     public void ApplyDetectedProfile(SessionProfileHint hint)
@@ -175,10 +191,20 @@ public class ProfileChangedEventArgs : EventArgs
     /// </summary>
     public bool ProfileChanged { get; }
 
-    public ProfileChangedEventArgs(AppProfile profile, bool isAuto, bool profileChanged)
+    /// <summary>
+    /// This transition's position in <see cref="ProfileService.TransitionRevision"/>'s
+    /// monotonic sequence. A subscriber that reloads asynchronously must carry this into the
+    /// reload and publish only if no later revision has arrived meanwhile; without it, two
+    /// transitions in flight can finish out of order and leave the older profile's data loaded
+    /// under the newer profile's name.
+    /// </summary>
+    public long Revision { get; }
+
+    public ProfileChangedEventArgs(AppProfile profile, bool isAuto, bool profileChanged, long revision)
     {
         Profile = profile;
         IsAutoDetected = isAuto;
         ProfileChanged = profileChanged;
+        Revision = revision;
     }
 }

@@ -322,4 +322,112 @@ public partial class LocalizationService
     };
 
     #endregion
+
+    #region Log Sync Summary
+
+    // The sync dialog reports what was written rather than asking the player to confirm it.
+    // With attribution derived from the logs, the profiles a run wrote to are the one thing a
+    // player cannot work out for themselves, so the summary always names them (PRD R2).
+
+    public string SyncSummaryTitle => CurrentLanguage switch
+    {
+        AppLanguage.KO => "퀘스트 동기화 완료",
+        AppLanguage.JA => "クエスト同期完了",
+        _ => "Quest Sync Complete"
+    };
+
+    public string SyncAppliedHeader => CurrentLanguage switch
+    {
+        AppLanguage.KO => "프로필별 반영 결과",
+        AppLanguage.JA => "プロフィール別の反映結果",
+        _ => "Applied by profile"
+    };
+
+    /// <summary>
+    /// {0} = number of quest records written to one profile. Phrased to avoid a singular/plural
+    /// split, which none of the three languages can express from one format string.
+    /// </summary>
+    public string SyncAppliedCountFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO => "{0}개 반영",
+        AppLanguage.JA => "{0}件 反映",
+        _ => "{0} recorded"
+    };
+
+    public string SyncAppliedNone => CurrentLanguage switch
+    {
+        AppLanguage.KO => "변경된 퀘스트가 없습니다.",
+        AppLanguage.JA => "変更されたクエストはありません。",
+        _ => "No quests changed."
+    };
+
+    /// <summary>
+    /// {0} = events found, {1} = already up to date, {2} = prerequisites auto-completed,
+    /// {3} = quests still in progress, {4} = events with no game mode evidence,
+    /// {5} = unmatched quest IDs.
+    /// </summary>
+    public string SyncStatsFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO =>
+            "로그에서 발견된 이벤트: {0}\n" +
+            "이미 최신 상태인 퀘스트: {1}\n" +
+            "자동 완료된 선행 퀘스트: {2}\n" +
+            "아직 진행중인 퀘스트: {3}\n" +
+            "게임 모드를 알 수 없어 제외된 이벤트: {4}\n" +
+            "매칭 실패한 퀘스트 ID: {5}",
+        AppLanguage.JA =>
+            "ログで見つかったイベント: {0}\n" +
+            "すでに最新のクエスト: {1}\n" +
+            "自動完了した前提クエスト: {2}\n" +
+            "まだ進行中のクエスト: {3}\n" +
+            "ゲームモードが不明で除外したイベント: {4}\n" +
+            "マッチング失敗したクエストID: {5}",
+        _ =>
+            "Events found in logs: {0}\n" +
+            "Already up to date: {1}\n" +
+            "Prerequisites auto-completed: {2}\n" +
+            "Still in progress: {3}\n" +
+            "Skipped, no game mode in logs: {4}\n" +
+            "Unmatched quest IDs: {5}"
+    };
+
+    /// <summary>{0} = number of mutually exclusive groups awaiting a choice.</summary>
+    public string SyncAlternativesHeaderFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO => "선택이 필요한 퀘스트 - 그룹당 하나 선택 ({0}개 그룹)",
+        AppLanguage.JA => "選択が必要なクエスト - グループごとに1つ選択 ({0}グループ)",
+        _ => "Choose one per group ({0} groups)"
+    };
+
+    /// <summary>{0} = localized profile name, {1} = the mutually exclusive quest names.</summary>
+    public string SyncAlternativeGroupFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO => "{0}: {1} 중 하나 선택",
+        AppLanguage.JA => "{0}: {1} から1つ選択",
+        _ => "{0} - choose one: {1}"
+    };
+
+    public string SyncSummaryConfirmButton => CurrentLanguage switch
+    {
+        AppLanguage.KO => "확인",
+        AppLanguage.JA => "確認",
+        _ => "OK"
+    };
+
+    public string SyncSummarySkipButton => CurrentLanguage switch
+    {
+        AppLanguage.KO => "선택 건너뛰기",
+        AppLanguage.JA => "選択をスキップ",
+        _ => "Skip"
+    };
+
+    /// <summary>{0} = number of quest records written by the alternative-quest choices.</summary>
+    public string SyncAlternativesAppliedFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO => "선택한 퀘스트 {0}개가 반영되었습니다.",
+        AppLanguage.JA => "選択したクエスト {0}件を反映しました。",
+        _ => "{0} quest records were applied from your choices."
+    };
+
+    #endregion
 }
