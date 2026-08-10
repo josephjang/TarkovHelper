@@ -105,6 +105,25 @@ public partial class LocalizationService
         _ => "Select active profile"
     };
 
+    /// <summary>
+    /// UIA ItemStatus for the selected profile option. Localized because ItemStatus is spoken
+    /// by screen readers, so a hardcoded English value reaches KO and JA users verbatim.
+    /// </summary>
+    public string HeaderProfileSelected => CurrentLanguage switch
+    {
+        AppLanguage.KO => "선택됨",
+        AppLanguage.JA => "選択中",
+        _ => "Selected"
+    };
+
+    /// <summary>UIA ItemStatus for an unselected profile option.</summary>
+    public string HeaderProfileUnselected => CurrentLanguage switch
+    {
+        AppLanguage.KO => "선택되지 않음",
+        AppLanguage.JA => "未選択",
+        _ => "Unselected"
+    };
+
     public string HeaderProfileSourceManual => CurrentLanguage switch
     {
         AppLanguage.KO => "사용자 선택",

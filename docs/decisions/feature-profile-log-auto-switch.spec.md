@@ -116,10 +116,3 @@ seasonal evidence.
 There is no data or setting migration. Rollback restores the suppression branch and
 its previous test expectations. The change increases the frequency of real profile
 reloads, so SPA-1 and SPA-2 remain correctness risks until their focused fixes land.
-
-## Implementation Status (2026-08-09)
-
-The implementation described above now exists in `ProfileService`, the responsive
-main-window profile selector, localized header strings, and the unit and E2E suites.
-The earlier note that implementation was deferred remains a record of the preceding
-documentation-only change rather than the current delivery status.

@@ -5,6 +5,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -68,6 +69,14 @@ public partial class MainWindow : Window
 
         // Reflect app-profile changes in both responsive selector variants.
         ProfileService.Instance.ActiveProfileChanged += OnActiveProfileChanged;
+
+        // Paint the initial selection now rather than waiting for Window_Loaded: that
+        // method only reaches UpdateProfileUI after awaiting the user-DB and profile
+        // initialization, and the window is already visible (the loading overlay starts
+        // collapsed), so the selector would otherwise show no selection for the whole
+        // of a first-run schema migration. Safe here — the cue timer exists above, and
+        // the restored profile still repaints this once InitializeAsync resolves.
+        UpdateProfileUI(ProfileService.Instance.ActiveProfile);
 
         // Sync/raid status chip. Subscribed in the constructor (not Window_Loaded) so
         // events fired during AutoStartLogMonitoring aren't missed; named handlers so
@@ -620,6 +629,26 @@ public partial class MainWindow : Window
 
     #region App Profile
 
+    /// <summary>
+    /// Marker written to a selector RadioButton's Tag for the life of an automatic-transition
+    /// cue. Must match the AutomaticCue MultiTrigger condition in MainWindow.xaml.
+    /// </summary>
+    private const string AutomaticCueTag = "AutomaticCue";
+
+    private (AppProfile Profile, RadioButton Radio, MenuItem Item)[]? _profileControls;
+
+    /// <summary>
+    /// The three profiles paired with both selector variants' controls, so the profile-to-control
+    /// mapping exists once instead of being re-spelled in every render and cue method.
+    /// </summary>
+    private (AppProfile Profile, RadioButton Radio, MenuItem Item)[] ProfileControls =>
+        _profileControls ??=
+        [
+            (AppProfile.PvpZone, BtnPvpZone, MenuPvpZone),
+            (AppProfile.PveZone, BtnPveZone, MenuPveZone),
+            (AppProfile.PvpSeason, BtnPvpSeason, MenuPvpSeason),
+        ];
+
     private void BtnPvpZone_Click(object sender, RoutedEventArgs e)
         => SelectProfileManually(AppProfile.PvpZone);
 
@@ -667,12 +696,23 @@ public partial class MainWindow : Window
 
     private void SelectProfileManually(AppProfile profile)
     {
+        // WPF raises Checked before Click on the same mouse press (ToggleButton.OnClick calls
+        // OnToggle first), and both are wired here, so one click arrives twice. Selecting the
+        // already-active manual profile is a no-op apart from re-syncing the controls, which
+        // is still needed because a checkable MenuItem toggles its own IsChecked on click.
+        var service = ProfileService.Instance;
+        if (service.ActiveProfile == profile && !service.IsAutoDetected)
+        {
+            UpdateProfileUI(profile);
+            return;
+        }
+
         ClearAutomaticProfileTransitionCue();
-        ProfileService.Instance.SetActiveProfile(profile);
+        service.SetActiveProfile(profile);
 
         // Re-sync when the already-active manual profile was selected and no service
         // event was necessary.
-        UpdateProfileUI(ProfileService.Instance.ActiveProfile);
+        UpdateProfileUI(service.ActiveProfile);
     }
 
     private void OnActiveProfileChanged(object? sender, ProfileChangedEventArgs args)
@@ -680,7 +720,12 @@ public partial class MainWindow : Window
         Dispatcher.InvokeAsync(() =>
         {
             UpdateProfileUI(args.Profile);
-            if (args.IsAutoDetected)
+
+            // Only cue and announce a real destination change. Repeated identical evidence
+            // (EFT re-logs the session mode on every profile-screen visit, and the startup
+            // scan replays the last line) flips only the provenance flag, and announcing
+            // "Profile changed to X" for that tells the user something untrue.
+            if (args.IsAutoDetected && args.ProfileChanged)
             {
                 ShowAutomaticProfileTransitionCue(args.Profile);
             }
@@ -691,14 +736,13 @@ public partial class MainWindow : Window
     {
         ClearAutomaticProfileTransitionCue();
 
-        var selectedButton = profile switch
-        {
-            AppProfile.PveZone => BtnPveZone,
-            AppProfile.PvpSeason => BtnPvpSeason,
-            _ => BtnPvpZone
-        };
-        selectedButton.Tag = "AutomaticCue";
+        var selectedButton = GetProfileRadioButton(profile);
+        selectedButton.Tag = AutomaticCueTag;
 
+        // The compact trigger's bolt is swapped in only for the life of the cue; the wide
+        // variant's swap is declarative (the AutomaticCue MultiTrigger).
+        CompactProfileCheck.Visibility = Visibility.Hidden;
+        CompactProfileAutomatic.Visibility = Visibility.Visible;
         CompactProfileAutomatic.BeginAnimation(OpacityProperty, new DoubleAnimation
         {
             From = 0.35,
@@ -710,11 +754,35 @@ public partial class MainWindow : Window
 
         var profileName = GetProfileDisplayName(profile);
         var announcement = string.Format(_loc.HeaderProfileChangedFromLogsFormat, profileName);
-        TxtProfileTransitionAnnouncement.Text = string.Empty;
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
-            TxtProfileTransitionAnnouncement.Text = announcement);
+
+        // A localized text alternative for the bolt, for the duration of the cue only. In the
+        // wide (default) layout the bolt is otherwise the ONLY indication that the app, not the
+        // user, changed the destination, and a glyph carries no accessible name.
+        AutomationProperties.SetHelpText(selectedButton, _loc.HeaderProfileSourceAutomatic);
+
+        AnnounceProfileTransition(announcement);
 
         _profileTransitionCueTimer.Start();
+    }
+
+    /// <summary>
+    /// Publishes <paramref name="announcement"/> on the polite live region.
+    /// <para>
+    /// Setting Text alone is not enough: WPF raises only a Name property-changed event for it,
+    /// and AutomationProperties.LiveSetting is purely declarative, so a screen reader is never
+    /// told to speak. The provider has to raise LiveRegionChanged explicitly. Verified against
+    /// a UIA client: text-only assignment delivers zero LiveRegionChanged events.
+    /// </para>
+    /// </summary>
+    private void AnnounceProfileTransition(string announcement)
+    {
+        if (string.IsNullOrEmpty(announcement)) return;
+
+        TxtProfileTransitionAnnouncement.Text = announcement;
+
+        var peer = UIElementAutomationPeer.FromElement(TxtProfileTransitionAnnouncement)
+                   ?? UIElementAutomationPeer.CreatePeerForElement(TxtProfileTransitionAnnouncement);
+        peer?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
     }
 
     private void ProfileTransitionCueTimer_Tick(object? sender, EventArgs e)
@@ -724,43 +792,38 @@ public partial class MainWindow : Window
     {
         _profileTransitionCueTimer.Stop();
         CompactProfileAutomatic.BeginAnimation(OpacityProperty, null);
-        UpdateProfileSourceUI(
-            ProfileService.Instance.ActiveProfile,
-            ProfileService.Instance.IsAutoDetected);
+
+        // Restore the neutral, source-free resting state. PRD R6: Manual/Auto is transient
+        // input feedback, not lasting selector state, so nothing here may re-read the
+        // service's provenance flag and re-apply a durable "auto-selected" marker.
+        foreach (var (_, radio, _) in ProfileControls)
+        {
+            radio.Tag = null;
+            AutomationProperties.SetHelpText(radio, string.Empty);
+        }
+
+        CompactProfileCheck.Visibility = Visibility.Visible;
+        CompactProfileAutomatic.Visibility = Visibility.Hidden;
         TxtProfileTransitionAnnouncement.Text = string.Empty;
     }
 
     private string GetProfileDisplayName(AppProfile profile) => profile switch
     {
+        AppProfile.PvpZone => _loc.HeaderPvpZone,
         AppProfile.PveZone => _loc.HeaderPveZone,
         AppProfile.PvpSeason => _loc.HeaderPvpSeason,
-        _ => _loc.HeaderPvpZone
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(profile), profile, "No display name is defined for this profile.")
     };
 
-    private void UpdateProfileSourceUI(AppProfile profile, bool isAutoDetected)
+    private RadioButton GetProfileRadioButton(AppProfile profile)
     {
-        BtnPvpZone.Tag = null;
-        BtnPveZone.Tag = null;
-        BtnPvpSeason.Tag = null;
-
-        var selectedButton = profile switch
+        foreach (var (candidate, radio, _) in ProfileControls)
         {
-            AppProfile.PveZone => BtnPveZone,
-            AppProfile.PvpSeason => BtnPvpSeason,
-            _ => BtnPvpZone
-        };
-        selectedButton.Tag = isAutoDetected ? "AutoSelected" : null;
-
-        CompactProfileCheck.Visibility = isAutoDetected
-            ? Visibility.Hidden : Visibility.Visible;
-        CompactProfileAutomatic.Visibility = isAutoDetected
-            ? Visibility.Visible : Visibility.Hidden;
-
-        var sourceDescription = isAutoDetected
-            ? _loc.HeaderProfileSourceAutomatic
-            : _loc.HeaderProfileSourceManual;
-        BtnActiveProfileMenu.ToolTip = $"{_loc.HeaderProfileMenuTooltip}\n{sourceDescription}";
-        AutomationProperties.SetItemStatus(BtnActiveProfileMenu, sourceDescription);
+            if (candidate == profile) return radio;
+        }
+        throw new ArgumentOutOfRangeException(
+            nameof(profile), profile, "No selector control is defined for this profile.");
     }
 
     /// <summary>
@@ -771,29 +834,20 @@ public partial class MainWindow : Window
         _isUpdatingProfileUI = true;
         try
         {
-            BtnPvpZone.IsChecked = profile == AppProfile.PvpZone;
-            BtnPveZone.IsChecked = profile == AppProfile.PveZone;
-            BtnPvpSeason.IsChecked = profile == AppProfile.PvpSeason;
-            MenuPvpZone.IsChecked = profile == AppProfile.PvpZone;
-            MenuPveZone.IsChecked = profile == AppProfile.PveZone;
-            MenuPvpSeason.IsChecked = profile == AppProfile.PvpSeason;
-            UpdateProfileSourceUI(profile, ProfileService.Instance.IsAutoDetected);
+            foreach (var (candidate, radio, item) in ProfileControls)
+            {
+                var isSelected = candidate == profile;
+                radio.IsChecked = isSelected;
+                item.IsChecked = isSelected;
+                var status = isSelected ? _loc.HeaderProfileSelected : _loc.HeaderProfileUnselected;
+                AutomationProperties.SetItemStatus(radio, status);
+                AutomationProperties.SetItemStatus(item, status);
+            }
+
             var profileName = GetProfileDisplayName(profile);
             TxtCompactActiveProfile.Text = profileName;
             AutomationProperties.SetName(
                 BtnActiveProfileMenu, $"{_loc.HeaderActiveProfile}: {profileName}");
-            AutomationProperties.SetItemStatus(
-                BtnPvpZone, profile == AppProfile.PvpZone ? "Selected" : "Unselected");
-            AutomationProperties.SetItemStatus(
-                BtnPveZone, profile == AppProfile.PveZone ? "Selected" : "Unselected");
-            AutomationProperties.SetItemStatus(
-                BtnPvpSeason, profile == AppProfile.PvpSeason ? "Selected" : "Unselected");
-            AutomationProperties.SetItemStatus(
-                MenuPvpZone, profile == AppProfile.PvpZone ? "Selected" : "Unselected");
-            AutomationProperties.SetItemStatus(
-                MenuPveZone, profile == AppProfile.PveZone ? "Selected" : "Unselected");
-            AutomationProperties.SetItemStatus(
-                MenuPvpSeason, profile == AppProfile.PvpSeason ? "Selected" : "Unselected");
         }
         finally
         {
