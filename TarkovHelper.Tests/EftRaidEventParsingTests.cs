@@ -1,6 +1,7 @@
 using System.IO;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
+using TarkovHelper.Services.Eft;
 
 namespace TarkovHelper.Tests;
 
@@ -16,7 +17,7 @@ public class EftRaidEventParsingTests
         SessionProfileHint expectedHint,
         GameMode expectedMode)
     {
-        var parsed = EftRaidEventService.TryParseSessionProfile(line, out var hint);
+        var parsed = EftLogPatterns.TryParseSessionProfile(line, out var hint);
 
         Assert.True(parsed);
         Assert.Equal(expectedHint, hint);
@@ -29,7 +30,7 @@ public class EftRaidEventParsingTests
     [InlineData("Session mode: Arena")]
     public void Session_mode_parser_requires_an_exact_known_token(string line)
     {
-        var parsed = EftRaidEventService.TryParseSessionProfile(line, out var hint);
+        var parsed = EftLogPatterns.TryParseSessionProfile(line, out var hint);
 
         Assert.False(parsed);
         Assert.Equal(SessionProfileHint.Unknown, hint);
@@ -50,7 +51,7 @@ public class EftRaidEventParsingTests
             long cursor;
             using (var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
             {
-                var (lines, next) = EftRaidEventService.FrameCompletedLines(stream, 0);
+                var (lines, next) = EftLogPatterns.FrameCompletedLines(stream, 0);
                 Assert.Equal(["2026-08-09 12:00:00.000 | first line"], lines);
                 cursor = next;
             }
@@ -59,7 +60,7 @@ public class EftRaidEventParsingTests
             File.AppendAllText(path, "2026-08-09 12:00:02.000 | Session mode: Pvp");
             using (var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
             {
-                var (lines, next) = EftRaidEventService.FrameCompletedLines(stream, cursor);
+                var (lines, next) = EftLogPatterns.FrameCompletedLines(stream, cursor);
                 Assert.Empty(lines);
                 Assert.Equal(cursor, next);
             }
@@ -68,9 +69,9 @@ public class EftRaidEventParsingTests
             File.AppendAllText(path, "Season\r\n");
             using (var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
             {
-                var (lines, _) = EftRaidEventService.FrameCompletedLines(stream, cursor);
+                var (lines, _) = EftLogPatterns.FrameCompletedLines(stream, cursor);
                 Assert.Equal(["2026-08-09 12:00:02.000 | Session mode: PvpSeason"], lines);
-                Assert.True(EftRaidEventService.TryParseSessionProfile(lines[0], out var hint));
+                Assert.True(EftLogPatterns.TryParseSessionProfile(lines[0], out var hint));
                 Assert.Equal(SessionProfileHint.PvpSeason, hint);
             }
         }
@@ -109,7 +110,7 @@ public class EftRaidEventParsingTests
     {
         using var stream = new MemoryStream("2026-08-09 12:00:00.000 | Session mode: Pvp"u8.ToArray());
 
-        var (lines, next) = EftRaidEventService.FrameCompletedLines(stream, 0);
+        var (lines, next) = EftLogPatterns.FrameCompletedLines(stream, 0);
 
         Assert.Empty(lines);
         Assert.Equal(0, next);
@@ -121,7 +122,7 @@ public class EftRaidEventParsingTests
     {
         using var stream = new MemoryStream("first\n\nsecond\n"u8.ToArray());
 
-        var (lines, next) = EftRaidEventService.FrameCompletedLines(stream, 0);
+        var (lines, next) = EftLogPatterns.FrameCompletedLines(stream, 0);
 
         Assert.Equal(["first", "second"], lines);
         Assert.Equal(stream.Length, next);
@@ -134,7 +135,7 @@ public class EftRaidEventParsingTests
     {
         var line = new string('x', 1000);
         var builder = new System.Text.StringBuilder();
-        var lineCount = (EftRaidEventService.MaxReadChunkBytes / (line.Length + 2)) + 50;
+        var lineCount = (EftLogPatterns.MaxReadChunkBytes / (line.Length + 2)) + 50;
         for (var i = 0; i < lineCount; i++) builder.Append(line).Append("\r\n");
         var bytes = System.Text.Encoding.UTF8.GetBytes(builder.ToString());
 
@@ -144,7 +145,7 @@ public class EftRaidEventParsingTests
         var reads = 0;
         while (cursor < bytes.Length && reads < 10)
         {
-            var (lines, next) = EftRaidEventService.FrameCompletedLines(stream, cursor);
+            var (lines, next) = EftLogPatterns.FrameCompletedLines(stream, cursor);
             Assert.True(next > cursor, "framing must make forward progress");
             delivered += lines.Count;
             cursor = next;

@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
 
@@ -555,38 +554,10 @@ public sealed class QuestCompletionCascadeTests
     /// dialog-or-no-dialog decision — is exercised for real.
     /// </summary>
     private static QuestProgressService CreateServiceWith(params TarkovTask[] tasks)
-    {
-        var service = (QuestProgressService)RuntimeHelpers.GetUninitializedObject(typeof(QuestProgressService));
-        void Set(string field, object value)
-        {
-            var f = typeof(QuestProgressService).GetField(field, BindingFlags.NonPublic | BindingFlags.Instance);
-            Assert.True(f != null, $"QuestProgressService has no field '{field}'");
-            f!.SetValue(service, value);
-        }
+        => ProgressServiceHarness.Create(new ProgressStoreFake(), AppProfile.PvpZone, tasks);
 
-        var byId = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
-        var byName = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
-        foreach (var task in tasks)
-        {
-            foreach (var id in task.Ids ?? new List<string>())
-            {
-                if (!string.IsNullOrEmpty(id)) byId[id] = task;
-            }
-            if (task.NormalizedName != null) byName[task.NormalizedName] = task;
-        }
-
-        Set("_questProgress", new Dictionary<string, QuestStatus>(StringComparer.OrdinalIgnoreCase));
-        Set("_tasksById", byId);
-        Set("_tasksByNormalizedName", byName);
-        Set("_tasksByBsgId", new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase));
-        Set("_allTasks", tasks.ToList());
-        return service;
-    }
-
-    private static Dictionary<string, QuestStatus> RecordedProgressOf(QuestProgressService service)
-        => (Dictionary<string, QuestStatus>)typeof(QuestProgressService)
-            .GetField("_questProgress", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .GetValue(service)!;
+    private static IReadOnlyDictionary<string, QuestStatus> RecordedProgressOf(QuestProgressService service)
+        => ProgressServiceHarness.LoadedQuestsOf(service);
 
     private static TarkovTask NewTask(string id, string name) => new()
     {
@@ -643,31 +614,57 @@ public sealed class QuestCompletionCascadeTests
 
     #region Batch completion paths (key + done-check conventions shared with the core)
 
+    /// <summary>
+    /// The snapshot the batch planner runs against. Seeded rather than loaded so the planner's
+    /// key conventions are exercised without a store.
+    /// </summary>
+    private static ProgressSnapshot SnapshotWith(params (string Key, QuestStatus Status)[] recorded)
+        => ProgressSnapshot.From(
+            ProfileService.PvpProfileId, 0,
+            recorded.ToDictionary(r => r.Key, r => r.Status, StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, bool>());
+
     [Fact]
-    public void CompleteQuestsBatch_records_an_empty_first_id_task_under_its_name()
+    public void PlanBatchCompletion_records_an_empty_first_id_task_under_its_name()
     {
         var quest = new TarkovTask { Ids = new List<string> { "" }, Name = "batch-empty-id",
                                      NormalizedName = "batch-empty-id", Trader = "Prapor" };
-        var service = CreateServiceWith(quest);
 
-        service.CompleteQuestsBatch(new[] { quest });
+        var rows = QuestProgressService.PlanBatchCompletion(SnapshotWith(), new[] { quest });
 
         // Same anomaly guard the cascade core already carries
         // (Planned_key_falls_back_to_normalized_name_when_the_first_id_is_empty).
-        Assert.Equal(QuestStatus.Done, RecordedProgressOf(service)["batch-empty-id"]);
+        var row = Assert.Single(rows);
+        Assert.Equal("batch-empty-id", row.Id);
+        Assert.Equal(QuestStatus.Done, row.Status);
     }
 
     [Fact]
-    public void CompleteQuestsBatch_skips_a_quest_recorded_done_under_its_name_only()
+    public void PlanBatchCompletion_skips_a_quest_recorded_done_under_its_name_only()
     {
         var quest = NewTask("q-id", "batch-migrated");
-        var service = CreateServiceWith(quest);
-        RecordedProgressOf(service)["batch-migrated"] = QuestStatus.Done;
 
-        service.CompleteQuestsBatch(new[] { quest });
+        var rows = QuestProgressService.PlanBatchCompletion(
+            SnapshotWith(("batch-migrated", QuestStatus.Done)), new[] { quest });
 
-        Assert.False(RecordedProgressOf(service).ContainsKey("q-id"),
+        Assert.True(rows.Count == 0,
             "a quest already Done under its NormalizedName was re-completed under its Id");
+    }
+
+    [Fact]
+    public void PlanBatchCompletion_skips_alternative_quests_and_duplicates()
+    {
+        var alt = NewTask("alt-id", "batch-alt");
+        alt.AlternativeQuests = new List<string> { "batch-other" };
+        var plain = NewTask("plain-id", "batch-plain");
+
+        var rows = QuestProgressService.PlanBatchCompletion(
+            SnapshotWith(), new[] { alt, plain, plain });
+
+        // The user must choose which mutually exclusive quest they completed, and a repeated
+        // task must not produce two rows for one key.
+        var row = Assert.Single(rows);
+        Assert.Equal("plain-id", row.Id);
     }
 
     #endregion

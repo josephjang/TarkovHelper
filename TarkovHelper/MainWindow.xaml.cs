@@ -807,14 +807,9 @@ public partial class MainWindow : Window
         TxtProfileTransitionAnnouncement.Text = string.Empty;
     }
 
-    private string GetProfileDisplayName(AppProfile profile) => profile switch
-    {
-        AppProfile.PvpZone => _loc.HeaderPvpZone,
-        AppProfile.PveZone => _loc.HeaderPveZone,
-        AppProfile.PvpSeason => _loc.HeaderPvpSeason,
-        _ => throw new ArgumentOutOfRangeException(
-            nameof(profile), profile, "No display name is defined for this profile.")
-    };
+    // Delegates to LocalizationService so the selector, the transition announcement and the sync
+    // summary cannot name the same profile differently.
+    private string GetProfileDisplayName(AppProfile profile) => _loc.ProfileName(profile);
 
     private RadioButton GetProfileRadioButton(AppProfile profile)
     {
@@ -1701,37 +1696,35 @@ public partial class MainWindow : Window
                 Dispatcher.Invoke(() => UpdateLoadingStatus(message));
             });
 
-            var result = await _logSyncService.SyncFromLogsAsync(logPath, progress);
+            // SyncDaysRange used to be dropped here: SyncFromLogsAsync's third parameter took its
+            // default of 0, so the configured range never reached the filter and every sync
+            // covered every retained log (PRD R8).
+            var result = await _logSyncService.SyncFromLogsAsync(
+                logPath, progress, _settingsService.SyncDaysRange);
 
             // Immediately hide LoadingOverlay to prevent animation collision
-            // (HideLoadingOverlay animation may be cancelled by ShowSyncResultDialog's blur animation)
+            // (HideLoadingOverlay animation may be cancelled by the sync result dialog's blur animation)
             LoadingOverlay.Visibility = Visibility.Collapsed;
             HideLoadingOverlay();
 
-            // Show result dialog even if no quests to complete (to show in-progress quests)
-            if (result.QuestsToComplete.Count == 0 && result.InProgressQuests.Count == 0)
+            if (result.TotalEventsFound == 0)
             {
                 MessageBox.Show(
                     _loc.CurrentLanguage switch
                     {
-                        AppLanguage.KO => result.TotalEventsFound > 0
-                            ? $"퀘스트 이벤트 {result.TotalEventsFound}개를 찾았지만, 업데이트할 퀘스트가 없습니다."
-                            : "로그에서 퀘스트 이벤트를 찾지 못했습니다.",
-                        AppLanguage.JA => result.TotalEventsFound > 0
-                            ? $"{result.TotalEventsFound}件のクエストイベントが見つかりましたが、更新するクエストはありません。"
-                            : "ログにクエストイベントが見つかりませんでした。",
-                        _ => result.TotalEventsFound > 0
-                            ? $"Found {result.TotalEventsFound} quest events, but no quests need to be updated."
-                            : "No quest events found in logs."
+                        AppLanguage.KO => "로그에서 퀘스트 이벤트를 찾지 못했습니다.",
+                        AppLanguage.JA => "ログにクエストイベントが見つかりませんでした。",
+                        _ => "No quest events found in logs."
                     },
-                    _loc.CurrentLanguage switch { AppLanguage.KO => "동기화 완료", AppLanguage.JA => "同期完了", _ => "Sync Complete" },
+                    _loc.SyncSummaryTitle,
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
                 return;
             }
 
-            // Show confirmation dialog
-            ShowSyncResultDialog(result);
+            // Apply first, report second (PRD R2). Each change goes to the profile its own log
+            // evidence names, so there is nothing for the player to arbitrate before the write.
+            await ApplyAndShowSyncResultAsync(result);
         }
         catch (Exception ex)
         {
@@ -1772,72 +1765,39 @@ public partial class MainWindow : Window
     /// <summary>
     /// Handle real-time quest event detection
     /// </summary>
-    private void OnQuestEventDetected(object? sender, QuestLogEvent evt)
+    private async void OnQuestEventDetected(object? sender, QuestLogEvent evt)
     {
-        Dispatcher.Invoke(() =>
+        // async void on a file-watcher callback: an escaping exception would take the process
+        // down with no handler above it, so the whole body is guarded.
+        try
         {
-            // Find the task
+            // The owner is the mode the raid was actually played in, which is not necessarily the
+            // profile on screen: a player comparing another mode while a raid runs must still have
+            // their progress recorded where it belongs (PRD R4).
+            if (evt.OwnerProfile is not { } owner)
+            {
+                // PRD R3: no session mode evidence means no destination. Recording it under the
+                // selection is exactly the misfiling this change removes, so the event is dropped.
+                _log.Warning(
+                    $"Ignoring quest event {evt.QuestId} ({evt.EventType}): no session mode evidence in its log folder");
+                return;
+            }
+
             var progressService = QuestProgressService.Instance;
             var tasksByQuestId = BuildQuestIdLookup(progressService.AllTasks);
 
-            if (tasksByQuestId.TryGetValue(evt.QuestId, out var task))
-            {
-                var questName = _loc.GetQuestName(task);
-                var message = evt.EventType switch
-                {
-                    QuestEventType.Started => _loc.CurrentLanguage switch
-                    {
-                        AppLanguage.KO => $"퀘스트 시작: {questName}",
-                        AppLanguage.JA => $"クエスト開始: {questName}",
-                        _ => $"Quest Started: {questName}"
-                    },
-                    QuestEventType.Completed => _loc.CurrentLanguage switch
-                    {
-                        AppLanguage.KO => $"퀘스트 완료: {questName}",
-                        AppLanguage.JA => $"クエスト完了: {questName}",
-                        _ => $"Quest Completed: {questName}"
-                    },
-                    QuestEventType.Failed => _loc.CurrentLanguage switch
-                    {
-                        AppLanguage.KO => $"퀘스트 실패: {questName}",
-                        AppLanguage.JA => $"クエスト失敗: {questName}",
-                        _ => $"Quest Failed: {questName}"
-                    },
-                    _ => ""
-                };
+            if (!tasksByQuestId.TryGetValue(evt.QuestId, out var task)) return;
 
-                // Auto-update progress based on event
-                switch (evt.EventType)
-                {
-                    case QuestEventType.Completed:
-                        progressService.CompleteQuest(task, completePrerequisites: true);
-                        break;
-                    case QuestEventType.Failed:
-                        progressService.FailQuest(task);
-                        break;
-                    case QuestEventType.Started:
-                        // For started quests, complete all prerequisites in batch
-                        var graphService = QuestGraphService.Instance;
-                        if (!string.IsNullOrEmpty(task.NormalizedName))
-                        {
-                            var prereqs = graphService.GetAllPrerequisites(task.NormalizedName);
-                            var prereqsToComplete = prereqs
-                                .Where(p => progressService.GetStatus(p) != QuestStatus.Done)
-                                .ToList();
+            await progressService.ApplyLogEventAsync(task, evt.EventType, owner);
 
-                            if (prereqsToComplete.Count > 0)
-                            {
-                                // Use batch completion for better performance
-                                progressService.CompleteQuestsBatch(prereqsToComplete);
-                            }
-                        }
-                        break;
-                }
-
-                // Refresh quest list if visible
-                _questListPage?.RefreshDisplay();
-            }
-        });
+            // Refresh quest list if visible. ApplyLogEventAsync leaves the snapshot untouched for
+            // a profile that is not loaded, so this is a no-op redraw in that case.
+            Dispatcher.Invoke(() => _questListPage?.RefreshDisplay());
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to record quest event {evt.QuestId} ({evt.EventType})", ex);
+        }
     }
 
     /// <summary>
@@ -1863,47 +1823,42 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Show sync result confirmation dialog and apply changes
+    /// Applies everything the sync derived, then shows the summary of where it landed and — only
+    /// when the logs left a genuine either-or open — the choices the player has to make.
     /// </summary>
-    private async void ShowSyncResultDialog(SyncResult result)
+    private async Task ApplyAndShowSyncResultAsync(SyncResult result)
     {
-        var selectedChanges = SyncResultDialog.ShowResult(result, this, out int alternativeCount);
-
-        if (selectedChanges == null || selectedChanges.Count == 0)
-        {
-            return;
-        }
-
-        ShowLoadingOverlay(_loc.CurrentLanguage switch
+        var updatingMessage = _loc.CurrentLanguage switch
         {
             AppLanguage.KO => "퀘스트 진행도 업데이트 중...",
             AppLanguage.JA => "クエスト進捗を更新中...",
             _ => "Updating quest progress..."
-        });
+        };
 
-        await _logSyncService.ApplyQuestChangesAsync(selectedChanges);
+        if (result.QuestsToComplete.Count > 0)
+        {
+            ShowLoadingOverlay(updatingMessage);
+            result.AppliedCountsByProfile = await _logSyncService.ApplyQuestChangesAsync(result.QuestsToComplete);
+            HideLoadingOverlay();
 
+            // Only the loaded profile's rows are on screen; the others changed silently, which is
+            // what the summary below is for.
+            await LoadAndShowQuestListAsync();
+        }
+
+        var alternativeChoices = SyncResultDialog.ShowResult(result, this, out _);
+
+        if (alternativeChoices == null || alternativeChoices.Count == 0) return;
+
+        ShowLoadingOverlay(updatingMessage);
+        var appliedChoices = await _logSyncService.ApplyQuestChangesAsync(alternativeChoices);
         HideLoadingOverlay();
 
-        // Refresh quest list
         await LoadAndShowQuestListAsync();
 
-        var totalUpdated = selectedChanges.Count;
-
         MessageBox.Show(
-            _loc.CurrentLanguage switch
-            {
-                AppLanguage.KO => alternativeCount > 0
-                    ? $"{totalUpdated}개의 퀘스트가 업데이트되었습니다.\n(선택 퀘스트 {alternativeCount}개 그룹 포함)"
-                    : $"{totalUpdated}개의 퀘스트가 업데이트되었습니다.",
-                AppLanguage.JA => alternativeCount > 0
-                    ? $"{totalUpdated}件のクエストが更新されました。\n(選択クエスト {alternativeCount}グループ含む)"
-                    : $"{totalUpdated}件のクエストが更新されました。",
-                _ => alternativeCount > 0
-                    ? $"{totalUpdated} quests have been updated.\n(Including {alternativeCount} optional quest groups)"
-                    : $"{totalUpdated} quests have been updated."
-            },
-            _loc.CurrentLanguage switch { AppLanguage.KO => "동기화 완료", AppLanguage.JA => "同期完了", _ => "Sync Complete" },
+            string.Format(_loc.SyncAlternativesAppliedFormat, appliedChoices.Values.Sum()),
+            _loc.SyncSummaryTitle,
             MessageBoxButton.OK,
             MessageBoxImage.Information);
     }

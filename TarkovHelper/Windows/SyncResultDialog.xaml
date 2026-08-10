@@ -16,14 +16,13 @@
 
     <Border Background="{DynamicResource BackgroundDarkBrush}"
             CornerRadius="8" Padding="24"
-            MinWidth="700" MaxWidth="850" MaxHeight="650">
+            MinWidth="560" MaxWidth="720" MaxHeight="650">
         <Border.Effect>
             <DropShadowEffect BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
         </Border.Effect>
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
@@ -39,112 +38,66 @@
                         Click="BtnClose_Click"/>
             </Grid>
 
-            <!-- Two Column Layout -->
-            <Grid Grid.Row="1" Margin="0,0,0,12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="12"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
+            <!--
+                Applied-per-profile summary. This replaced the per-quest confirmation list:
+                once attribution comes from the logs rather than from the selection, reviewing
+                quest names one by one asks the player to confirm a judgment they have no better
+                information about than the app does, over a list that now spans several
+                profiles. The summary naming the profiles written to is what a player has to
+                notice a sync went somewhere unexpected (PRD R2).
+            -->
+            <Border Grid.Row="1" Background="{DynamicResource BackgroundMediumBrush}"
+                    CornerRadius="4" Margin="0,0,0,12">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Border Grid.Row="0" Background="{DynamicResource BackgroundLightBrush}"
+                            CornerRadius="4,4,0,0" Padding="12,8">
+                        <TextBlock x:Name="TxtAppliedHeader" Text="Applied by profile"
+                                   FontSize="{DynamicResource FontSizeSmall}" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"/>
+                    </Border>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="180">
+                        <ItemsControl x:Name="AppliedByProfileList"
+                                      AutomationProperties.AutomationId="LstSyncAppliedByProfile">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderThickness="0,0,0,1" BorderBrush="{DynamicResource BorderBrush}"
+                                            Padding="12,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{Binding ProfileName}"
+                                                       FontSize="{DynamicResource FontSizeXSmall}"
+                                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                                       VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding AppliedText}"
+                                                       FontSize="{DynamicResource FontSizeXSmall}"
+                                                       Foreground="{DynamicResource AccentBrush}"
+                                                       VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                    <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderBrush}"
+                            Padding="12,8">
+                        <TextBlock x:Name="TxtStats"
+                                   Text=""
+                                   FontSize="{DynamicResource FontSizeTiny}"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextWrapping="Wrap"/>
+                    </Border>
+                </Grid>
+            </Border>
 
-                <!-- Completed Quests Column -->
-                <Border Grid.Column="0" Background="{DynamicResource BackgroundMediumBrush}"
-                        CornerRadius="4">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
-                        <Border Grid.Row="0" Background="{DynamicResource BackgroundLightBrush}"
-                                CornerRadius="4,4,0,0" Padding="12,8">
-                            <TextBlock x:Name="TxtCompletedHeader" Text="Completed Quests (0)"
-                                       FontSize="{DynamicResource FontSizeSmall}" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextPrimaryBrush}"/>
-                        </Border>
-                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="280">
-                            <ItemsControl x:Name="CompletedQuestList">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border BorderThickness="0,0,0,1" BorderBrush="{DynamicResource BorderBrush}"
-                                                Padding="12,6">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-                                                <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                                          VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding QuestName}"
-                                                               FontSize="{DynamicResource FontSizeXSmall}"
-                                                               Foreground="{DynamicResource TextPrimaryBrush}"/>
-                                                    <TextBlock Text="{Binding Trader}"
-                                                               FontSize="{DynamicResource FontSizeTiny}"
-                                                               Foreground="{DynamicResource TextSecondaryBrush}"/>
-                                                </StackPanel>
-                                                <Border Grid.Column="2"
-                                                        Background="{DynamicResource AccentBrush}"
-                                                        CornerRadius="3" Padding="4,2"
-                                                        VerticalAlignment="Center"
-                                                        Visibility="{Binding IsPrerequisite, Converter={StaticResource BoolToVisibilityConverter}}">
-                                                    <TextBlock Text="Auto" FontSize="{DynamicResource FontSizeTiny}"
-                                                               Foreground="{DynamicResource BackgroundDarkBrush}"/>
-                                                </Border>
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
-                    </Grid>
-                </Border>
-
-                <!-- In Progress Quests Column -->
-                <Border Grid.Column="2" Background="{DynamicResource BackgroundMediumBrush}"
-                        CornerRadius="4">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
-                        <Border Grid.Row="0" Background="{DynamicResource BackgroundLightBrush}"
-                                CornerRadius="4,4,0,0" Padding="12,8">
-                            <TextBlock x:Name="TxtInProgressHeader" Text="In Progress (0)"
-                                       FontSize="{DynamicResource FontSizeSmall}" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextPrimaryBrush}"/>
-                        </Border>
-                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="280">
-                            <ItemsControl x:Name="InProgressQuestList">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border BorderThickness="0,0,0,1" BorderBrush="{DynamicResource BorderBrush}"
-                                                Padding="12,6">
-                                            <StackPanel>
-                                                <StackPanel Orientation="Horizontal">
-                                                    <TextBlock Text="" FontSize="{DynamicResource FontSizeTiny}"
-                                                               Foreground="#FFA726"
-                                                               VerticalAlignment="Center"
-                                                               Margin="0,0,6,0"/>
-                                                    <TextBlock Text="{Binding Name}"
-                                                               FontSize="{DynamicResource FontSizeXSmall}"
-                                                               Foreground="{DynamicResource TextPrimaryBrush}"/>
-                                                </StackPanel>
-                                                <TextBlock Text="{Binding Trader}"
-                                                           FontSize="{DynamicResource FontSizeTiny}"
-                                                           Foreground="{DynamicResource TextSecondaryBrush}"
-                                                           Margin="16,0,0,0"/>
-                                            </StackPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
-                    </Grid>
-                </Border>
-            </Grid>
-
-            <!-- Alternative Quests Selection -->
+            <!-- Alternative Quests Selection (PRD R2a: the only choices the logs cannot answer) -->
             <Border x:Name="AlternativeQuestsSection" Grid.Row="2"
                     Background="{DynamicResource BackgroundMediumBrush}"
                     CornerRadius="4" Margin="0,0,0,12"
@@ -165,7 +118,7 @@
                                        Foreground="{DynamicResource TextPrimaryBrush}"/>
                         </StackPanel>
                     </Border>
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="120">
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="180">
                         <ItemsControl x:Name="AlternativeQuestsList">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
@@ -175,7 +128,8 @@
                                             <TextBlock Text="{Binding GroupLabel}"
                                                        FontSize="{DynamicResource FontSizeTiny}"
                                                        Foreground="{DynamicResource TextSecondaryBrush}"
-                                                       Margin="0,0,0,6"/>
+                                                       Margin="0,0,0,6"
+                                                       TextWrapping="Wrap"/>
                                             <ItemsControl ItemsSource="{Binding Choices}">
                                                 <ItemsControl.ItemsPanel>
                                                     <ItemsPanelTemplate>
@@ -214,29 +168,13 @@
                 </Grid>
             </Border>
 
-            <!-- Summary Stats -->
-            <Border Grid.Row="3" Background="{DynamicResource BackgroundMediumBrush}"
-                    CornerRadius="4" Padding="12,8" Margin="0,0,0,16">
-                <StackPanel>
-                    <TextBlock x:Name="TxtSummaryLabel"
-                               Text="Summary:"
-                               FontSize="{DynamicResource FontSizeXSmall}" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextPrimaryBrush}"
-                               Margin="0,0,0,4"/>
-                    <TextBlock x:Name="TxtStats"
-                               Text=""
-                               FontSize="{DynamicResource FontSizeTiny}"
-                               Foreground="{DynamicResource TextSecondaryBrush}"
-                               TextWrapping="Wrap"/>
-                </StackPanel>
-            </Border>
-
             <!-- Action Buttons -->
-            <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button x:Name="BtnCancel" Content="Cancel"
+            <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="BtnCancel" Content="Skip"
                         Padding="16,8" Margin="0,0,8,0"
+                        Visibility="Collapsed"
                         Click="BtnCancel_Click"/>
-                <Button x:Name="BtnConfirm" Content="Confirm"
+                <Button x:Name="BtnConfirm" Content="OK"
                         Padding="16,8"
                         Click="BtnConfirm_Click"
                         Background="{DynamicResource AccentBrush}"

@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using System.Windows;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
@@ -7,17 +6,24 @@ namespace TarkovHelper.Windows;
 
 /// <summary>
 /// Sync result dialog window.
-/// Displays quest sync results and allows user to confirm or cancel changes.
+/// <para>
+/// Reports what a sync applied, per profile, and asks only the questions the logs cannot
+/// answer: which of two mutually exclusive prerequisites the player actually took (PRD R2a).
+/// The per-quest confirmation list this used to show is gone — once attribution comes from the
+/// logs rather than from the selected profile, confirming quest names one by one asks the
+/// player to second-guess a judgment they have no better information about than the app does,
+/// over a list that now spans several profiles. See fix-profile-data-attribution.md.
+/// </para>
 /// </summary>
 public partial class SyncResultDialog : Window
 {
     private readonly LocalizationService _loc = LocalizationService.Instance;
     private readonly SyncResult _result;
-    private ObservableCollection<QuestChangeInfo> _pendingChanges;
     private List<AlternativeQuestGroupViewModel>? _alternativeGroups;
 
     /// <summary>
-    /// Gets the selected changes to apply. Null if cancelled.
+    /// The alternative-quest choices to apply, or null when the player skipped them. Never the
+    /// derived changes: those are applied before this dialog opens and are not up for review.
     /// </summary>
     public List<QuestChangeInfo>? SelectedChanges { get; private set; }
 
@@ -30,18 +36,17 @@ public partial class SyncResultDialog : Window
     {
         InitializeComponent();
         _result = result;
-        _pendingChanges = new ObservableCollection<QuestChangeInfo>(result.QuestsToComplete);
 
         SetupUI();
         UpdateLocalizedText();
     }
 
     /// <summary>
-    /// Show the sync result dialog and return selected changes.
+    /// Show the sync summary and return the alternative-quest choices to apply.
     /// </summary>
     /// <param name="result">The sync result to display.</param>
     /// <param name="owner">Optional owner window for centering.</param>
-    /// <returns>The selected changes to apply, or null if cancelled.</returns>
+    /// <returns>The alternative-quest choices to apply, or null if the player skipped them.</returns>
     public static List<QuestChangeInfo>? ShowResult(SyncResult result, Window? owner, out int alternativeCount)
     {
         var dialog = new SyncResultDialog(result);
@@ -54,11 +59,22 @@ public partial class SyncResultDialog : Window
         return dialog.SelectedChanges;
     }
 
+    /// <summary>
+    /// One summary row: a profile that was written to, and how much landed there. Public because
+    /// the XAML DataTemplate binds to it — WPF binding resolves members by reflection and a row
+    /// type the templating engine cannot see renders blank instead of failing loudly.
+    /// </summary>
+    public sealed record AppliedProfileRow(string ProfileName, string AppliedText);
+
     private void SetupUI()
     {
-        // Set completed quests list
-        CompletedQuestList.ItemsSource = _pendingChanges;
-        InProgressQuestList.ItemsSource = _result.InProgressQuests;
+        // Deterministic order so two runs writing the same profiles read the same way.
+        AppliedByProfileList.ItemsSource = _result.AppliedCountsByProfile
+            .OrderBy(entry => entry.Key)
+            .Select(entry => new AppliedProfileRow(
+                _loc.ProfileName(entry.Key),
+                string.Format(_loc.SyncAppliedCountFormat, entry.Value)))
+            .ToList();
 
         // Handle alternative quest groups
         if (_result.AlternativeQuestGroups.Count > 0)
@@ -70,76 +86,44 @@ public partial class SyncResultDialog : Window
 
             AlternativeQuestsList.ItemsSource = _alternativeGroups;
             AlternativeQuestsSection.Visibility = Visibility.Visible;
+            // Skip is only meaningful when there is something to skip; with no groups the
+            // dialog is a report and a lone OK is the honest control.
+            BtnCancel.Visibility = Visibility.Visible;
         }
         else
         {
             _alternativeGroups = null;
             AlternativeQuestsSection.Visibility = Visibility.Collapsed;
+            BtnCancel.Visibility = Visibility.Collapsed;
         }
     }
 
     private void UpdateLocalizedText()
     {
-        var prereqCount = _result.QuestsToComplete.Count(q => q.IsPrerequisite);
-        var inProgressCount = _result.InProgressQuests.Count;
+        TxtTitle.Text = _loc.SyncSummaryTitle;
+        TxtAppliedHeader.Text = _result.AppliedCountsByProfile.Count > 0
+            ? _loc.SyncAppliedHeader
+            : _loc.SyncAppliedNone;
 
-        TxtTitle.Text = _loc.CurrentLanguage switch
-        {
-            AppLanguage.KO => "퀘스트 동기화 완료",
-            AppLanguage.JA => "クエスト同期完了",
-            _ => "Quest Sync Complete"
-        };
+        TxtStats.Text = string.Format(
+            _loc.SyncStatsFormat,
+            _result.TotalEventsFound,
+            _result.AlreadyCurrentCount,
+            _result.PrerequisitesAutoCompleted,
+            // The dialog used to list in-progress quests by name in a column of their own. The
+            // list went with the per-quest review; the count stays, so a player can still tell a
+            // quest was seen and deliberately left Active rather than missed.
+            _result.InProgressQuests.Count,
+            _result.UnattributedEventCount,
+            _result.UnmatchedQuestIds.Count);
 
-        TxtCompletedHeader.Text = _loc.CurrentLanguage switch
-        {
-            AppLanguage.KO => $"완료된 퀘스트 ({_result.QuestsToComplete.Count})",
-            AppLanguage.JA => $"完了したクエスト ({_result.QuestsToComplete.Count})",
-            _ => $"Completed Quests ({_result.QuestsToComplete.Count})"
-        };
-
-        TxtInProgressHeader.Text = _loc.CurrentLanguage switch
-        {
-            AppLanguage.KO => $"진행중 퀘스트 ({inProgressCount})",
-            AppLanguage.JA => $"進行中のクエスト ({inProgressCount})",
-            _ => $"In Progress ({inProgressCount})"
-        };
-
-        TxtSummaryLabel.Text = _loc.CurrentLanguage switch
-        {
-            AppLanguage.KO => "요약:",
-            AppLanguage.JA => "概要:",
-            _ => "Summary:"
-        };
-
-        TxtStats.Text = _loc.CurrentLanguage switch
-        {
-            AppLanguage.KO => $"├─ 로그에서 발견된 이벤트: {_result.TotalEventsFound}\n├─ 자동 완료된 선행 퀘스트: {prereqCount}\n└─ 매칭 실패한 퀘스트 ID: {_result.UnmatchedQuestIds.Count}",
-            AppLanguage.JA => $"├─ ログで見つかったイベント: {_result.TotalEventsFound}\n├─ 自動完了した前提クエスト: {prereqCount}\n└─ マッチング失敗したクエストID: {_result.UnmatchedQuestIds.Count}",
-            _ => $"├─ Events found in logs: {_result.TotalEventsFound}\n├─ Prerequisites auto-completed: {prereqCount}\n└─ Unmatched quest IDs: {_result.UnmatchedQuestIds.Count}"
-        };
-
-        BtnCancel.Content = _loc.CurrentLanguage switch
-        {
-            AppLanguage.KO => "취소",
-            AppLanguage.JA => "キャンセル",
-            _ => "Cancel"
-        };
-
-        BtnConfirm.Content = _loc.CurrentLanguage switch
-        {
-            AppLanguage.KO => "확인",
-            AppLanguage.JA => "確認",
-            _ => "Confirm"
-        };
+        BtnCancel.Content = _loc.SyncSummarySkipButton;
+        BtnConfirm.Content = _loc.SyncSummaryConfirmButton;
 
         if (_result.AlternativeQuestGroups.Count > 0)
         {
-            TxtAlternativeHeader.Text = _loc.CurrentLanguage switch
-            {
-                AppLanguage.KO => $"선택 필요 퀘스트 - 그룹당 하나 선택 ({_result.AlternativeQuestGroups.Count}개 그룹)",
-                AppLanguage.JA => $"選択が必要なクエスト - グループごとに1つ選択 ({_result.AlternativeQuestGroups.Count}グループ)",
-                _ => $"Optional Quests - Choose One Per Group ({_result.AlternativeQuestGroups.Count} groups)"
-            };
+            TxtAlternativeHeader.Text = string.Format(
+                _loc.SyncAlternativesHeaderFormat, _result.AlternativeQuestGroups.Count);
         }
     }
 
@@ -148,12 +132,12 @@ public partial class SyncResultDialog : Window
         var vm = new AlternativeQuestGroupViewModel
         {
             OriginalGroup = group,
-            GroupLabel = _loc.CurrentLanguage switch
-            {
-                AppLanguage.KO => $"선택 그룹: {string.Join(" / ", group.Choices.Select(c => _loc.GetQuestName(c.Task)))}",
-                AppLanguage.JA => $"選択グループ: {string.Join(" / ", group.Choices.Select(c => _loc.GetQuestName(c.Task)))}",
-                _ => $"Choose one: {string.Join(" / ", group.Choices.Select(c => _loc.GetQuestName(c.Task)))}"
-            }
+            // The profile is part of the label: the same either-or can be open in more than one
+            // profile, so two otherwise identical groups must be distinguishable.
+            GroupLabel = string.Format(
+                _loc.SyncAlternativeGroupFormat,
+                _loc.ProfileName(group.OwnerProfile),
+                string.Join(" / ", group.Choices.Select(c => _loc.GetQuestName(c.Task))))
         };
 
         foreach (var choice in group.Choices)
@@ -181,44 +165,46 @@ public partial class SyncResultDialog : Window
 
     private List<QuestChangeInfo> BuildSelectedChanges()
     {
-        var selectedChanges = _pendingChanges.Where(c => c.IsSelected).ToList();
+        var selectedChanges = new List<QuestChangeInfo>();
+        if (_alternativeGroups == null) return selectedChanges;
 
-        // Add selected alternative quests to the changes list
-        if (_alternativeGroups != null)
+        foreach (var group in _alternativeGroups)
         {
-            foreach (var group in _alternativeGroups)
-            {
-                var selectedChoice = group.Choices.FirstOrDefault(c => c.IsSelected && c.IsEnabled);
-                if (selectedChoice != null)
-                {
-                    var task = selectedChoice.OriginalChoice.Task;
-                    selectedChanges.Add(new QuestChangeInfo
-                    {
-                        QuestName = task.Name,
-                        NormalizedName = task.NormalizedName ?? "",
-                        Trader = task.Trader,
-                        IsPrerequisite = true,
-                        ChangeType = QuestEventType.Completed,
-                        IsSelected = true,
-                        Timestamp = DateTime.Now
-                    });
+            var selectedChoice = group.Choices.FirstOrDefault(c => c.IsSelected && c.IsEnabled);
+            if (selectedChoice == null) continue;
 
-                    // Fail the other alternatives
-                    foreach (var otherChoice in group.Choices.Where(c => c != selectedChoice && !c.IsCompleted))
-                    {
-                        var otherTask = otherChoice.OriginalChoice.Task;
-                        selectedChanges.Add(new QuestChangeInfo
-                        {
-                            QuestName = otherTask.Name,
-                            NormalizedName = otherTask.NormalizedName ?? "",
-                            Trader = otherTask.Trader,
-                            IsPrerequisite = true,
-                            ChangeType = QuestEventType.Failed,
-                            IsSelected = true,
-                            Timestamp = DateTime.Now
-                        });
-                    }
-                }
+            // Each change carries the group's profile, so the apply step writes the answer to
+            // the profile the question was asked about rather than to whatever is on screen.
+            var owner = group.OriginalGroup.OwnerProfile;
+
+            var task = selectedChoice.OriginalChoice.Task;
+            selectedChanges.Add(new QuestChangeInfo
+            {
+                QuestName = task.Name,
+                NormalizedName = task.NormalizedName ?? "",
+                Trader = task.Trader,
+                IsPrerequisite = true,
+                ChangeType = QuestEventType.Completed,
+                OwnerProfile = owner,
+                IsSelected = true,
+                Timestamp = DateTime.Now
+            });
+
+            // Fail the other alternatives
+            foreach (var otherChoice in group.Choices.Where(c => c != selectedChoice && !c.IsCompleted))
+            {
+                var otherTask = otherChoice.OriginalChoice.Task;
+                selectedChanges.Add(new QuestChangeInfo
+                {
+                    QuestName = otherTask.Name,
+                    NormalizedName = otherTask.NormalizedName ?? "",
+                    Trader = otherTask.Trader,
+                    IsPrerequisite = true,
+                    ChangeType = QuestEventType.Failed,
+                    OwnerProfile = owner,
+                    IsSelected = true,
+                    Timestamp = DateTime.Now
+                });
             }
         }
 

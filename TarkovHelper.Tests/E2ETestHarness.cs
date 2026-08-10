@@ -956,4 +956,34 @@ internal static class E2EDb
             return null;
         }
     }
+
+    /// <summary>
+    /// Reads a quest's persisted status within ONE profile's partition, or null when that
+    /// profile has no row for it. The profile-blind overload above cannot express the assertion
+    /// attribution needs — "present here and absent there" — because it stops at the first
+    /// matching row whichever partition it is in.
+    /// </summary>
+    public static string? ReadQuestProgress(string configDir, string profileId, string questKey)
+    {
+        var dbPath = Path.Combine(configDir, "user_data.db");
+        if (!File.Exists(dbPath)) return null;
+
+        using var connection = new SqliteConnection($"Data Source={dbPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT Status FROM QuestProgress " +
+            "WHERE ProfileId = $profile AND (Id = $key OR NormalizedName = $key) LIMIT 1";
+        command.Parameters.AddWithValue("$profile", profileId);
+        command.Parameters.AddWithValue("$key", questKey);
+        try
+        {
+            return command.ExecuteScalar() as string;
+        }
+        catch (SqliteException)
+        {
+            // Table not created yet (app has not finished its first save).
+            return null;
+        }
+    }
 }
