@@ -717,9 +717,18 @@ public partial class MainWindow : Window
 
     private void OnActiveProfileChanged(object? sender, ProfileChangedEventArgs args)
     {
+        // Raised from the log poll thread, so this is queued and can run after the user has
+        // already picked something else. Render the CURRENT selection rather than the captured
+        // one: painting args.Profile would put a superseded profile in the header while every
+        // progress write went to the newer one.
         Dispatcher.InvokeAsync(() =>
         {
-            UpdateProfileUI(args.Profile);
+            var current = ProfileService.Instance.ActiveProfile;
+            UpdateProfileUI(current);
+
+            // A cue and an announcement describe one specific transition, so a callback that
+            // has been overtaken must stay silent rather than announce a stale destination.
+            if (args.Profile != current) return;
 
             // Only cue and announce a real destination change. Repeated identical evidence
             // (EFT re-logs the session mode on every profile-screen visit, and the startup
@@ -727,7 +736,7 @@ public partial class MainWindow : Window
             // "Profile changed to X" for that tells the user something untrue.
             if (args.IsAutoDetected && args.ProfileChanged)
             {
-                ShowAutomaticProfileTransitionCue(args.Profile);
+                ShowAutomaticProfileTransitionCue(current);
             }
         });
     }
