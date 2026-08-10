@@ -1,0 +1,1953 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Profile Data Attribution - Code Guide</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Ground and structure, inherited from docs/2026-08-game-mode-selector-ux-review.html
+         so the two interactive docs read as one set. */
+      --page: #101010;
+      --surface: #181818;
+      --surface-2: #222222;
+      --surface-3: #2d2d2d;
+      --line: #3d3d3d;
+      --line-soft: #2a2a2a;
+      --text: #e0e0e0;
+      --muted: #9e9e9e;
+      --dim: #737373;
+
+      /* Accent: the app's own AccentBrush. */
+      --gold: #c5a84a;
+      --gold-hover: #d4b85a;
+      --gold-ink: #19170f;
+
+      /* Profile hues. These are a LAW, not decoration: the same profile is the same
+         colour in every diagram, timeline and partition on this page. */
+      --pvp: #5ea9e8;
+      --pve: #4caf50;
+      --season: #ff9800;
+
+      /* Reserved for data that landed in the wrong place. Never used for anything else. */
+      --wrong: #ef5350;
+      --right: #4caf50;
+
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+
+      --body: "Segoe UI", "Noto Sans", system-ui, sans-serif;
+      --mono: Consolas, "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 14% -12%, rgba(197, 168, 74, .12), transparent 36rem),
+        var(--page);
+      color: var(--text);
+      font-family: var(--body);
+      line-height: 1.55;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    }
+
+    button, input, select { font: inherit; }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* ---------- shell ---------- */
+
+    .shell {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      gap: 44px;
+      width: min(1320px, calc(100% - 44px));
+      margin: 0 auto;
+      padding: 56px 0 96px;
+      align-items: start;
+    }
+
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .rail { position: static; margin-bottom: 40px; }
+    }
+
+    .rail {
+      position: sticky;
+      top: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 18px 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: rgba(24, 24, 24, .84);
+      backdrop-filter: blur(10px);
+    }
+
+    .rail-title {
+      margin: 0 0 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .rail a {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 13.5px;
+      text-decoration: none;
+      transition: background .15s, color .15s;
+    }
+
+    .rail a:hover { background: var(--surface-2); color: var(--text); }
+    .rail a .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+    .rail a.is-lab { color: var(--gold); }
+    .rail a.is-lab .n { color: var(--gold); }
+
+    .rail-gate {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line-soft);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    .rail-gate strong { display: block; color: var(--text); font-size: 13px; }
+
+    .gate-meter {
+      height: 5px;
+      margin-top: 8px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .gate-meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--gold);
+      transition: width .3s ease;
+    }
+
+    /* ---------- type ---------- */
+
+    main { max-width: 100%; }
+
+    .eyebrow {
+      margin: 0;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    h1 {
+      max-width: 18ch;
+      margin: 12px 0 18px;
+      font-size: clamp(38px, 5.6vw, 70px);
+      font-weight: 800;
+      line-height: 1.0;
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+
+    .lede {
+      max-width: 62ch;
+      margin: 0 0 14px;
+      font-size: 19px;
+      color: #c2c2c2;
+    }
+
+    h2 {
+      margin: 0 0 6px;
+      font-size: clamp(24px, 3vw, 33px);
+      font-weight: 800;
+      letter-spacing: -.03em;
+      line-height: 1.12;
+      text-wrap: balance;
+    }
+
+    h3 {
+      margin: 30px 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    p, li { max-width: 68ch; }
+    p { margin: 0 0 14px; }
+    ul, ol { margin: 0 0 14px; padding-left: 22px; }
+    li { margin-bottom: 7px; }
+
+    strong { color: #f0f0f0; }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: #ddc98a;
+      font-family: var(--mono);
+      font-size: .88em;
+    }
+
+    a { color: var(--gold); }
+
+    section { margin-bottom: 68px; scroll-margin-top: 24px; }
+
+    .chapter-head {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 16px;
+      align-items: baseline;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .chapter-num {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      color: var(--gold);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kicker {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 62ch;
+    }
+
+    /* ---------- callouts ---------- */
+
+    .note {
+      margin: 22px 0;
+      padding: 16px 18px;
+      border-left: 3px solid var(--gold);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: linear-gradient(100deg, rgba(197, 168, 74, .1), rgba(197, 168, 74, .02));
+    }
+
+    .note p:last-child { margin-bottom: 0; }
+
+    .note-label {
+      margin: 0 0 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .note.is-wrong { border-left-color: var(--wrong); background: linear-gradient(100deg, rgba(239, 83, 80, .1), transparent); }
+    .note.is-wrong .note-label { color: var(--wrong); }
+
+    /* ---------- code and logs ---------- */
+
+    .code {
+      margin: 18px 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #141414;
+      overflow: hidden;
+    }
+
+    .code-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .code pre {
+      margin: 0;
+      padding: 14px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.62;
+      tab-size: 2;
+    }
+
+    .code .del { display: block; background: rgba(239, 83, 80, .12); color: #f0b3b1; }
+    .code .add { display: block; background: rgba(76, 175, 80, .12); color: #b3e0b5; }
+    .code .cmt { color: var(--dim); }
+
+    /* ---------- micro worlds ---------- */
+
+    .lab {
+      margin: 34px 0 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .lab-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      align-items: baseline;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line-soft);
+      background: linear-gradient(180deg, rgba(197, 168, 74, .07), transparent);
+    }
+
+    .lab-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .lab-head h3 { margin: 0; font-size: 19px; }
+    .lab-head .sub { width: 100%; margin: 2px 0 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
+
+    .lab-body { padding: 20px; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    .ctl-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .seg {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      background: var(--surface-2);
+      gap: 3px;
+    }
+
+    .seg button {
+      padding: 6px 14px;
+      border: 0;
+      border-radius: 99px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+
+    .seg button:hover { color: var(--text); }
+    .seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); }
+    .seg button[aria-pressed="true"][data-profile="pvp"] { background: rgba(94, 169, 232, .2); color: var(--pvp); }
+    .seg button[aria-pressed="true"][data-profile="pve"] { background: rgba(76, 175, 80, .2); color: var(--pve); }
+    .seg button[aria-pressed="true"][data-profile="season"] { background: rgba(255, 152, 0, .2); color: var(--season); }
+    .seg.is-mode button[aria-pressed="true"][data-mode="before"] { background: rgba(239, 83, 80, .2); color: var(--wrong); }
+    .seg.is-mode button[aria-pressed="true"][data-mode="after"] { background: rgba(76, 175, 80, .2); color: var(--right); }
+
+    .btn {
+      padding: 8px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+
+    .btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--gold); }
+    .btn:disabled { opacity: .42; cursor: not-allowed; }
+    .btn.is-primary { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+    .btn.is-primary:hover:not(:disabled) { background: var(--gold-hover); }
+
+    /* Lab A: timeline */
+
+    .timeline {
+      position: relative;
+      margin: 30px 0 8px;
+      padding: 0 6px;
+    }
+
+    .tl-track {
+      position: relative;
+      height: 12px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+      display: flex;
+    }
+
+    .tl-span { height: 100%; }
+    .tl-span[data-p="none"] { background: repeating-linear-gradient(45deg, #2f2f2f, #2f2f2f 5px, #262626 5px, #262626 10px); }
+    .tl-span[data-p="pvp"] { background: var(--pvp); }
+    .tl-span[data-p="pve"] { background: var(--pve); }
+    .tl-span[data-p="season"] { background: var(--season); }
+
+    .tl-marks { position: relative; height: 54px; }
+
+    .tl-mark {
+      position: absolute;
+      top: 0;
+      transform: translateX(-50%);
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .tl-mark i {
+      display: block;
+      width: 1px;
+      height: 10px;
+      margin: 0 auto 4px;
+      background: var(--line);
+    }
+
+    .tl-mark b { display: block; font-weight: 700; }
+    .tl-mark[data-p="pvp"] b { color: var(--pvp); }
+    .tl-mark[data-p="pve"] b { color: var(--pve); }
+    .tl-mark[data-p="season"] b { color: var(--season); }
+
+    input[type="range"] { width: 100%; accent-color: var(--gold); cursor: grab; }
+    input[type="range"]:active { cursor: grabbing; }
+
+    .tl-readout {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .stat {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .stat .k {
+      margin: 0 0 4px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .stat .v {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .v[data-p="pvp"] { color: var(--pvp); }
+    .v[data-p="pve"] { color: var(--pve); }
+    .v[data-p="season"] { color: var(--season); }
+    .v[data-p="none"] { color: var(--wrong); }
+
+    /* Lab B: distributor */
+
+    .dist {
+      display: grid;
+      grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    @media (max-width: 860px) { .dist { grid-template-columns: minmax(0, 1fr); } }
+
+    .tree {
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #141414;
+      padding: 14px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      overflow-x: auto;
+    }
+
+    .tree-root { color: var(--muted); margin-bottom: 8px; }
+
+    .tree-folder { margin-bottom: 12px; padding-left: 12px; border-left: 2px solid var(--line-soft); }
+    .tree-folder[data-p="pvp"] { border-left-color: var(--pvp); }
+    .tree-folder[data-p="pve"] { border-left-color: var(--pve); }
+    .tree-folder[data-p="season"] { border-left-color: var(--season); }
+    .tree-folder[data-p="none"] { border-left-color: var(--wrong); }
+
+    .tree-folder .name { color: var(--text); }
+    .tree-folder .mode { display: block; color: var(--dim); }
+    .tree-folder .mode b { font-weight: 700; }
+    .tree-folder[data-p="pvp"] .mode b { color: var(--pvp); }
+    .tree-folder[data-p="pve"] .mode b { color: var(--pve); }
+    .tree-folder[data-p="season"] .mode b { color: var(--season); }
+    .tree-folder[data-p="none"] .mode b { color: var(--wrong); }
+    .tree-folder .evt { display: block; color: #b9b9b9; }
+
+    .partitions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+
+    @media (max-width: 620px) { .partitions { grid-template-columns: minmax(0, 1fr); } }
+
+    .part {
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      overflow: hidden;
+      min-height: 176px;
+    }
+
+    .part-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 12.5px;
+      font-weight: 700;
+    }
+
+    .part-head .count { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+    .part[data-p="pvp"] .part-head { color: var(--pvp); background: rgba(94, 169, 232, .1); }
+    .part[data-p="pve"] .part-head { color: var(--pve); background: rgba(76, 175, 80, .1); }
+    .part[data-p="season"] .part-head { color: var(--season); background: rgba(255, 152, 0, .1); }
+
+    .part-rows { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 9px;
+      border-radius: 6px;
+      background: var(--surface-3);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      animation: drop .28s ease both;
+    }
+
+    @keyframes drop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+    .row .src { color: var(--dim); }
+    .row.is-wrong { background: rgba(239, 83, 80, .18); color: #f5b7b5; }
+    .row.is-wrong .src { color: #d98b88; }
+
+    .part-empty { padding: 14px 12px; color: var(--dim); font-size: 12.5px; font-style: italic; }
+
+    .verdict {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: var(--surface-2);
+      font-size: 14.5px;
+    }
+
+    .verdict[data-tone="bad"] { border-color: rgba(239, 83, 80, .5); background: rgba(239, 83, 80, .08); }
+    .verdict[data-tone="good"] { border-color: rgba(76, 175, 80, .45); background: rgba(76, 175, 80, .07); }
+    .verdict b { display: block; margin-bottom: 3px; }
+
+    /* Lab C: race stepper */
+
+    .lanes { display: grid; gap: 10px; }
+
+    .lane {
+      display: grid;
+      grid-template-columns: 132px minmax(0, 1fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    @media (max-width: 720px) { .lane { grid-template-columns: minmax(0, 1fr); } }
+
+    .lane-name {
+      display: flex;
+      align-items: center;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      font-size: 11.5px;
+      font-weight: 700;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .lane-track { display: flex; gap: 6px; }
+
+    .beat {
+      flex: 1;
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px dashed var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--dim);
+      font-size: 12px;
+      line-height: 1.35;
+      transition: background .2s, border-color .2s, color .2s;
+    }
+
+    .beat.is-on {
+      border-style: solid;
+      border-color: var(--gold);
+      background: rgba(197, 168, 74, .12);
+      color: var(--text);
+    }
+
+    .beat.is-done { border-style: solid; border-color: var(--line); color: var(--muted); }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .state-grid .stat.is-alert { border-color: rgba(239, 83, 80, .55); background: rgba(239, 83, 80, .08); }
+
+    /* ---------- quiz ---------- */
+
+    .quiz-intro {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 26px;
+      padding: 18px 20px;
+      border: 1px solid rgba(197, 168, 74, .35);
+      border-radius: var(--radius);
+      background: linear-gradient(110deg, rgba(197, 168, 74, .12), rgba(197, 168, 74, .02));
+    }
+
+    .quiz-score {
+      display: grid;
+      place-items: center;
+      min-width: 62px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      color: var(--gold);
+    }
+
+    .q {
+      margin-bottom: 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .q[data-state="right"] { border-color: rgba(76, 175, 80, .55); }
+    .q[data-state="wrong"] { border-color: rgba(239, 83, 80, .5); }
+
+    .q-head { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 16px 18px 10px; }
+
+    .q-num {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--gold);
+      padding-top: 3px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .q-text { margin: 0; font-size: 15.5px; font-weight: 600; max-width: 72ch; }
+
+    .q-opts { display: grid; gap: 7px; padding: 4px 18px 16px 44px; }
+
+    .opt {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      cursor: pointer;
+      font-size: 14px;
+      transition: border-color .15s, background .15s;
+    }
+
+    .opt:hover { border-color: var(--line); background: var(--surface-3); }
+    .opt input { margin: 3px 0 0; accent-color: var(--gold); }
+    .opt.is-right { border-color: rgba(76, 175, 80, .6); background: rgba(76, 175, 80, .1); }
+    .opt.is-wrong { border-color: rgba(239, 83, 80, .55); background: rgba(239, 83, 80, .1); }
+
+    .q-why {
+      display: none;
+      margin: 0 18px 16px 44px;
+      padding: 12px 14px;
+      border-left: 3px solid var(--line);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: var(--surface-2);
+      font-size: 13.5px;
+      color: #c4c4c4;
+    }
+
+    .q-why p { margin: 0; max-width: 74ch; }
+    .q[data-state] .q-why { display: block; }
+    .q[data-state="right"] .q-why { border-left-color: var(--right); }
+    .q[data-state="wrong"] .q-why { border-left-color: var(--wrong); }
+
+    .q-why .verdict-word { font-weight: 700; }
+    .q[data-state="right"] .verdict-word { color: var(--right); }
+    .q[data-state="wrong"] .verdict-word { color: var(--wrong); }
+
+    /* gate */
+
+    .gate {
+      margin-top: 30px;
+      padding: 22px 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .gate.is-locked { border-style: dashed; color: var(--muted); }
+    .gate.is-open { border-color: rgba(76, 175, 80, .55); background: linear-gradient(150deg, rgba(76, 175, 80, .1), transparent); }
+
+    .gate h3 { margin: 0 0 8px; }
+    .gate ul { margin-top: 10px; }
+
+    .approval {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: #141414;
+      border: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: #b9d8bb;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    footer {
+      margin-top: 22px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--dim);
+      font-size: 13px;
+    }
+
+    footer a { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="rail" aria-label="Guide contents">
+      <p class="rail-title">Curriculum</p>
+      <a href="#ch1"><span class="n">01</span><span>What EFT writes down</span></a>
+      <a href="#ch2"><span class="n">02</span><span>The wrong question</span></a>
+      <a href="#lab-a" class="is-lab"><span class="n">LAB</span><span>Timeline resolver</span></a>
+      <a href="#ch3"><span class="n">03</span><span>Evidence on the event</span></a>
+      <a href="#lab-b" class="is-lab"><span class="n">LAB</span><span>Sync distributor</span></a>
+      <a href="#ch4"><span class="n">04</span><span>Cache and key as one</span></a>
+      <a href="#lab-c" class="is-lab"><span class="n">LAB</span><span>Race stepper</span></a>
+      <a href="#ch5"><span class="n">05</span><span>What else moved</span></a>
+      <a href="#quiz"><span class="n">06</span><span>Comprehension gate</span></a>
+      <div class="rail-gate">
+        <strong id="railGateLabel">Gate locked</strong>
+        <span id="railGateHint">0 of 8 correct</span>
+        <div class="gate-meter"><i id="railGateBar"></i></div>
+      </div>
+    </nav>
+
+    <main>
+      <p class="eyebrow">PR #38 &middot; Code guide</p>
+      <h1>Progress that knows where it came from</h1>
+      <p class="lede">
+        This change stops the app filing quest progress under whichever profile happens to be
+        on screen. Read it as a curriculum rather than a diff: the background first, the
+        defect second, then three labs where you drive the actual decision logic before the
+        gate at the bottom checks whether it landed.
+      </p>
+      <p class="lede" style="color:var(--muted);font-size:16px;">
+        Companion to <code>docs/decisions/fix-profile-data-attribution.md</code> (the product
+        decision) and <code>.spec.md</code> (the technical design). Those record
+        <em>what was decided</em>; this one exists to make the reasoning transferable.
+      </p>
+
+      <div class="note">
+        <p class="note-label">The whole change in one sentence</p>
+        <p>
+          Every write used to ask <code>ProfileService.ActiveProfileId</code> which partition it
+          belonged to. That question has the right answer for exactly one of the four ways data
+          arrives, so the answer now travels <em>with the data</em>: log events carry the game
+          mode of the session that produced them, and hand edits carry the profile whose rows
+          were on screen.
+        </p>
+      </div>
+
+      <!-- ===================== CHAPTER 1 ===================== -->
+      <section id="ch1">
+        <div class="chapter-head">
+          <span class="chapter-num">01</span>
+          <div>
+            <h2>What EFT writes down</h2>
+            <p class="kicker">
+              You cannot judge the attribution logic without knowing what evidence exists on
+              disk. It is less than you would hope and more than the old code used.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Escape from Tarkov writes one folder per play session. Each folder holds several logs,
+          and this change cares about exactly two of them.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>%EFT%/Logs/</span><span>one session folder</span></div>
+<pre>log_2026.08.11_07-00-00_1.1.0.46657/
+  2026-08-11_07-00-00 1.1.0.46657 application.log        <span class="cmt">&lt;- Session mode lines live here</span>
+  2026-08-11_07-00-00 1.1.0.46657 push-notifications_000.log  <span class="cmt">&lt;- quest events live here</span>
+  2026-08-11_07-00-00 1.1.0.46657 network-connection.log</pre>
+        </div>
+
+        <p>
+          The <strong>application log</strong> announces which mode the client switched into.
+          One line, repeated whenever the player visits the profile screen:
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>application.log</span><span>the only evidence of game mode</span></div>
+<pre>2026-08-11 07:00:12.431 1|1.1.0.46657|Info|application|Session mode: PvpSeason</pre>
+        </div>
+
+        <p>
+          The <strong>push-notifications log</strong> carries quest events as JSON blocks. Note
+          what it does <em>not</em> contain: any mention of the game mode.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>push-notifications_000.log</span><span>type 12 = completed</span></div>
+<pre>{
+  "type": "new_message",
+  "dialogId": "54cb57776803fa99248b456e",
+  "message": {
+    "type": 12,
+    "templateId": "5936d90786f7742b1420ba5b successMessageText",
+    "dt": 1786528812                 <span class="cmt">&lt;- unix seconds, the only time we get</span>
+  }
+}</pre>
+        </div>
+
+        <h3>Three facts that shape the whole design</h3>
+        <ol>
+          <li>
+            <strong>A sync reads every retained folder.</strong> The parser enumerates with
+            <code>SearchOption.AllDirectories</code>, so one run spans days of play across all
+            three modes. There is no such thing as "the profile this sync belongs to".
+          </li>
+          <li>
+            <strong>A folder is not single-mode.</strong> Measured on one machine, one folder
+            switched mode four times inside five minutes. Attribution per folder would still
+            misfile; it has to be per timestamp.
+          </li>
+          <li>
+            <strong>Both timestamps are local, and neither carries an offset.</strong> The mode
+            line is a local-time string; the quest event is a unix <code>dt</code> converted with
+            <code>.LocalDateTime</code>. They compare directly, which is convenient and leaves a
+            one-hour-per-year hole at a daylight-saving fall-back. The spec records that rather
+            than solving it.
+          </li>
+        </ol>
+      </section>
+
+      <!-- ===================== CHAPTER 2 ===================== -->
+      <section id="ch2">
+        <div class="chapter-head">
+          <span class="chapter-num">02</span>
+          <div>
+            <h2>The wrong question</h2>
+            <p class="kicker">
+              The old code was not buggy in the usual sense. Every line did what it said. It
+              simply asked the wrong source for the answer.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Progress is partitioned by profile: <code>pvp</code>, <code>pve</code>,
+          <code>season</code>. Every write needs a partition key, and every write got it the
+          same way:
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>QuestProgressService.cs (before)</span><span>the shape repeated on every write path</span></div>
+<pre><span class="del">await _userDataDb.SaveQuestProgressBatchAsync(
+    changedQuests, ProfileService.Instance.ActiveProfileId);</span></pre>
+        </div>
+
+        <p>
+          <code>ActiveProfileId</code> answers <em>what is the user looking at right now</em>.
+          Count the ways progress arrives and how often that is the right answer:
+        </p>
+
+        <ul>
+          <li><strong>Hand entry</strong> (the user ticks a quest) &mdash; correct. The user is looking at the profile they mean.</li>
+          <li><strong>Syncing from logs</strong> &mdash; wrong, always. The logs span every mode; the screen shows one.</li>
+          <li><strong>A live raid event</strong> &mdash; wrong whenever the player has switched the view to compare another mode.</li>
+          <li><strong>The moment after an automatic switch</strong> &mdash; wrong for a window. The global moves before the cache does.</li>
+        </ul>
+
+        <div class="note is-wrong">
+          <p class="note-label">Why this was expensive</p>
+          <p>
+            The permanent PvP profile accumulates progress over the life of an account. Entries
+            mixed into it are the hardest to notice and the most costly to lose, and nothing in
+            the app recorded which entries were wrong. The failure was silent by construction.
+          </p>
+        </div>
+
+        <h3>The fourth case deserves a closer look</h3>
+        <p>
+          <code>SetActiveProfile</code> assigns the global and raises its event synchronously,
+          from the log watcher's thread pool. Subscribers answer with a fire-and-forget reload
+          and return immediately. In the gap, <code>ActiveProfileId</code> names the new profile
+          while the cache still holds the old one's rows &mdash; so a quest ticked in that window
+          is written to a profile whose data was never displayed, and then vanishes from the
+          screen when the reload lands. The player sees nothing recorded; the wrong profile
+          gained an entry.
+        </p>
+      </section>
+
+      <!-- ===================== LAB A ===================== -->
+      <section id="lab-a">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab A</span>
+            <h3>Timeline resolver</h3>
+            <p class="sub">
+              This is <code>SessionModeTimeline.Resolve(at)</code>, running for real. The
+              transitions below are the measured four-switch capture from one folder. Drag the
+              event and watch which partition it resolves to &mdash; and where it resolves to
+              nothing at all.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="controls">
+              <span class="ctl-label">Attribution strategy</span>
+              <div class="seg" role="group" aria-label="Attribution strategy">
+                <button type="button" data-strategy="folder" aria-pressed="false">Per folder</button>
+                <button type="button" data-strategy="timestamp" aria-pressed="true">Per timestamp</button>
+              </div>
+            </div>
+
+            <div class="timeline">
+              <div class="tl-track" id="tlTrack"></div>
+              <div class="tl-marks" id="tlMarks"></div>
+              <label class="sr-only" for="tlEvent">Quest event time</label>
+              <input type="range" id="tlEvent" min="0" max="1000" value="430" step="1">
+            </div>
+
+            <div class="tl-readout">
+              <div class="stat">
+                <p class="k">Event recorded at</p>
+                <p class="v" id="tlTime">09:02:30</p>
+              </div>
+              <div class="stat">
+                <p class="k">Last transition at or before</p>
+                <p class="v" id="tlPrev">Session mode: PvpSeason</p>
+              </div>
+              <div class="stat">
+                <p class="k">Resolve() returns</p>
+                <p class="v" id="tlResult" data-p="season">PvP Season</p>
+              </div>
+            </div>
+
+            <div class="verdict" id="tlVerdict" data-tone="good">
+              <b>Attributed.</b>
+              <span id="tlVerdictText">This quest is written to the season partition, whatever profile is on screen.</span>
+            </div>
+          </div>
+        </div>
+
+        <p>
+          Two things are worth provoking before you move on. Drag the handle to the far left,
+          before <code>09:00:00</code>: there is no transition at or before that instant, so
+          <code>Resolve</code> returns <code>null</code>. That is not a failure to handle
+          &mdash; it is the honest answer, and the apply step drops the event and counts it.
+          Then flip the strategy to <strong>per folder</strong> and drag again: a single answer
+          for the whole folder is wrong for three of the four spans.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>Services/Eft/SessionModeTimeline.cs</span><span>the resolution rule</span></div>
+<pre>internal AppProfile? Resolve(DateTime at)
+{
+    SessionProfileHint hint = SessionProfileHint.Unknown;
+    var found = false;
+
+    foreach (var entry in _entries)
+    {
+        if (entry.At &gt; at) break;   <span class="cmt">// entries are chronological</span>
+        hint = entry.Hint;
+        found = true;
+    }
+
+    if (!found) return null;        <span class="cmt">// before the first marker: no evidence</span>
+
+    return ProfileService.TryResolveDetectedProfile(hint, out var profile) ? profile : null;
+}</pre>
+        </div>
+
+        <div class="note">
+          <p class="note-label">Read the null carefully</p>
+          <p>
+            <code>null</code> means "no evidence", never "use the default". The app has already
+            shipped one defect of exactly that shape, where a value that could not distinguish
+            permanent PvP from seasonal play was used to pick storage and merged the two.
+            Guessing here would reproduce the damage this change exists to stop.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 3 ===================== -->
+      <section id="ch3">
+        <div class="chapter-head">
+          <span class="chapter-num">03</span>
+          <div>
+            <h2>Evidence on the event</h2>
+            <p class="kicker">
+              Once the timeline exists, the fix is to stamp each event with its answer at the
+              moment the answer is cheapest to compute.
+            </p>
+          </div>
+        </div>
+
+        <div class="code">
+          <div class="code-head"><span>Models/QuestLogEvent.cs</span><span>the new field</span></div>
+<pre><span class="add">/// Null means "no evidence" and never a default: an event from before the
+/// first mode marker in its folder has nothing saying where it belongs.
+public AppProfile? OwnerProfile { get; set; }</span></pre>
+        </div>
+
+        <h3>Why the stamp happens during parsing</h3>
+        <p>
+          The obvious alternative is to attribute later, at apply time, from
+          <code>SourceFile</code>. Parsing wins for two reasons, and only the first is about
+          performance:
+        </p>
+        <ul>
+          <li>
+            At parse time the parser still knows which folder it is walking, so it builds
+            <strong>one timeline per folder</strong>. At apply time the events are already
+            flattened and each one would have to find its folder again.
+          </li>
+          <li>
+            Every consumer of a <code>QuestLogEvent</code>, present or future, receives an
+            attributed event rather than having to remember to resolve one. The live raid path
+            gets this for free, which is how requirement R4 is satisfied without a second
+            mechanism.
+          </li>
+        </ul>
+
+        <h3>The part that is easy to miss in review</h3>
+        <p>
+          Attribution alone is not enough. Sync also asks <em>is this quest already recorded?</em>
+          &mdash; and that question used to be answered from the in-memory cache, which holds at
+          most one profile. Once a run spans three, the cache names the wrong profile for every
+          group but one.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>Services/LogSyncService.cs</span><span>one pass per owning profile</span></div>
+<pre>foreach (var group in attributed.GroupBy(e =&gt; e.OwnerProfile!.Value))
+{
+    var owner = group.Key;
+<span class="add">    // That profile's OWN stored rows, read from the store. The loaded cache
+    // would be the right answer for at most one group in the whole run.
+    var storedProgress = await _store.LoadQuestProgressAsync(
+        ProfileService.GetProfileId(owner));</span>
+
+    RunProfilePass(owner, group.ToList(), storedProgress, run);
+}</pre>
+        </div>
+
+        <p>
+          This is also where the <em>already up to date</em> count in the summary comes from, and
+          why <code>IQuestProgressStore</code> had to be extracted: the sync path needs to read a
+          profile it is not displaying.
+        </p>
+      </section>
+
+      <!-- ===================== LAB B ===================== -->
+      <section id="lab-b">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab B</span>
+            <h3>Sync distributor</h3>
+            <p class="sub">
+              The headline defect, side by side. Four quest events across four session folders,
+              one of which never wrote a <code>Session mode</code> line. Choose the profile the
+              player has on screen, then run the sync under the old code and the new.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="controls">
+              <span class="ctl-label">Profile on screen</span>
+              <div class="seg" role="group" aria-label="Selected profile">
+                <button type="button" data-profile="pvp" aria-pressed="false">PvP Zone</button>
+                <button type="button" data-profile="pve" aria-pressed="false">PvE Zone</button>
+                <button type="button" data-profile="season" aria-pressed="true">PvP Season</button>
+              </div>
+              <span class="ctl-label">Code</span>
+              <div class="seg is-mode" role="group" aria-label="Code version">
+                <button type="button" data-mode="before" aria-pressed="true">Before</button>
+                <button type="button" data-mode="after" aria-pressed="false">After</button>
+              </div>
+            </div>
+
+            <div class="dist">
+              <div class="tree" id="distTree" aria-label="Fixture log tree"></div>
+              <div>
+                <div class="partitions" id="distParts"></div>
+                <div class="verdict" id="distVerdict" data-tone="bad"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <p>
+          Leave the mode on <strong>Before</strong> and click through all three profiles. The
+          rows never move: they follow the selection, not the logs. That is the property the
+          test <code>A_sync_distributes_each_session_to_its_own_profile</code> now forbids, and
+          it was confirmed failing against the old behaviour before the fix landed.
+        </p>
+
+        <p>
+          Now switch to <strong>After</strong> and click through the profiles again. Nothing
+          moves either &mdash; but for the opposite reason. Attribution no longer depends on the
+          selection at all, which is exactly what makes the selection safe to change.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 4 ===================== -->
+      <section id="ch4">
+        <div class="chapter-head">
+          <span class="chapter-num">04</span>
+          <div>
+            <h2>Cache and key as one value</h2>
+            <p class="kicker">
+              The second half of the change. Log attribution closes a deterministic defect; this
+              closes a timing one.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Before: two independent pieces of state. A mutable dictionary of rows here, and
+          "whatever <code>ProfileService</code> currently reports" there. Nothing kept them in
+          step, so a reader could observe one without the other.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>Services/ProgressSnapshot.cs</span><span>the new state</span></div>
+<pre><span class="add">internal sealed record ProgressSnapshot(
+    string ProfileId,
+    long Revision,
+    ImmutableDictionary&lt;string, QuestStatus&gt; Quests,
+    ImmutableDictionary&lt;string, bool&gt; Objectives);</span></pre>
+        </div>
+
+        <p>
+          Binding them into one immutable value makes the split window impossible to observe.
+          A reader captures the field once and sees rows and profile that belong together. A
+          writer derives the next snapshot from the one it read, publishes it with
+          compare-and-swap, and persists under <em>that</em> snapshot's <code>ProfileId</code>.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>Services/QuestProgressService.cs</span><span>the single write shape</span></div>
+<pre>var (published, changedQuests) = Mutate(current =&gt;
+{
+    var rows = RowsOf(computePlan(current));
+    return rows.Count == 0
+        ? (current, rows)
+        : (current with { Quests = WithRows(current.Quests, rows) }, rows);
+});
+
+<span class="cmt">// The partition comes from the snapshot the change was derived from,
+// not from whatever the selection has become by the time this runs.</span>
+_ = SaveProgressBatchAsync(changedQuests, published.ProfileId);</pre>
+        </div>
+
+        <h3>Two transitions in flight</h3>
+        <p>
+          Reloads are asynchronous, so two switches in quick succession start two loads that can
+          finish in either order. <code>ProfileService</code> gained a monotonic
+          <code>TransitionRevision</code> that travels on the event; a load that finishes after a
+          newer one was requested discards its result instead of publishing rows the user has
+          already navigated away from.
+        </p>
+
+        <div class="note">
+          <p class="note-label">Why compare-and-swap, when a plain assignment would do</p>
+          <p>
+            Mutations are, in practice, confined to the dispatcher today. Nothing
+            <em>enforces</em> that, and a lost update from a second writer would be silent. The
+            retry loop makes the guarantee independent of a property no test checks, and it will
+            almost never spin.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== LAB C ===================== -->
+      <section id="lab-c">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab C</span>
+            <h3>Race stepper</h3>
+            <p class="sub">
+              Step the four beats of a profile switch racing a hand edit, and watch the internal
+              state as it changes. The player is looking at PvP Season; the game has just started
+              a PvE session.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="controls">
+              <span class="ctl-label">Code</span>
+              <div class="seg is-mode" role="group" aria-label="Code version">
+                <button type="button" data-race="before" aria-pressed="true">Before</button>
+                <button type="button" data-race="after" aria-pressed="false">After</button>
+              </div>
+              <button type="button" class="btn is-primary" id="raceStep">Advance one beat</button>
+              <button type="button" class="btn" id="raceReset">Reset</button>
+            </div>
+
+            <div class="lanes" id="raceLanes"></div>
+
+            <div class="state-grid" id="raceState"></div>
+
+            <div class="verdict" id="raceVerdict" data-tone="good"></div>
+          </div>
+        </div>
+
+        <p>
+          The beat that matters is the third. Under <strong>Before</strong>, the edit reads a
+          global that has already moved and a cache that has not, so the two disagree and the
+          row lands in PvE &mdash; a profile whose data the player has never seen. Under
+          <strong>After</strong> there is only one thing to read, and it is still the season
+          snapshot, so the row goes where the player meant it to.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 5 ===================== -->
+      <section id="ch5">
+        <div class="chapter-head">
+          <span class="chapter-num">05</span>
+          <div>
+            <h2>What else moved, and why</h2>
+            <p class="kicker">
+              Four consequences that are easy to wave through in a diff this size, and are worth
+              a moment each.
+            </p>
+          </div>
+        </div>
+
+        <h3>The per-quest review step is gone</h3>
+        <p>
+          The sync dialog used to list every change with a checkbox. That step existed because
+          the player was the last defence against wrong attribution. Once attribution comes from
+          the logs, it asks the player to confirm a judgment they have no better information
+          about than the app does, over a list that now spans several profiles. It is replaced by
+          a per-profile summary &mdash; which the PRD states as a requirement, not a nicety,
+          precisely because a bad sync is now harder to walk back. The one prompt that survives is
+          the one no evidence can settle: which of two mutually exclusive prerequisites the player
+          actually took.
+        </p>
+
+        <h3>The cascade stopped using derived status</h3>
+        <p>
+          <code>CascadeLookups.Status</code> is now the recorded-only view rather than
+          <code>GetStatus</code>. The two are interchangeable here &mdash; the core consults
+          Status solely through gates testing <code>== Done</code> and <code>== Failed</code>, and
+          <code>GetStatus</code> reports either of those exactly when progress records it. The
+          payoff is that it keeps <code>SettingsService</code> (player level, faction, editions,
+          all profile-scoped) out of a planner that now has to run for a profile that is
+          <em>not</em> the selected one.
+        </p>
+
+        <h3>A dead code path was left dead, on purpose</h3>
+        <p>
+          <code>LogSyncService</code>'s map watcher filters on <code>application*.log</code>. EFT
+          names those files <code>&lt;date&gt;_&lt;time&gt;_&lt;version&gt; application.log</code>,
+          so a pattern anchored at "application" has never matched anything. That whole path is
+          dead: <code>MapDetected</code> and <code>FindLastMapFromLogs</code> have no subscribers
+          anywhere, and live map detection is <code>LogMapWatcherService</code>'s job. Repairing
+          the glob would only make dead code do unused I/O, so it was left as-is with a comment
+          recording the finding. <code>SessionModeTimeline</code> uses the correct pattern.
+        </p>
+
+        <h3>A deadlock the unit tests could not have found</h3>
+        <p>
+          Folding the quest and objective loads into one <code>ReloadForProfileAsync</code> gave
+          the startup path a <code>ProgressChanged</code> it never used to raise.
+          <code>Initialize</code> runs that load with <code>Task.Run(...).GetAwaiter()
+          .GetResult()</code>, blocking the dispatcher, while subscribers marshal their refresh
+          back to it. Unconditional hang, on every launch.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>Services/QuestProgressService.cs</span><span>load-bearing argument</span></div>
+<pre><span class="add">// notify: false is load-bearing, not an optimization. This call blocks the
+// dispatcher thread on GetResult(), and ProgressChanged subscribers marshal
+// their refresh back to the dispatcher.
+Task.Run(async () =&gt; await ReloadForProfileAsync(profile, revision, notify: false))
+    .GetAwaiter().GetResult();</span></pre>
+        </div>
+
+        <div class="note">
+          <p class="note-label">The lesson worth keeping</p>
+          <p>
+            The end-to-end test is what caught it, because the deadlock needs a real dispatcher.
+            A change that touches thread affinity earns an e2e test even when the unit coverage
+            looks complete.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== QUIZ ===================== -->
+      <section id="quiz">
+        <div class="chapter-head">
+          <span class="chapter-num">06</span>
+          <div>
+            <h2>Comprehension gate</h2>
+            <p class="kicker">
+              Reading is not understanding. Eight questions, all of which need the reasoning
+              rather than the vocabulary. The approval checklist below unlocks when all eight are
+              right; wrong answers explain themselves so you can go back and re-read.
+            </p>
+          </div>
+        </div>
+
+        <div class="quiz-intro">
+          <div class="quiz-score" id="quizScore">0/8</div>
+          <div>
+            <strong>This gate is a speed regulator, not a formality.</strong>
+            <p style="margin:4px 0 0;color:#c2c2c2;">
+              A reviewer who approves this diff without being able to answer question 4 or 6 has
+              not reviewed it. Answer, read the explanation either way, and revise as you go.
+            </p>
+          </div>
+        </div>
+
+        <div id="quizList"></div>
+
+        <div class="gate is-locked" id="gate">
+          <h3 id="gateTitle">Approval checklist &mdash; locked</h3>
+          <p id="gateBody">Answer all eight questions correctly to unlock the reviewer checklist.</p>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          Sources: <code>docs/decisions/fix-profile-data-attribution.md</code>,
+          <code>docs/decisions/fix-profile-data-attribution.spec.md</code>,
+          <code>docs/eft-1-1-profile-selection-log-analysis.md</code>. The labs reimplement the
+          decision logic faithfully but are illustrations, not the shipped code &mdash; the
+          shipped behaviour is pinned by the tests named throughout.
+        </p>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    var PROFILE_NAMES = { pvp: "PvP Zone", pve: "PvE Zone", season: "PvP Season" };
+    var PARTITION_IDS = { pvp: "pvp", pve: "pve", season: "season" };
+
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+
+    function clock(seconds) {
+      var base = 9 * 3600;
+      var t = base + seconds;
+      var h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+      return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+    }
+
+    function bindSegment(root, attr, onPick) {
+      var buttons = Array.prototype.slice.call(root.querySelectorAll("[" + attr + "]"));
+      buttons.forEach(function (b) {
+        b.addEventListener("click", function () {
+          buttons.forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+          onPick(b.getAttribute(attr));
+        });
+      });
+    }
+
+    /* ================= Lab A: timeline resolver ================= */
+
+    // The measured capture: four transitions inside five minutes, one folder.
+    var TRANSITIONS = [
+      { at: 0,   hint: "Pve",       profile: "pve" },
+      { at: 90,  hint: "PvpSeason", profile: "season" },
+      { at: 180, hint: "Regular",   profile: "pvp" },
+      { at: 285, hint: "Pve",       profile: "pve" }
+    ];
+    var SPAN_END = 360;
+    // The track reserves its first slice for time before the first marker, where there is no
+    // evidence at all. The slider spans the same visual space, so handle position and colour
+    // band always agree.
+    var LEAD = 0.08;
+
+    var labA = {
+      strategy: "timestamp",
+      track: document.getElementById("tlTrack"),
+      marks: document.getElementById("tlMarks"),
+      range: document.getElementById("tlEvent"),
+      time: document.getElementById("tlTime"),
+      prev: document.getElementById("tlPrev"),
+      result: document.getElementById("tlResult"),
+      verdict: document.getElementById("tlVerdict"),
+      verdictText: document.getElementById("tlVerdictText")
+    };
+
+    function resolveAt(seconds) {
+      // Mirrors SessionModeTimeline.Resolve: last entry whose At is not after `at`.
+      var found = null;
+      for (var i = 0; i < TRANSITIONS.length; i++) {
+        if (TRANSITIONS[i].at > seconds) break;
+        found = TRANSITIONS[i];
+      }
+      return found;
+    }
+
+    function paintTimelineA() {
+      labA.track.innerHTML = "";
+      labA.marks.innerHTML = "";
+
+      // A leading span with no evidence at all, then one span per transition.
+      var lead = el("div", "tl-span");
+      lead.setAttribute("data-p", "none");
+      lead.style.width = (LEAD * 100) + "%";
+      labA.track.appendChild(lead);
+
+      TRANSITIONS.forEach(function (t, i) {
+        var end = (i + 1 < TRANSITIONS.length) ? TRANSITIONS[i + 1].at : SPAN_END;
+        var span = el("div", "tl-span");
+        span.setAttribute("data-p", labA.strategy === "folder" ? TRANSITIONS[0].profile : t.profile);
+        span.style.width = ((1 - LEAD) * 100 * (end - t.at) / SPAN_END) + "%";
+        labA.track.appendChild(span);
+
+        var mark = el("div", "tl-mark");
+        mark.setAttribute("data-p", t.profile);
+        mark.style.left = ((LEAD + (1 - LEAD) * t.at / SPAN_END) * 100) + "%";
+        mark.appendChild(el("i"));
+        mark.appendChild(el("b", null, t.hint));
+        mark.appendChild(el("span", null, clock(t.at)));
+        labA.marks.appendChild(mark);
+      });
+    }
+
+    function updateLabA() {
+      // Map the handle's position on the track back to a time, so the lead band really is
+      // "before the first Session mode line" rather than an approximation of it.
+      var pos = Number(labA.range.value) / 1000;
+      var offset = Math.round((pos - LEAD) / (1 - LEAD) * SPAN_END);
+      var hit = offset < 0 ? null : resolveAt(offset);
+
+      labA.time.textContent = clock(offset);
+
+      if (labA.strategy === "folder") {
+        // What a naive per-folder implementation would answer: the folder's first mode.
+        var folder = TRANSITIONS[0];
+        labA.prev.textContent = "folder mode: " + folder.hint;
+        labA.result.textContent = PROFILE_NAMES[folder.profile];
+        labA.result.setAttribute("data-p", folder.profile);
+        var correct = hit && hit.profile === folder.profile;
+        labA.verdict.setAttribute("data-tone", correct ? "good" : "bad");
+        labA.verdict.querySelector("b").textContent = correct ? "Right, by luck." : "Misfiled.";
+        labA.verdictText.textContent = correct
+          ? "This event happens to fall in the folder's first span, so a folder-level answer agrees with the timestamp."
+          : "The session had switched to " + (hit ? PROFILE_NAMES[hit.profile] : "no known mode") +
+            " by this point, but a folder-level answer files it under " + PROFILE_NAMES[folder.profile] + ".";
+        return;
+      }
+
+      if (!hit) {
+        labA.prev.textContent = "none";
+        labA.result.textContent = "null";
+        labA.result.setAttribute("data-p", "none");
+        labA.verdict.setAttribute("data-tone", "bad");
+        labA.verdict.querySelector("b").textContent = "Dropped, and counted.";
+        labA.verdictText.textContent =
+          "This event predates every Session mode line in its folder. There is no evidence, so it is not written to any partition and its count appears in the sync summary.";
+        return;
+      }
+
+      labA.prev.textContent = "Session mode: " + hit.hint;
+      labA.result.textContent = PROFILE_NAMES[hit.profile];
+      labA.result.setAttribute("data-p", hit.profile);
+      labA.verdict.setAttribute("data-tone", "good");
+      labA.verdict.querySelector("b").textContent = "Attributed.";
+      labA.verdictText.textContent =
+        "This quest is written to the " + PARTITION_IDS[hit.profile] +
+        " partition, whatever profile is on screen.";
+    }
+
+    bindSegment(document.querySelector("#lab-a .seg"), "data-strategy", function (v) {
+      labA.strategy = v;
+      paintTimelineA();
+      updateLabA();
+    });
+    labA.range.addEventListener("input", updateLabA);
+    paintTimelineA();
+    updateLabA();
+
+    /* ================= Lab B: sync distributor ================= */
+
+    var FOLDERS = [
+      { name: "log_2026.08.09_20-10-00", mode: "Pve",       owner: "pve",    quest: "burning-rubber" },
+      { name: "log_2026.08.10_09-05-00", mode: "PvpSeason", owner: "season", quest: "first-in-line" },
+      { name: "log_2026.08.10_21-40-00", mode: "Regular",   owner: "pvp",    quest: "debut" },
+      { name: "log_2026.08.11_07-00-00", mode: null,        owner: null,     quest: "shortage" }
+    ];
+
+    var labB = {
+      selected: "season",
+      mode: "before",
+      tree: document.getElementById("distTree"),
+      parts: document.getElementById("distParts"),
+      verdict: document.getElementById("distVerdict")
+    };
+
+    function paintTree() {
+      labB.tree.innerHTML = "";
+      labB.tree.appendChild(el("div", "tree-root", "%EFT%/Logs/"));
+
+      FOLDERS.forEach(function (f) {
+        var box = el("div", "tree-folder");
+        box.setAttribute("data-p", f.owner || "none");
+        box.appendChild(el("div", "name", f.name + "/"));
+
+        var mode = el("span", "mode");
+        if (f.mode) {
+          mode.appendChild(document.createTextNode("  Session mode: "));
+          mode.appendChild(el("b", null, f.mode));
+        } else {
+          mode.appendChild(document.createTextNode("  "));
+          mode.appendChild(el("b", null, "no Session mode line"));
+        }
+        box.appendChild(mode);
+        box.appendChild(el("span", "evt", "  quest completed: " + f.quest));
+        labB.tree.appendChild(box);
+      });
+    }
+
+    function paintPartitions() {
+      var landing = { pvp: [], pve: [], season: [] };
+      var dropped = 0;
+
+      FOLDERS.forEach(function (f) {
+        if (labB.mode === "before") {
+          // Every event, attributed or not, followed the selection.
+          landing[labB.selected].push({ quest: f.quest, from: f.mode || "no mode", wrong: f.owner !== labB.selected });
+        } else if (f.owner) {
+          landing[f.owner].push({ quest: f.quest, from: f.mode, wrong: false });
+        } else {
+          dropped++;
+        }
+      });
+
+      labB.parts.innerHTML = "";
+      ["pvp", "pve", "season"].forEach(function (p) {
+        var card = el("div", "part");
+        card.setAttribute("data-p", p);
+
+        var head = el("div", "part-head");
+        head.appendChild(el("span", null, PROFILE_NAMES[p]));
+        head.appendChild(el("span", "count", String(landing[p].length)));
+        card.appendChild(head);
+
+        if (landing[p].length === 0) {
+          card.appendChild(el("div", "part-empty", "no rows written"));
+        } else {
+          var rows = el("div", "part-rows");
+          landing[p].forEach(function (r) {
+            var row = el("div", "row" + (r.wrong ? " is-wrong" : ""));
+            row.appendChild(el("span", null, r.quest));
+            row.appendChild(el("span", "src", r.from));
+            rows.appendChild(row);
+          });
+          card.appendChild(rows);
+        }
+        labB.parts.appendChild(card);
+      });
+
+      var misfiled = 0;
+      Object.keys(landing).forEach(function (p) {
+        landing[p].forEach(function (r) { if (r.wrong) misfiled++; });
+      });
+
+      if (labB.mode === "before") {
+        labB.verdict.setAttribute("data-tone", "bad");
+        labB.verdict.innerHTML = "";
+        labB.verdict.appendChild(el("b", null, misfiled + " of 4 quests misfiled."));
+        labB.verdict.appendChild(document.createTextNode(
+          "Everything landed in " + PROFILE_NAMES[labB.selected] +
+          ", including the event with no game mode in its logs. Nothing recorded which rows were wrong."));
+      } else {
+        labB.verdict.setAttribute("data-tone", "good");
+        labB.verdict.innerHTML = "";
+        labB.verdict.appendChild(el("b", null, "3 applied across 3 profiles, " + dropped + " dropped."));
+        labB.verdict.appendChild(document.createTextNode(
+          "Each quest reached the mode that produced it. The unattributable event was not guessed at; " +
+          "its count appears in the summary the dialog shows. The selection (" +
+          PROFILE_NAMES[labB.selected] + ") changed nothing."));
+      }
+    }
+
+    var segs = document.querySelectorAll("#lab-b .seg");
+    bindSegment(segs[0], "data-profile", function (v) { labB.selected = v; paintPartitions(); });
+    bindSegment(segs[1], "data-mode", function (v) { labB.mode = v; paintPartitions(); });
+    paintTree();
+    paintPartitions();
+
+    /* ================= Lab C: race stepper ================= */
+
+    var BEATS = [
+      { lane: 0, label: "Watcher reads \"Session mode: Pve\"" },
+      { lane: 0, label: "SetActiveProfile(PvE) assigns and raises" },
+      { lane: 1, label: "User ticks a quest on the season list" },
+      { lane: 2, label: "Reload for PvE finishes and publishes" }
+    ];
+
+    var labC = {
+      mode: "before",
+      step: 0,
+      lanes: document.getElementById("raceLanes"),
+      state: document.getElementById("raceState"),
+      verdict: document.getElementById("raceVerdict"),
+      stepBtn: document.getElementById("raceStep"),
+      resetBtn: document.getElementById("raceReset")
+    };
+
+    var LANE_NAMES = ["Log watcher", "UI thread", "Database"];
+
+    function paintLanes() {
+      labC.lanes.innerHTML = "";
+      LANE_NAMES.forEach(function (name, laneIndex) {
+        var lane = el("div", "lane");
+        lane.appendChild(el("div", "lane-name", name));
+        var track = el("div", "lane-track");
+        BEATS.forEach(function (b, i) {
+          var beat = el("div", "beat");
+          if (b.lane === laneIndex) {
+            beat.textContent = b.label;
+            if (i < labC.step) beat.className = "beat is-done";
+            if (i === labC.step - 1) beat.className = "beat is-on";
+          } else {
+            beat.innerHTML = "&nbsp;";
+            beat.style.visibility = "hidden";
+          }
+          track.appendChild(beat);
+        });
+        lane.appendChild(track);
+        labC.lanes.appendChild(lane);
+      });
+    }
+
+    function raceState() {
+      // Both versions start with the season profile loaded and displayed.
+      var globalProfile = labC.step >= 2 ? "pve" : "season";
+      var cacheProfile = labC.step >= 4 ? "pve" : "season";
+
+      // Frozen at beat 3, not recomputed: where the row went is a fact about the moment the
+      // edit was made. Recomputing it at beat 4 would quietly rewrite history.
+      // Before: the write asked the global, which had already moved at beat 2.
+      // After: the write took the ProfileId off the snapshot it derived the change from,
+      // which is still the season snapshot until beat 4 publishes.
+      var editTarget = labC.step >= 3 ? (labC.mode === "before" ? "pve" : "season") : null;
+
+      return { globalProfile: globalProfile, cacheProfile: cacheProfile, editTarget: editTarget };
+    }
+
+    function paintState() {
+      var s = raceState();
+      labC.state.innerHTML = "";
+
+      function stat(k, v, profile, alert) {
+        var box = el("div", "stat" + (alert ? " is-alert" : ""));
+        box.appendChild(el("p", "k", k));
+        var val = el("p", "v", v);
+        if (profile) val.setAttribute("data-p", profile);
+        box.appendChild(val);
+        return box;
+      }
+
+      if (labC.mode === "before") {
+        var split = s.globalProfile !== s.cacheProfile;
+        labC.state.appendChild(stat("ActiveProfileId (global)", PROFILE_NAMES[s.globalProfile], s.globalProfile, split));
+        labC.state.appendChild(stat("_questProgress holds", PROFILE_NAMES[s.cacheProfile], s.cacheProfile, split));
+      } else {
+        labC.state.appendChild(stat("snapshot.ProfileId", PROFILE_NAMES[s.cacheProfile], s.cacheProfile, false));
+        labC.state.appendChild(stat("snapshot.Quests", PROFILE_NAMES[s.cacheProfile] + " rows", s.cacheProfile, false));
+      }
+
+      labC.state.appendChild(stat(
+        "Edit written to",
+        s.editTarget ? PROFILE_NAMES[s.editTarget] : "nothing yet",
+        s.editTarget || null,
+        s.editTarget != null && s.editTarget !== "season"
+      ));
+
+      labC.verdict.innerHTML = "";
+      if (labC.step < 3) {
+        labC.verdict.setAttribute("data-tone", "good");
+        labC.verdict.appendChild(el("b", null, "Advance to beat 3."));
+        labC.verdict.appendChild(document.createTextNode(
+          "The interesting moment is the edit, made while the switch is still settling."));
+      } else if (labC.mode === "before") {
+        labC.verdict.setAttribute("data-tone", "bad");
+        labC.verdict.appendChild(el("b", null, "Written to PvE Zone. The player was looking at PvP Season."));
+        labC.verdict.appendChild(document.createTextNode(
+          "The global moved at beat 2; the cache does not move until beat 4. The write read the " +
+          "global, so it went to a profile whose rows were never on screen, and the quest " +
+          "disappears from the list once the reload lands."));
+      } else {
+        labC.verdict.setAttribute("data-tone", "good");
+        labC.verdict.appendChild(el("b", null, "Written to PvP Season, where the player made it."));
+        labC.verdict.appendChild(document.createTextNode(
+          "There is only one thing to read, and until beat 4 it is still the season snapshot. " +
+          "The switch changes what is displayed and nothing about where this row went."));
+      }
+    }
+
+    function repaintC() { paintLanes(); paintState(); labC.stepBtn.disabled = labC.step >= BEATS.length; }
+
+    labC.stepBtn.addEventListener("click", function () {
+      if (labC.step < BEATS.length) { labC.step++; repaintC(); }
+    });
+    labC.resetBtn.addEventListener("click", function () { labC.step = 0; repaintC(); });
+    bindSegment(document.querySelector("#lab-c .seg"), "data-race", function (v) { labC.mode = v; repaintC(); });
+    repaintC();
+
+    /* ================= Quiz gate ================= */
+
+    var QUESTIONS = [
+      {
+        q: "A sync runs while PvP Zone is selected. The retained logs contain a PvE session with one completed quest. Under the new code, which partition receives it?",
+        options: ["pvp, because that is the selected profile", "pve, from the Session mode line in that session's folder", "Both, so neither profile loses history", "None, because the selected profile does not match"],
+        answer: 1,
+        why: "The event carries an OwnerProfile derived from its own folder's Session mode timeline. The selection decides what is displayed, not where data goes. Writing to both would reproduce the mixing this change removes."
+      },
+      {
+        q: "A quest event is timestamped before the first Session mode line in its session folder. What happens to it?",
+        options: ["It is written to the permanent PvP profile as the safest default", "It is written to the profile of the next transition after it", "It is not written anywhere, and its count is reported in the sync summary", "Parsing rejects it, so it never becomes a QuestLogEvent"],
+        answer: 2,
+        why: "Resolve returns null, meaning no evidence. Parsing keeps the event so the count is available and a future consumer could decide differently; only the apply step drops it. Assigning a default is exactly the defect shape the app has already shipped once."
+      },
+      {
+        q: "Why is OwnerProfile stamped during parsing rather than at apply time?",
+        options: ["Apply time runs on a background thread where file access is unsafe", "At parse time the folder is still known, so one timeline is built per folder instead of per event, and every consumer receives an attributed event", "Because SourceFile is not populated until after the apply step", "To keep SyncResult from having to carry per-profile counts"],
+        answer: 1,
+        why: "At apply time the events are already flattened and each would have to find its folder again. Stamping at parse also means the live raid path gets attribution for free, which is how R4 is met without a second mechanism."
+      },
+      {
+        q: "The completion cascade now reads recorded-only status instead of the derived GetStatus. What does that buy, given the two are interchangeable here?",
+        options: ["It is faster, because GetStatus walks prerequisites recursively", "It removes profile-scoped SettingsService state from a planner that must run for a profile that is not the selected one", "It lets the cascade auto-complete quests that are level-locked", "It makes the cascade tolerant of a null snapshot"],
+        answer: 1,
+        why: "The core consults Status only through gates testing == Done and == Failed, and GetStatus reports those exactly when progress records them, so behaviour is unchanged. The point is that GetStatus also reads player level, faction and edition, all of which belong to the selected profile and would be wrong when planning for another one."
+      },
+      {
+        q: "Two profile switches land in quick succession. The reload for revision 1 finishes AFTER the reload for revision 2 has already published. What does revision 1 do?",
+        options: ["It publishes, because a later write always wins", "It merges its rows into the current snapshot", "It discards its result without publishing", "It re-runs itself against the newer profile"],
+        answer: 2,
+        why: "ReloadForProfileAsync compares its revision against the newest requested one and returns without publishing if it has been superseded. Publishing would leave the snapshot naming the newer profile while holding the older one's rows, which is precisely the split the snapshot exists to make impossible."
+      },
+      {
+        q: "The startup load passes notify: false. Remove that argument and what happens?",
+        options: ["The quest list renders stale data until the next edit", "Nothing visible; it only saves a redundant redraw", "The app deadlocks on launch", "ProgressChanged fires twice, double-counting statistics"],
+        answer: 2,
+        why: "Initialize runs the load with Task.Run(...).GetAwaiter().GetResult(), which blocks the dispatcher thread, while ProgressChanged subscribers marshal their refresh back to that same thread. The e2e test caught this; no unit test could, because the deadlock needs a real dispatcher."
+      },
+      {
+        q: "Sync now applies its result without the per-quest review dialog. What replaced the review step as the player's safeguard, and why was the review step not simply kept?",
+        options: ["Nothing replaced it; the risk was judged acceptable", "A per-profile summary, because the reviewer only ever saw quest names and no profile information, so the step could never catch this class of error anyway", "An undo button, because a bad sync is now reversible", "A confirmation prompt before the sync starts, because the range setting is now honoured"],
+        answer: 1,
+        why: "The review step existed because the player was the last defence against wrong attribution. It listed quest names with no profile, so it was structurally unable to catch a misfiled row. The PRD states the summary as a requirement rather than a nicety precisely because a bad sync is now harder to walk back."
+      },
+      {
+        q: "The source-scan guard bans ProfileService.Instance from the write-path files but permits ProfileService.GetProfileId. Why is that distinction the right one?",
+        options: ["GetProfileId is static, and static members cannot be mocked in tests", "Instance is expensive to construct on a watcher thread", "GetProfileId is a pure map over an argument the caller already decided; Instance reports the current selection, which is the input that was wrong", "Instance is obsolete and will be deleted in a follow-up"],
+        answer: 2,
+        why: "The defect was a question asked of the wrong source, not a wrong computation. Banning the type name would have banned the very helpers this change moved everything onto; banning the instance bans the ambient selection lookup, which is the actual hazard."
+      }
+    ];
+
+    var quizList = document.getElementById("quizList");
+    var answered = new Array(QUESTIONS.length).fill(null);
+
+    QUESTIONS.forEach(function (item, qi) {
+      var card = el("div", "q");
+      card.id = "q" + (qi + 1);
+
+      var head = el("div", "q-head");
+      head.appendChild(el("span", "q-num", String(qi + 1).padStart(2, "0")));
+      head.appendChild(el("p", "q-text", item.q));
+      card.appendChild(head);
+
+      var opts = el("div", "q-opts");
+      item.options.forEach(function (text, oi) {
+        var label = el("label", "opt");
+        var input = document.createElement("input");
+        input.type = "radio";
+        input.name = "q" + qi;
+        input.value = String(oi);
+        label.appendChild(input);
+        label.appendChild(el("span", null, text));
+        opts.appendChild(label);
+
+        input.addEventListener("change", function () {
+          answered[qi] = oi;
+          var correct = oi === item.answer;
+          card.setAttribute("data-state", correct ? "right" : "wrong");
+
+          Array.prototype.forEach.call(opts.children, function (child, ci) {
+            child.classList.remove("is-right", "is-wrong");
+            if (ci === item.answer && (correct || ci === oi)) child.classList.add("is-right");
+            if (ci === oi && !correct) child.classList.add("is-wrong");
+          });
+
+          why.innerHTML = "";
+          var p = el("p");
+          var word = el("span", "verdict-word", correct ? "Correct. " : "Not quite. ");
+          p.appendChild(word);
+          p.appendChild(document.createTextNode(item.why));
+          why.appendChild(p);
+
+          updateGate();
+        });
+      });
+      card.appendChild(opts);
+
+      var why = el("div", "q-why");
+      card.appendChild(why);
+
+      quizList.appendChild(card);
+    });
+
+    var gate = document.getElementById("gate");
+    var gateTitle = document.getElementById("gateTitle");
+    var gateBody = document.getElementById("gateBody");
+    var quizScore = document.getElementById("quizScore");
+    var railLabel = document.getElementById("railGateLabel");
+    var railHint = document.getElementById("railGateHint");
+    var railBar = document.getElementById("railGateBar");
+
+    var CHECKLIST = [
+      "Every new write path takes its partition as a parameter or off the snapshot it derived the change from.",
+      "No consumer of a null OwnerProfile substitutes a default anywhere.",
+      "The reload revision guard is present on every path that publishes a snapshot.",
+      "The per-profile summary names every profile the run wrote to.",
+      "Deleted helpers had no callers, and the behaviours they enforced are re-established elsewhere or provably unreachable.",
+      "The e2e test still asserts absence in the other partitions, not only presence in the right one."
+    ];
+
+    function updateGate() {
+      var correct = 0;
+      QUESTIONS.forEach(function (item, i) { if (answered[i] === item.answer) correct++; });
+
+      quizScore.textContent = correct + "/" + QUESTIONS.length;
+      railHint.textContent = correct + " of " + QUESTIONS.length + " correct";
+      railBar.style.width = (100 * correct / QUESTIONS.length) + "%";
+
+      if (correct === QUESTIONS.length) {
+        railLabel.textContent = "Gate open";
+        gate.className = "gate is-open";
+        gateTitle.textContent = "Approval checklist — unlocked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Eight of eight. You have the model; now check the diff against it. Walk these before approving:"));
+        var ul = el("ul");
+        CHECKLIST.forEach(function (line) { ul.appendChild(el("li", null, line)); });
+        gateBody.appendChild(ul);
+        var pre = el("pre", "approval",
+          "Reviewed PR #38 against docs/2026-08-profile-data-attribution-code-guide.html\n" +
+          "Comprehension gate: 8/8\n" +
+          "Checklist walked: attribution, null policy, revision guard, summary, deletions, e2e absence assertions");
+        gateBody.appendChild(pre);
+      } else {
+        railLabel.textContent = "Gate locked";
+        gate.className = "gate is-locked";
+        gateTitle.textContent = "Approval checklist — locked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Answer all eight questions correctly to unlock the reviewer checklist. " +
+          correct + " of " + QUESTIONS.length + " so far; wrong answers explain themselves, so re-read and revise."));
+      }
+    }
+
+    updateGate();
+  })();
+  </script>
+</body>
+</html>
