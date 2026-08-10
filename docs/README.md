@@ -35,6 +35,10 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
   제공하는 이벤트와 사용법
 - [2026-08-game-mode-selector-ux-review.html](2026-08-game-mode-selector-ux-review.html): 활성
   프로필 선택 UI의 UX 검토와 인터랙티브 개선안
+- [2026-08-profile-data-attribution-code-guide.html](2026-08-profile-data-attribution-code-guide.html):
+  진행도 귀속(attribution) 설계를 배경부터 따라가는 코드 가이드. 세션 모드 타임라인,
+  싱크 분배, 프로필 전환 경합을 직접 조작해 보는 인터랙티브 랩 3개와, 이해도를
+  검증하는 퀴즈 게이트를 포함합니다 (PR #38)
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
   마커 API 분석
 
