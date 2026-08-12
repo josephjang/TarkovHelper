@@ -218,6 +218,128 @@ public sealed class SessionModeTimelineTests : IDisposable
         Assert.Equal(new DateTime(2026, 8, 11, 10, 0, 0), timeline.Entries[^1].At);
     }
 
+    // The re-read must not double-count what it already had. Before the per-file reset the
+    // rebuild appended a second copy of every surviving transition, and Resolve then answered
+    // from whichever duplicate sorted last.
+    [Fact]
+    public void A_truncated_log_is_re_read_without_duplicating_its_transitions()
+    {
+        var folder = NewSessionFolder(
+            ModeLine("09:00:00.000", "Pve"),
+            ModeLine("09:01:00.000", "PvpSeason"),
+            ModeLine("09:02:00.000", "Regular"));
+        var logPath = Directory.GetFiles(folder, "*application*.log").Single();
+
+        var timeline = SessionModeTimeline.Build(folder);
+        Assert.Equal(3, timeline.Entries.Count);
+
+        // Shorter than the resume offset, and it still contains the first transition.
+        File.WriteAllLines(logPath, new[] { ModeLine("09:00:00.000", "Pve") });
+        timeline.Refresh();
+
+        var entry = Assert.Single(timeline.Entries);
+        Assert.Equal(SessionProfileHint.PveZone, entry.Hint);
+    }
+
+    // A truncation resets ONE file's offset. Clearing the whole timeline would drop the other
+    // logs in the folder, which were never rotated and will never be re-read.
+    [Fact]
+    public void A_truncated_log_does_not_discard_another_logs_transitions()
+    {
+        var folder = Path.Combine(_root, "rotating-session");
+        Directory.CreateDirectory(folder);
+        var rotated = Path.Combine(folder, "b application.log");
+        File.WriteAllLines(Path.Combine(folder, "a application.log"), new[] { ModeLine("09:00:00.000", "Pve") });
+        File.WriteAllLines(rotated, new[]
+        {
+            ModeLine("09:05:00.000", "PvpSeason"),
+            ModeLine("09:06:00.000", "Regular"),
+        });
+
+        var timeline = SessionModeTimeline.Build(folder);
+        Assert.Equal(3, timeline.Entries.Count);
+
+        File.WriteAllLines(rotated, new[] { ModeLine("09:07:00.000", "Pve") });
+        timeline.Refresh();
+
+        Assert.Equal(
+            new[] { SessionProfileHint.PveZone, SessionProfileHint.PveZone },
+            timeline.Entries.Select(e => e.Hint).ToArray());
+        // The untouched log's transition survived the other file's reset.
+        Assert.Equal(new DateTime(2026, 8, 11, 9, 0, 0), timeline.Entries[0].At);
+    }
+
+    // A single read is capped at MaxReadChunkBytes so no one call allocates a whole log. A sync
+    // builds its timeline once and throws it away, so stopping at the cap would leave every
+    // transition past the first few megabytes unread and resolve later quests to the mode that
+    // preceded them: confident misfiling, which is exactly what this attribution exists to stop.
+    [Fact]
+    public void A_transition_past_the_first_read_chunk_is_still_found()
+    {
+        var folder = Path.Combine(_root, "long-session");
+        Directory.CreateDirectory(folder);
+        var logPath = Path.Combine(folder, "long application.log");
+
+        var padding = "2026-08-11 09:00:00.000 123|1.1.0.46657|Info|application|" + new string('x', 200);
+        using (var writer = new StreamWriter(logPath))
+        {
+            // Past the cap, not merely near it: the entry has to be found by a LATER read.
+            var target = EftLogPatterns.MaxReadChunkBytes + 64 * 1024;
+            for (var written = 0L; written < target; written += padding.Length + Environment.NewLine.Length)
+            {
+                writer.WriteLine(padding);
+            }
+
+            writer.WriteLine(ModeLine("09:30:00.000", "PvpSeason"));
+        }
+
+        Assert.True(new FileInfo(logPath).Length > EftLogPatterns.MaxReadChunkBytes,
+            "the fixture log must be larger than one read chunk or this test proves nothing");
+
+        var timeline = SessionModeTimeline.Build(folder);
+
+        Assert.Equal(SessionProfileHint.PvpSeason, Assert.Single(timeline.Entries).Hint);
+        Assert.Equal(AppProfile.PvpSeason, timeline.Resolve(new DateTime(2026, 8, 11, 9, 31, 0)));
+    }
+
+    // The live path shares one timeline per session folder across watcher callbacks on the thread
+    // pool, so a Refresh rebuilding the list can overlap a Resolve walking it. Unsynchronized,
+    // that throws from the middle of a live quest-event batch and the raid is never recorded.
+    [Fact]
+    public async Task Refresh_and_Resolve_can_run_concurrently_on_one_timeline()
+    {
+        var folder = NewSessionFolder(ModeLine("09:00:00.000", "Pve"));
+        var logPath = Directory.GetFiles(folder, "*application*.log").Single();
+        var timeline = SessionModeTimeline.Build(folder);
+
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        var appender = Task.Run(() =>
+        {
+            var minute = 1;
+            while (!stop.IsCancellationRequested && minute < 400)
+            {
+                File.AppendAllText(logPath, ModeLine($"09:{minute % 60:00}:00.000", "PvpSeason") + Environment.NewLine);
+                timeline.Refresh();
+                minute++;
+            }
+        });
+
+        var resolver = Task.Run(() =>
+        {
+            while (!appender.IsCompleted)
+            {
+                timeline.Resolve(new DateTime(2026, 8, 11, 9, 30, 0));
+                _ = timeline.Entries.Count;
+            }
+        });
+
+        // Both tasks are awaited so an InvalidOperationException from either surfaces here rather
+        // than as an unobserved exception.
+        await Task.WhenAll(appender, resolver);
+        Assert.NotEmpty(timeline.Entries);
+    }
+
     // Several application logs in one folder are merged chronologically rather than concatenated
     // in name order.
     [Fact]

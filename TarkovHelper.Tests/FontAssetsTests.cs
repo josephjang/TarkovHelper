@@ -81,7 +81,7 @@ public sealed class FontAssetsTests
             var typeface = new Typeface(family, FontStyles.Normal, weight, FontStretches.Normal);
             Assert.True(typeface.TryGetGlyphTypeface(out var glyphTypeface),
                 $"{familyName} {weight} did not resolve to a glyph typeface");
-            // StyleSimulations.None proves this is a true cut — a missing Bold
+            // StyleSimulations.None proves this is a true cut: a missing Bold
             // face would resolve with BoldSimulation (the old Maplestory faux bold).
             Assert.Equal(StyleSimulations.None, glyphTypeface.StyleSimulations);
             Assert.Equal(weight, glyphTypeface.Weight);
@@ -89,7 +89,7 @@ public sealed class FontAssetsTests
     }
 
     [Theory]
-    // Bender owns Latin, digits, and Cyrillic in every chain — the same
+    // Bender owns Latin, digits, and Cyrillic in every chain, the same
     // scripts it serves in the game's own UI.
     [InlineData("Bender-Regular.otf", "ABCXYZ0189АяЁë№")]
     [InlineData("Bender-Bold.otf", "ABCXYZ0189АяЁë№")]
@@ -100,7 +100,7 @@ public sealed class FontAssetsTests
     // last-resort JA fallback (調査 appears in quest text). The six symbols are the
     // app's own status/direction glyphs (QuestListPage, MapQuestMarkerManager,
     // MapPage): neither Bender nor Play covers them, so in the EN/KO chain Noto is
-    // the only named family that can render them — a subset build (the ~10 MB option
+    // the only named family that can render them, and a subset build (the ~10 MB option
     // the PRD records as offered and declined) would leave them to blind fallback.
     [InlineData("NotoSansCJKkr-Regular.otf", "가한調査あア✓○▲▼↑↓")]
     [InlineData("NotoSansCJKkr-Bold.otf", "가한調査あア✓○▲▼↑↓")]
@@ -136,7 +136,7 @@ public sealed class FontAssetsTests
     [Fact]
     public void App_xaml_appfont_comes_from_fontstacks_default()
     {
-        // The compiled default must reference FontStacks.DefaultFamily via x:Static —
+        // The compiled default must reference FontStacks.DefaultFamily via x:Static,
         // the single source of truth for the chain string. A literal chain here would
         // reintroduce the two-copies drift this reference removed.
         var appXaml = File.ReadAllText(Path.Combine(TestRepo.Root(), "TarkovHelper", "App.xaml"));
@@ -183,7 +183,7 @@ public sealed class FontAssetsTests
         // The file-URI tests above prove the on-disk faces are valid; this proves the
         // csproj actually embeds them. Dropping a <Resource> entry (or renaming the
         // Fonts folder) would otherwise ship an app that silently renders in system
-        // fonts — WPF never throws for an unresolvable ./Fonts/#Family token.
+        // fonts, and WPF never throws for an unresolvable ./Fonts/#Family token.
         using var stream = typeof(App).Assembly.GetManifestResourceStream("TarkovHelper.g.resources");
         Assert.NotNull(stream);
 
@@ -288,7 +288,7 @@ public sealed class FontAssetsTests
     /// <summary>
     /// Row heights come from the composite chain's line box, which WPF takes from the
     /// *leading* family (Bender, 1.130 em). If a CJK face ever led a chain, every row in
-    /// the app would grow ~28% (Noto's line spacing is 1.448 em) — a silent, app-wide
+    /// the app would grow ~28% (Noto's line spacing is 1.448 em): a silent, app-wide
     /// layout change no other assertion here would catch.
     /// </summary>
     [Fact]
@@ -319,7 +319,7 @@ public sealed class FontAssetsTests
     [Theory]
     [InlineData("전체 타입 힣궯")]    // Hangul, including tall jamo clusters
     [InlineData("調査あアぱポ")]      // kanji + kana (quest text)
-    [InlineData("（）｛｝［］「」")]  // full-width brackets — the tallest ink in the CJK face
+    [InlineData("（）｛｝［］「」")]  // full-width brackets, the tallest ink in the CJK face
     public void Cjk_ink_stays_inside_the_chains_latin_ink_envelope(string cjkSample)
     {
         // Accented caps plus descenders: the tallest ink ordinary Latin/Cyrillic UI text
@@ -341,7 +341,7 @@ public sealed class FontAssetsTests
     /// <summary>
     /// Every font family the app names must be one of the three the design records: the
     /// app-wide chain (AppFont), the icon glyph font (IconFont), and the deliberate
-    /// Consolas map-coordinate readout — the two exceptions listed in the spec's
+    /// Consolas map-coordinate readout, the two exceptions listed in the spec's
     /// Non-Goals. The Maplestory word-ban above catches the face that was removed; this
     /// catches the next hardcoded face before it spreads to 160 sites.
     /// </summary>
@@ -376,7 +376,7 @@ public sealed class FontAssetsTests
     /// <summary>
     /// FontStacks.CreateFontFamily documents itself as the single construction path
     /// because a FontFamily built without FontStacks.PackBaseUri silently drops every
-    /// embedded ./Fonts/# face and falls back to system fonts — WPF never throws for an
+    /// embedded ./Fonts/# face and falls back to system fonts, and WPF never throws for an
     /// unresolvable token. Nothing enforced that invariant; this does.
     /// </summary>
     [Fact]

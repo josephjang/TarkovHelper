@@ -10,7 +10,7 @@ namespace TarkovHelper.Tests;
 /// the chip's label. Both matter more than usual now that the chip row is the quest
 /// tab's only status filter (feature-quest-chip-only-status-filter.md).
 ///
-/// Asserted against the XAML source text rather than a loaded ControlTemplate — the
+/// Asserted against the XAML source text rather than a loaded ControlTemplate, the
 /// same approach FontAssetsTests uses for asset declarations, and it keeps these
 /// tests out of the E2E category (no app launch, no STA thread).
 /// </summary>
@@ -36,8 +36,8 @@ public sealed class QuestStatusChipStyleTests
         Assert.False(string.IsNullOrEmpty(ring), "the chip template should declare a ChipHoverRing layer");
         // TemplateBinding Foreground, not a neutral theme resource: the chip's
         // Foreground is the single declaration of its status color (UpdateStatusChips
-        // never writes it), so the hover cue cannot drift away from the chip's identity
-        // — and a neutral hover fill would visually "unfill" the selected chip.
+        // never writes it), so the hover cue cannot drift away from the chip's identity,
+        // and a neutral hover fill would visually "unfill" the selected chip.
         Assert.Contains("{TemplateBinding Foreground}", ring);
         // Hidden at rest; only the IsMouseOver trigger raises it.
         Assert.Contains("Opacity=\"0\"", ring);
@@ -51,7 +51,7 @@ public sealed class QuestStatusChipStyleTests
 
         Assert.False(string.IsNullOrEmpty(trigger), "the chip template should have an IsMouseOver trigger");
         // Opacity composites the whole visual subtree, so setting it on ChipBorder (the
-        // ContentPresenter's ancestor) fades the label too — ChipLocked's already-low
+        // ContentPresenter's ancestor) fades the label too: ChipLocked's already-low
         // 3.78:1 contrast drops to 3.09:1 and the chip reads as disabled rather than
         // hovered. The hover layers are siblings of the label instead.
         Assert.DoesNotContain("TargetName=\"ChipBorder\"", trigger);

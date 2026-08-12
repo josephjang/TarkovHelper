@@ -17,8 +17,19 @@ namespace TarkovHelper.Services
 
         private HideoutProgressService()
         {
-            ProfileService.Instance.ActiveProfileChanged += (_, _) => _ = ReloadForProfileAsync();
+            // The event's own profile and revision are carried into the reload. Discarding them
+            // and re-reading ProfileService inside the async body is how the quest cache used to
+            // file one profile's rows under another's id: the reads happen after an await, by
+            // which time a second transition may have landed.
+            ProfileService.Instance.ActiveProfileChanged += (_, e) => _ = ReloadForProfileAsync(e.Profile, e.Revision);
         }
+
+        /// <summary>
+        /// The highest reload revision requested so far. A load that finishes after a newer one
+        /// was requested discards its result instead of publishing rows for a profile the user
+        /// has already navigated away from (the same guard QuestProgressService uses).
+        /// </summary>
+        private long _latestRevision;
 
         // Currency items should count by reference count, not total amount
         private static readonly HashSet<string> CurrencyItems = new(StringComparer.OrdinalIgnoreCase)
@@ -113,15 +124,18 @@ namespace TarkovHelper.Services
 
         private void SaveSingleModule(string normalizedName, int level)
         {
+            // Resolved before the Task.Run body, not inside it: a profile switch between
+            // scheduling and running would otherwise redirect this row to the new profile.
+            var profileId = ProfileService.Instance.ActiveProfileId;
             Task.Run(async () =>
             {
                 try
                 {
-                    await _userDataDb.SaveHideoutProgressAsync(normalizedName, level, ProfileService.Instance.ActiveProfileId);
+                    await _userDataDb.SaveHideoutProgressAsync(normalizedName, level, profileId);
                 }
                 catch (Exception ex)
                 {
-                    _log.Error($"Save failed: {ex.Message}");
+                    _log.Error($"Save failed for {normalizedName} in {profileId}", ex);
                 }
             }).GetAwaiter().GetResult();
         }
@@ -297,15 +311,19 @@ namespace TarkovHelper.Services
         public void ResetAllProgress()
         {
             _progress = new HideoutProgress();
+
+            // Resolved before the Task.Run body: a switch between scheduling and running would
+            // otherwise clear the profile the user just moved to instead of the one they reset.
+            var profileId = ProfileService.Instance.ActiveProfileId;
             Task.Run(async () =>
             {
                 try
                 {
-                    await _userDataDb.ClearAllHideoutProgressAsync(ProfileService.Instance.ActiveProfileId);
+                    await _userDataDb.ClearAllHideoutProgressAsync(profileId);
                 }
                 catch (Exception ex)
                 {
-                    _log.Error($"Reset failed: {ex.Message}");
+                    _log.Error($"Reset failed for {profileId}", ex);
                 }
             }).GetAwaiter().GetResult();
             ProgressChanged?.Invoke(this, EventArgs.Empty);
@@ -313,53 +331,57 @@ namespace TarkovHelper.Services
 
         #region Persistence
 
-        private void SaveProgress()
-        {
-            // DB에 저장 (Task.Run으로 데드락 방지)
-            Task.Run(async () => await SaveProgressToDbAsync()).GetAwaiter().GetResult();
-        }
-
-        private async Task SaveProgressToDbAsync()
-        {
-            try
-            {
-                foreach (var kvp in _progress.Modules)
-                {
-                    await _userDataDb.SaveHideoutProgressAsync(kvp.Key, kvp.Value, ProfileService.Instance.ActiveProfileId);
-                }
-            }
-            catch (Exception ex)
-            {
-                _log.Error($"Save failed: {ex.Message}");
-            }
-        }
-
+        /// <summary>
+        /// Loads the selected profile's rows during startup initialization: the one load with no
+        /// <see cref="ProfileService.ActiveProfileChanged"/> to learn the profile from. The
+        /// profile and revision come from one atomic read, so a transition landing between them
+        /// cannot pair the old profile with the new revision, and the load goes through the same
+        /// staleness guard as every later reload.
+        /// </summary>
         private void LoadProgress()
         {
             // Task.Run으로 데드락 방지
             // 마이그레이션은 MainWindow에서 먼저 수행됨
+            var (profile, revision) = ProfileService.Instance.CurrentTransition;
             Task.Run(async () =>
             {
-                await LoadProgressFromDbAsync();
+                await LoadProgressFromDbAsync(ProfileService.GetProfileId(profile), revision);
             }).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Reload hideout progress for the active game mode and notify the UI.
-        /// Called when the user switches profiles.
+        /// Reload hideout progress for <paramref name="profile"/> and notify the UI. Called when
+        /// the user (or log detection) switches profiles.
+        /// <para>
+        /// The profile is a parameter and is turned into a storage id before the first await:
+        /// re-reading the selection inside the async body made a reload that started for one
+        /// profile finish by publishing another's rows. <paramref name="revision"/> is the
+        /// transition this load serves, so a load that loses a race discards itself instead of
+        /// publishing over the newer one.
+        /// </para>
         /// </summary>
-        public async Task ReloadForProfileAsync()
+        public async Task ReloadForProfileAsync(AppProfile profile, long revision)
         {
-            await LoadProgressFromDbAsync();
+            var profileId = ProfileService.GetProfileId(profile);
+            if (!await LoadProgressFromDbAsync(profileId, revision)) return;
+
             ProgressChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        private async Task LoadProgressFromDbAsync()
+        /// <summary>
+        /// Reads <paramref name="profileId"/>'s rows and publishes them, unless a newer
+        /// transition was requested while the read was in flight. Returns false when the result
+        /// was discarded as stale.
+        /// </summary>
+        private async Task<bool> LoadProgressFromDbAsync(string profileId, long revision)
         {
+            ClaimRevision(revision);
+
+            HideoutProgress loaded;
             try
             {
-                var modules = await _userDataDb.LoadHideoutProgressAsync(ProfileService.Instance.ActiveProfileId);
-                _progress = new HideoutProgress
+                var modules = await _userDataDb.LoadHideoutProgressAsync(profileId);
+                loaded = new HideoutProgress
                 {
                     Modules = new Dictionary<string, int>(modules, StringComparer.OrdinalIgnoreCase),
                     LastUpdated = DateTime.UtcNow
@@ -367,8 +389,31 @@ namespace TarkovHelper.Services
             }
             catch (Exception ex)
             {
-                _log.Error($"Load failed: {ex.Message}");
-                _progress = new HideoutProgress();
+                // An unreadable store must not leave the previous profile's levels on screen
+                // under the new profile's name: publish empty, which is what "nothing built"
+                // means.
+                _log.Error($"Load failed for {profileId}", ex);
+                loaded = new HideoutProgress();
+            }
+
+            if (Interlocked.Read(ref _latestRevision) != revision)
+            {
+                _log.Debug($"Discarding stale hideout load for {profileId} (revision {revision})");
+                return false;
+            }
+
+            _progress = loaded;
+            return true;
+        }
+
+        /// <summary>Raises <see cref="_latestRevision"/> to <paramref name="revision"/> if it is newer.</summary>
+        private void ClaimRevision(long revision)
+        {
+            while (true)
+            {
+                var current = Interlocked.Read(ref _latestRevision);
+                if (revision <= current) return;
+                if (Interlocked.CompareExchange(ref _latestRevision, revision, current) == current) return;
             }
         }
 

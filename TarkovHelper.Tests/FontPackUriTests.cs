@@ -9,14 +9,14 @@ namespace TarkovHelper.Tests;
 /// <summary>
 /// Guards the half of the font stack the string and asset tests cannot see: that the
 /// chains' relative ./Fonts/#Family tokens actually RESOLVE to the embedded faces
-/// through a pack URI. WPF never throws for an unresolvable token — it substitutes a
-/// system font silently — so a renamed Fonts folder, a misspelt family, or a wrong base
+/// through a pack URI. WPF never throws for an unresolvable token: it substitutes a
+/// system font silently, so a renamed Fonts folder, a misspelt family, or a wrong base
 /// URI would otherwise ship green and render in Segoe UI.
 ///
 /// Addressing: in the running app WPF pins Application.ResourceAssembly to TarkovHelper,
 /// so pack://application:,,,/ already means "this app's resources". The test host's
 /// entry assembly is testhost, so the same resources are named explicitly with the
-/// ;component form — derived from FontStacks.PackBaseUri, so a wrong scheme or
+/// ;component form, derived from FontStacks.PackBaseUri, so a wrong scheme or
 /// authority there fails here too.
 /// </summary>
 public sealed class FontPackUriTests
@@ -27,7 +27,7 @@ public sealed class FontPackUriTests
     {
         // Touching the Application type runs the WPF initialization that registers
         // pack:// request handling; without it every pack URI below resolves to
-        // nothing — silently, because font resolution never throws.
+        // nothing, silently, because font resolution never throws.
         _ = System.Windows.Application.ResourceAssembly;
         return new Uri(FontStacks.PackBaseUri, typeof(App).Assembly.GetName().Name + ";component/");
     }

@@ -11,7 +11,7 @@ namespace TarkovHelper.Tests;
 ///
 /// Scope rules: the eleven documents flattened from the old active/ folder keep
 /// their legacy format and are exempted by a closed allowlist (the set can never
-/// grow — active/ is gone); archive/ is frozen history and out of scope entirely;
+/// grow, active/ is gone); archive/ is frozen history and out of scope entirely;
 /// feature-decision-docs-process.spec.md is excluded from the path-resolution check
 /// because it records the removed active/ paths and the deleted template by design
 /// (mirroring verification checks 4–5 in that spec).

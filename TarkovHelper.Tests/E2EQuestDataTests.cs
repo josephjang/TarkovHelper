@@ -11,8 +11,8 @@ namespace TarkovHelper.Tests;
 ///
 /// Each fact also runs the found quests through the app's OWN cascade traversal
 /// (<see cref="QuestProgressService.ComputeCompletionCascade"/>) so the SQL's
-/// guarantees — "exactly one completion, zero failures", "empty cascade", "exactly
-/// one failure" — are checked against the real rules, not just re-stated in SQL.
+/// guarantees ("exactly one completion, zero failures", "empty cascade", "exactly
+/// one failure") are checked against the real rules, not just re-stated in SQL.
 /// </summary>
 public sealed class E2EQuestDataTests
 {
@@ -31,7 +31,7 @@ public sealed class E2EQuestDataTests
                 TaskById = QuestDbService.Instance.GetQuestById,
                 TaskByName = QuestDbService.Instance.GetQuestByNormalizedName,
                 // Fresh profile: the real GetStatus reports Done/Failed only from recorded
-                // progress, and the core distinguishes only Done/Failed — Active is faithful.
+                // progress, and the core distinguishes only Done/Failed, so Active is faithful.
                 Status = _ => QuestStatus.Active,
                 RecordedStatus = _ => null,
             });
@@ -53,7 +53,7 @@ public sealed class E2EQuestDataTests
         Assert.Equal(new[] { prereqName }, c.Prereqs);
         Assert.Empty(c.Failures);
 
-        // ...and completing the prerequisite cascades nothing at all — the
+        // ...and completing the prerequisite cascades nothing at all: the
         // dialog-free guarantee QuestNavigationE2ETests depends on.
         var p = Cascade(prereqName);
         Assert.Empty(p.Prereqs);

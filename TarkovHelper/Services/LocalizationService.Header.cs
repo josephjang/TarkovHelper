@@ -76,7 +76,7 @@ public partial class LocalizationService
     /// The localized name of a profile, for anything that names one to the user: the selector,
     /// the automatic-transition announcement, and the sync summary. Throws rather than aliasing
     /// an unmapped profile onto another's name, matching the profile-keyed maps in
-    /// <see cref="ProfileService"/> — a summary that silently labelled a new profile "PvP Zone"
+    /// <see cref="ProfileService"/>. A summary that silently labelled a new profile "PvP Zone"
     /// would tell the player their data went somewhere it did not.
     /// </summary>
     public string ProfileName(AppProfile profile) => profile switch
@@ -217,7 +217,7 @@ public partial class LocalizationService
 
     /// <summary>
     /// Tooltip on the (red-tinted) idle version chip when the most recent update
-    /// check failed — the title bar's only failure signal.
+    /// check failed: the title bar's only failure signal.
     /// </summary>
     public string HeaderVersionTooltipCheckFailed => CurrentLanguage switch
     {
@@ -304,9 +304,9 @@ public partial class LocalizationService
 
     #endregion
 
-    #region Settings — pre-existing rows (migrated from inline switches in MainWindow)
+    #region Settings: pre-existing rows (migrated from inline switches in MainWindow)
 
-    // The overlay title reuses the Core "Settings" property — same string, one source.
+    // The overlay title reuses the Core "Settings" property: same string, one source.
 
     public string SettingsLogFolderLabel => CurrentLanguage switch
     {
@@ -345,7 +345,7 @@ public partial class LocalizationService
 
     #endregion
 
-    #region Settings — Language / Support / Update / Danger Zone
+    #region Settings: Language / Support / Update / Danger Zone
 
     public string SettingsLanguageLabel => CurrentLanguage switch
     {

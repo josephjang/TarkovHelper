@@ -429,5 +429,13 @@ public partial class LocalizationService
         _ => "{0} quest records were applied from your choices."
     };
 
+    /// <summary>{0} = the localized names of the profiles whose write failed.</summary>
+    public string SyncApplyFailedFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO => "저장하지 못한 프로필: {0}. 로그를 확인한 뒤 다시 동기화해 주세요.",
+        AppLanguage.JA => "保存できなかったプロフィール: {0}。ログを確認して再度同期してください。",
+        _ => "Could not save to: {0}. Check the log and run the sync again."
+    };
+
     #endregion
 }

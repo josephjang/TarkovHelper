@@ -7,7 +7,7 @@ namespace TarkovHelper.Tests;
 /// Guards the quest page's detail-panel width rule (see
 /// feature-quest-overview-filters.spec.md): the persisted width is held inside the
 /// settings bounds AND capped to what the current window can show. This is the unit
-/// cover for the splitter save/restore path the spec records as not e2e-automatable —
+/// cover for the splitter save/restore path the spec records as not e2e-automatable:
 /// dragging an 8px transparent GridSplitter with a real mouse is too brittle for UIA.
 /// </summary>
 public sealed class QuestListLayoutTests

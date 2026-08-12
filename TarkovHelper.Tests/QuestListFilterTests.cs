@@ -133,7 +133,7 @@ public sealed class QuestListFilterTests
         Assert.True(QuestListFilter.Matches(vm, AllCriteria(trader: "Prapor")));
         Assert.False(QuestListFilter.Matches(vm, AllCriteria(trader: "Therapist")));
         // The trader combo is populated from the same task data, so exact match is the
-        // contract — a differently-cased value must not match.
+        // contract: a differently-cased value must not match.
         Assert.False(QuestListFilter.Matches(vm, AllCriteria(trader: "prapor")));
     }
 
@@ -190,11 +190,11 @@ public sealed class QuestListFilterTests
         Assert.Equal(string.Empty, AllCriteria().NormalizedSearchText);
     }
 
-    // The production chip-tag list (All first) — the count tests iterate exactly the
+    // The production chip-tag list (All first). The count tests iterate exactly the
     // tags UpdateStatusChips hands to CountByStatusTag, so every count invariant they
     // pin (Locked includes LevelLocked, the faction/Unavailable exception, per-tag
     // equality with Matches) now covers the All tag too. Only the three tests that
-    // index counts["All"] assert its VALUE, though — see
+    // index counts["All"] assert its VALUE, though: see
     // All_chip_count_is_the_All_click_preview_not_the_sum_or_the_total.
     // The independent oracle for WHICH tags belong lives in
     // Chip_tags_are_exactly_All_plus_every_status_except_LevelLocked_in_display_order.
@@ -245,7 +245,7 @@ public sealed class QuestListFilterTests
     [Fact]
     public void Chip_counts_do_not_depend_on_the_currently_selected_status_tag()
     {
-        // Each count substitutes its own tag, so the selected status must not leak in —
+        // Each count substitutes its own tag, so the selected status must not leak in:
         // the chips are click-previews, identical whichever chip is active now.
         var vms = new List<QuestViewModel>
         {
@@ -327,7 +327,7 @@ public sealed class QuestListFilterTests
     public void Chip_counts_equal_the_per_tag_Matches_count_for_every_tag()
     {
         // The single-pass CountByStatusTag must stay exactly "what Matches would say if
-        // this tag were selected" — including the Locked+LevelLocked merge and the
+        // this tag were selected", including the Locked+LevelLocked merge and the
         // faction/Unavailable exception, which the one-pass form evaluates separately.
         var vms = new List<QuestViewModel>
         {
@@ -357,7 +357,7 @@ public sealed class QuestListFilterTests
         var counts = QuestListFilter.CountByStatusTag(
             new List<QuestViewModel>(), AllCriteria(), AllStatusTags);
 
-        // Every requested tag gets a key even with nothing to count — UpdateStatusChips
+        // Every requested tag gets a key even with nothing to count, because UpdateStatusChips
         // indexes counts[tag] for each chip and would throw on a missing key.
         Assert.Equal(AllStatusTags.Length, counts.Count);
         Assert.All(AllStatusTags, tag => Assert.Equal(0, counts[tag]));
@@ -386,7 +386,7 @@ public sealed class QuestListFilterTests
         // that order") and is what QuestListPage.BuildStatusChips pins the chip row to,
         // so it is asserted as a sequence, not a set.
         //
-        // The expected list is spelled out literally on purpose — an oracle derived
+        // The expected list is spelled out literally on purpose: an oracle derived
         // from ChipTags itself could only ever agree with it.
         Assert.Equal(
             new[] { "All", "Active", "Locked", "Done", "Failed", "Unavailable" },
@@ -408,7 +408,7 @@ public sealed class QuestListFilterTests
     public void Coerce_keeps_known_tags_and_widens_everything_else_to_All()
     {
         // The restore-time policy: an unrecognized persisted tag must widen to the
-        // permissive "All", never narrow to the "Active" fresh-install default — a
+        // permissive "All", never narrow to the "Active" fresh-install default, since a
         // narrowing fallback would hide quests the user had chosen to see.
         foreach (var tag in QuestStatusTags.ChipTags)
         {
@@ -434,7 +434,7 @@ public sealed class QuestListFilterTests
         Assert.Equal(QuestStatusTags.All, QuestStatusTags.NextTag(currentTag: "Done", clickedTag: "Done"));
 
         // The All chip is not special-cased: clicking it while it is selected resolves
-        // to All, i.e. no change — which is what makes StatusChip_Click's
+        // to All, i.e. no change, which is what makes StatusChip_Click's
         // unchanged-tag guard turn that click into a true no-op (PRD R3), with no
         // refilter, no list rebuild and no settings write.
         Assert.Equal(QuestStatusTags.All,
@@ -496,7 +496,7 @@ public sealed class QuestListFilterTests
         Assert.False(QuestStatusTags.IsKnown(null));
         Assert.False(QuestStatusTags.IsKnown("active")); // ordinal, not case-insensitive
         // LevelLocked is a real QuestStatus that MatchesStatusTag would happily filter
-        // by, but it has no chip — so it is deliberately NOT a persistable tag.
+        // by, but it has no chip, so it is deliberately NOT a persistable tag.
         Assert.False(QuestStatusTags.IsKnown(nameof(QuestStatus.LevelLocked)));
     }
 

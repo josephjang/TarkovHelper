@@ -3,7 +3,7 @@ using System.IO;
 namespace TarkovHelper.Tests;
 
 /// <summary>
-/// Unit guards for AppDriver.RemoveLegacyLanguageOverride — the harness step that
+/// Unit guards for AppDriver.RemoveLegacyLanguageOverride, the harness step that
 /// deletes a leftover legacy Data\settings.json next to the app under test so a
 /// stale language override cannot flip e2e text assertions to KO/JA (see the
 /// helper's own doc-comment for why TARKOVHELPER_CONFIG_PATH cannot isolate it).
@@ -38,7 +38,7 @@ public sealed class E2EHarnessIsolationTests : IDisposable
     public void Is_a_no_op_when_the_file_is_already_gone()
     {
         // Data\ exists but holds no settings.json (the state right after a first
-        // app launch migrated and deleted it) — a second call must not throw.
+        // app launch migrated and deleted it): a second call must not throw.
         Directory.CreateDirectory(Path.Combine(_appDir, "Data"));
 
         AppDriver.RemoveLegacyLanguageOverride(_appDir);

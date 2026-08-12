@@ -11,7 +11,7 @@ namespace TarkovHelper.Services;
 /// <para>
 /// Every method takes an explicit <c>profileId</c>. None of them may consult
 /// <see cref="ProfileService"/>: the partition key is an argument, never ambient state.
-/// Full dependency injection is deliberately not attempted here (ARC-1 stays open) — this is
+/// Full dependency injection is deliberately not attempted here (ARC-1 stays open). This is
 /// the minimum seam that makes the guards writable.
 /// </para>
 /// </summary>

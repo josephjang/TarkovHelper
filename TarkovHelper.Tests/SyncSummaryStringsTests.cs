@@ -17,6 +17,7 @@ public sealed class SyncSummaryStringsTests
         "SyncSummaryTitle", "SyncAppliedHeader", "SyncAppliedCountFormat", "SyncAppliedNone",
         "SyncStatsFormat", "SyncAlternativesHeaderFormat", "SyncAlternativeGroupFormat",
         "SyncSummaryConfirmButton", "SyncSummarySkipButton", "SyncAlternativesAppliedFormat",
+        "SyncApplyFailedFormat",
     };
 
     /// <summary>Key to the highest {n} slot its callers pass, so a dropped slot fails here.</summary>
@@ -27,6 +28,7 @@ public sealed class SyncSummaryStringsTests
         ("SyncAlternativesHeaderFormat", 1),
         ("SyncAlternativeGroupFormat", 2),
         ("SyncAlternativesAppliedFormat", 1),
+        ("SyncApplyFailedFormat", 1),
     };
 
     private static string GetString(LocalizationService loc, string key)

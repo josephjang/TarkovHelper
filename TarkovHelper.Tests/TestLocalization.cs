@@ -1,5 +1,3 @@
-using System.Reflection;
-using System.Runtime.CompilerServices;
 using TarkovHelper.Services;
 
 namespace TarkovHelper.Tests;
@@ -15,11 +13,8 @@ internal static class TestLocalization
 {
     internal static LocalizationService WithLanguage(AppLanguage language)
     {
-        var loc = (LocalizationService)RuntimeHelpers.GetUninitializedObject(typeof(LocalizationService));
-        var field = typeof(LocalizationService)
-            .GetField("_currentLanguage", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.NotNull(field);
-        field!.SetValue(loc, language);
+        var loc = TestReflection.Uninitialized<LocalizationService>();
+        TestReflection.SetPrivateField(loc, "_currentLanguage", language);
         return loc;
     }
 }

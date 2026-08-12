@@ -51,6 +51,14 @@ namespace TarkovHelper.Services
         private readonly object _timelineLock = new();
 
         /// <summary>
+        /// Store used to read each owning profile's saved rows during a sync. Internal and
+        /// settable so tests can substitute a fake: a sync spans several profiles and at most
+        /// one of them is loaded in memory, so "already recorded?" has to be answered from
+        /// storage, per profile.
+        /// </summary>
+        internal IQuestProgressStore Store { get; set; } = UserDataDbService.Instance;
+
+        /// <summary>
         /// Event fired when a quest event is detected from logs
         /// </summary>
         public event EventHandler<QuestLogEvent>? QuestEventDetected;
@@ -207,14 +215,6 @@ namespace TarkovHelper.Services
         // carrying another test's cached timelines would make that answer depend on test order.
         internal LogSyncService() { }
 
-        /// <summary>
-        /// Store used to read each owning profile's saved rows during a sync. Internal and
-        /// non-readonly so tests can substitute a fake: a sync spans several profiles and at most
-        /// one of them is loaded in memory, so "already recorded?" has to be answered from
-        /// storage, per profile.
-        /// </summary>
-        internal IQuestProgressStore _store = UserDataDbService.Instance;
-
         #region Log File Monitoring
 
         /// <summary>
@@ -251,7 +251,7 @@ namespace TarkovHelper.Services
                     // Map detection watcher (application logs).
                     //
                     // NOTE: this filter, and the two Directory.GetFiles calls that share it,
-                    // match nothing against real EFT logs -- they are named
+                    // match nothing against real EFT logs: they are named
                     // "<date>_<time>_<version> application.log", so the pattern needs a leading
                     // wildcard (see EftLogPatterns / SessionModeTimeline, which use
                     // "*application*.log"). This whole map path is dead as a result: MapDetected
@@ -565,23 +565,51 @@ namespace TarkovHelper.Services
                 // Attribute against the session folder this notification log lives in, refreshed
                 // first so a mode line written moments ago is already in the timeline.
                 var timeline = LiveTimelineFor(filePath);
+                var dropped = 0;
 
                 foreach (var evt in events)
                 {
-                    evt.OwnerProfile = timeline?.Resolve(evt.Timestamp);
+                    evt.OwnerProfile = ResolveOwner(timeline, evt);
 
                     // Only fire for recent events (within last minute)
-                    if ((DateTime.Now - evt.Timestamp).TotalMinutes < 1)
+                    if ((DateTime.Now - evt.Timestamp).TotalMinutes >= 1) continue;
+
+                    // PRD R3: an event with no session mode evidence has no destination, so it is
+                    // never raised. Dropping it here rather than at each subscriber is what makes
+                    // the rule enforceable: a consumer that forgets the null check cannot record
+                    // it under whatever profile happens to be selected.
+                    if (evt.OwnerProfile == null)
                     {
-                        QuestEventDetected?.Invoke(this, evt);
+                        dropped++;
+                        continue;
                     }
+
+                    QuestEventDetected?.Invoke(this, evt);
+                }
+
+                if (dropped > 0)
+                {
+                    _log.Warning(
+                        $"Dropped {dropped} live quest events with no session mode evidence in " +
+                        $"{Path.GetDirectoryName(filePath)}");
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore errors during live monitoring
+                // A swallowed failure here is invisible: the whole batch of live quest events is
+                // lost and the player only finds out when a finished raid never registers.
+                _log.Warning($"Failed to process live quest events from {filePath}: {ex}");
             }
         }
+
+        /// <summary>
+        /// The profile a parsed event belongs to, or null when nothing says. An event whose log
+        /// block carried no <c>dt</c> has no real time to look up, so it is left unattributed
+        /// instead of being resolved against a substituted "now", which would return whatever mode
+        /// the folder ended in.
+        /// </summary>
+        private static AppProfile? ResolveOwner(SessionModeTimeline? timeline, QuestLogEvent evt)
+            => evt.HasTimestamp ? timeline?.Resolve(evt.Timestamp) : null;
 
         /// <summary>
         /// The live timeline for the session folder holding <paramref name="notificationLogPath"/>,
@@ -621,11 +649,20 @@ namespace TarkovHelper.Services
         /// attribution has to be per event. It happens here, at parse time, rather than at apply
         /// time: here the folder each event came from is still known, so one timeline is built
         /// per folder instead of per event, and every consumer of a
-        /// <see cref="QuestLogEvent"/> — present or future — receives it already attributed
+        /// <see cref="QuestLogEvent"/> (present or future) receives it already attributed
         /// rather than having to remember to resolve it.
         /// </para>
         /// </summary>
-        public async Task<List<QuestLogEvent>> ParseLogDirectoryAsync(string logFolderPath, IProgress<string>? progress = null)
+        /// <param name="logFolderPath">Root folder holding EFT's session folders.</param>
+        /// <param name="progress">Progress reporter.</param>
+        /// <param name="daysRange">
+        /// Number of days to look back, 0 for all. Applied to the SESSION FOLDERS, before any of
+        /// them is read: building a timeline means reading a session's whole application log, so
+        /// filtering only the parsed events afterwards made "last 7 days" cost the same as "all"
+        /// while the player waits behind a modal overlay.
+        /// </param>
+        public async Task<List<QuestLogEvent>> ParseLogDirectoryAsync(
+            string logFolderPath, IProgress<string>? progress = null, int daysRange = 0)
         {
             var allEvents = new List<QuestLogEvent>();
 
@@ -636,6 +673,18 @@ namespace TarkovHelper.Services
             var logFiles = Directory.GetFiles(logFolderPath, "*push-notifications*.log", SearchOption.AllDirectories)
                 .OrderBy(f => File.GetLastWriteTime(f))
                 .ToList();
+
+            if (daysRange > 0)
+            {
+                var cutoff = DateTime.Now.AddDays(-daysRange);
+                var discovered = logFiles.Count;
+                logFiles = logFiles.Where(f => IsWithinCutoff(f, cutoff)).ToList();
+                if (logFiles.Count < discovered)
+                {
+                    _log.Debug(
+                        $"Skipping {discovered - logFiles.Count} of {discovered} log files older than {cutoff:yyyy-MM-dd}");
+                }
+            }
 
             progress?.Report($"Found {logFiles.Count} log files");
 
@@ -664,7 +713,7 @@ namespace TarkovHelper.Services
 
                     foreach (var evt in events)
                     {
-                        evt.OwnerProfile = timeline?.Resolve(evt.Timestamp);
+                        evt.OwnerProfile = ResolveOwner(timeline, evt);
                     }
 
                     allEvents.AddRange(events);
@@ -682,6 +731,56 @@ namespace TarkovHelper.Services
             allEvents = allEvents.OrderBy(e => e.Timestamp).ToList();
 
             return allEvents;
+        }
+
+        /// <summary>
+        /// EFT names a session folder <c>log_&lt;yyyy.MM.dd&gt;_&lt;HH-mm-ss&gt;_&lt;version&gt;</c>,
+        /// e.g. <c>log_2026.08.12_21-03-11_1.1.0.46657</c>. Only the leading date and time are
+        /// matched, because the version tail varies and is not needed.
+        /// </summary>
+        private static readonly System.Text.RegularExpressions.Regex SessionFolderStampRegex = new(
+            @"^log_(\d{4}\.\d{2}\.\d{2}_\d{2}-\d{2}-\d{2})",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private const string SessionFolderStampFormat = "yyyy.MM.dd_HH-mm-ss";
+
+        /// <summary>
+        /// Whether a notification log may still hold events at or after <paramref name="cutoff"/>.
+        /// <para>
+        /// Deliberately generous: it prunes work, so an unfamiliar folder name, an unreadable
+        /// timestamp, or a session that started before the cutoff and ran past it must all keep
+        /// the file. A session's own end is its log's last write, so that is the primary test;
+        /// the folder name's start stamp is the fallback for when the file time is unavailable.
+        /// Both are parsed with the invariant culture: a Buddhist or Persian ambient calendar
+        /// would otherwise read the folder stamp as a different century and discard everything.
+        /// </para>
+        /// </summary>
+        private static bool IsWithinCutoff(string logFilePath, DateTime cutoff)
+        {
+            try
+            {
+                if (File.GetLastWriteTime(logFilePath) >= cutoff) return true;
+            }
+            catch (IOException)
+            {
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return true;
+            }
+
+            var folderName = Path.GetFileName(Path.GetDirectoryName(logFilePath));
+            if (string.IsNullOrEmpty(folderName)) return true;
+
+            var match = SessionFolderStampRegex.Match(folderName);
+            if (!match.Success) return true;
+
+            return !DateTime.TryParseExact(
+                       match.Groups[1].Value, SessionFolderStampFormat,
+                       System.Globalization.CultureInfo.InvariantCulture,
+                       System.Globalization.DateTimeStyles.None, out var startedAt)
+                   || startedAt >= cutoff;
         }
 
         /// <summary>
@@ -823,12 +922,18 @@ namespace TarkovHelper.Services
                     traderId = dialogIdElement.GetString() ?? "";
                 }
 
-                // Get timestamp
+                // Get timestamp. A block with no readable "dt" keeps DateTime.Now as an ordering
+                // placeholder but is marked as having no timestamp: "now" resolves against the
+                // session timeline as the LAST transition in the folder, so attributing an undated
+                // event with it would file an old PvE event under whatever mode the session ended
+                // in. HasTimestamp is what keeps that guess from being made.
                 var timestamp = DateTime.Now;
-                if (messageElement.TryGetProperty("dt", out var dtElement))
+                var hasTimestamp = false;
+                if (messageElement.TryGetProperty("dt", out var dtElement) &&
+                    dtElement.TryGetInt64(out var unixTime))
                 {
-                    var unixTime = dtElement.GetInt64();
                     timestamp = DateTimeOffset.FromUnixTimeSeconds(unixTime).LocalDateTime;
+                    hasTimestamp = true;
                 }
 
                 // Determine event type
@@ -846,6 +951,7 @@ namespace TarkovHelper.Services
                     EventType = eventType,
                     TraderId = traderId,
                     Timestamp = timestamp,
+                    HasTimestamp = hasTimestamp,
                     OriginalLine = jsonString.Substring(0, Math.Min(200, jsonString.Length)),
                     SourceFile = sourceFile
                 };
@@ -864,18 +970,26 @@ namespace TarkovHelper.Services
         /// Synchronize quest progress from log files
         /// </summary>
         /// <param name="logFolderPath">Path to log folder</param>
-        /// <param name="progress">Progress reporter</param>
+        /// <param name="progress">Progress reporter, null for none</param>
         /// <param name="daysRange">Number of days to look back (0 = all logs)</param>
+        /// <remarks>
+        /// Neither parameter is optional, on purpose. The defect PRD R8 records is a caller that
+        /// simply left the range off: it took the default of 0, the configured
+        /// <c>SettingsService.SyncDaysRange</c> reached nothing, and every sync silently covered
+        /// every retained log. A required parameter turns the next such omission into a compile
+        /// error instead of a setting that quietly stops working.
+        /// </remarks>
         public Task<SyncResult> SyncFromLogsAsync(
-            string logFolderPath, IProgress<string>? progress = null, int daysRange = 0)
+            string logFolderPath, IProgress<string>? progress, int daysRange)
             => SyncFromLogsAsync(
                 logFolderPath, QuestProgressService.Instance, QuestGraphService.Instance, progress, daysRange);
 
         /// <summary>
-        /// Same sync with its two read-only collaborators supplied explicitly. Both are consulted
-        /// only for profile-independent quest data (the task lookups and the prerequisite graph);
-        /// naming them makes the whole run drivable from a test without seeding two singletons
-        /// that other tests in the same assembly share.
+        /// Same sync with its two read-only collaborators supplied explicitly. Neither is written
+        /// to: the graph answers prerequisite questions, and the progress service answers the
+        /// profile-independent task lookups plus, for the one profile that is loaded, the rows in
+        /// its current snapshot. Naming them makes the whole run drivable from a test without
+        /// seeding two singletons that other tests in the same assembly share.
         /// </summary>
         internal async Task<SyncResult> SyncFromLogsAsync(
             string logFolderPath,
@@ -889,11 +1003,13 @@ namespace TarkovHelper.Services
             _log.Info($"Starting sync from: {logFolderPath}");
             progress?.Report("Scanning log files...");
 
-            // Parse all log files
-            var events = await ParseLogDirectoryAsync(logFolderPath, progress);
+            // Parse the log files within range. The range is handed down so whole session folders
+            // outside it are skipped before their application logs are read; what comes back is
+            // then filtered again per event, because a session that spans the cutoff is retained
+            // whole and only some of its events belong.
+            var events = await ParseLogDirectoryAsync(logFolderPath, progress, daysRange);
             _log.Info($"Found {events.Count} quest events in logs");
 
-            // Apply date filter if specified
             if (daysRange > 0)
             {
                 var cutoffDate = DateTime.Now.AddDays(-daysRange);
@@ -910,11 +1026,11 @@ namespace TarkovHelper.Services
                 return result;
             }
 
-            // PRD R3: an event from before the first mode marker in its session folder has no
-            // evidence for where it belongs. It is dropped and counted, never assigned to a
-            // default -- the app has already had one defect of exactly that shape, where a value
-            // that could not distinguish permanent PvP from seasonal play was used to pick
-            // storage and merged the two.
+            // PRD R3: an event from before the first mode marker in its session folder (or one
+            // whose log block carried no timestamp at all) has no evidence for where it belongs.
+            // It is dropped and counted, never assigned to a default. The app has already had one
+            // defect of exactly that shape, where a value that could not distinguish permanent PvP
+            // from seasonal play was used to pick storage and merged the two.
             result.UnattributedEventCount = events.Count(e => e.OwnerProfile == null);
             if (result.UnattributedEventCount > 0)
             {
@@ -926,34 +1042,42 @@ namespace TarkovHelper.Services
 
             progress?.Report($"Processing {attributed.Count} quest events...");
 
-            // Build a lookup for quest IDs
-            var tasksByQuestId = BuildQuestIdLookup(progressService.AllTasks);
-            _log.Debug($"Built lookup with {tasksByQuestId.Count} quest IDs from {progressService.AllTasks.Count} tasks");
-
             var run = new SyncRun
             {
-                TasksByQuestId = tasksByQuestId,
                 Progress = progressService,
                 Graph = graphService,
                 Result = result,
             };
 
             // One pass per profile the logs cover. The passes are independent: each compares its
-            // events against ITS OWN stored rows, read from the store rather than from the
-            // in-memory cache, because at most one profile is loaded and a sync routinely spans
-            // several (PRD R1).
+            // events against ITS OWN rows, never against another profile's, because at most one
+            // profile is loaded and a sync routinely spans several (PRD R1). Each returns only its
+            // own changes, so no pass can read another's.
+            var changes = new List<QuestChangeInfo>();
             foreach (var group in attributed.GroupBy(e => e.OwnerProfile!.Value))
             {
                 var owner = group.Key;
-                var storedProgress = await _store.LoadQuestProgressAsync(ProfileService.GetProfileId(owner));
+                var ownerId = ProfileService.GetProfileId(owner);
 
-                RunProfilePass(owner, group.ToList(), storedProgress, run);
+                // The loaded profile's rows are the snapshot, not the store: hand edits publish to
+                // the snapshot synchronously and persist fire-and-forget, so a fresh store read can
+                // be behind what the user is looking at. It would also disagree with the apply step,
+                // which plans the loaded profile from the snapshot and only an off-screen profile
+                // from the store (QuestProgressService.ApplyForOwnerAsync). Every other profile MUST
+                // come from the store: at most one is loaded.
+                var snapshot = progressService.Snapshot;
+                IReadOnlyDictionary<string, QuestStatus> storedProgress =
+                    string.Equals(snapshot.ProfileId, ownerId, StringComparison.Ordinal)
+                        ? snapshot.Quests
+                        : await Store.LoadQuestProgressAsync(ownerId);
+
+                changes.AddRange(RunProfilePass(owner, group.ToList(), storedProgress, run));
             }
 
             // Sort by timestamp (oldest first) for chronological display
-            result.QuestsToComplete = run.QuestsToComplete.OrderBy(q => q.Timestamp).ToList();
+            result.QuestsToComplete = changes.OrderBy(q => q.Timestamp).ToList();
 
-            progress?.Report($"Found {run.QuestsToComplete.Count} quests to update");
+            progress?.Report($"Found {result.QuestsToComplete.Count} quests to update");
 
             _log.Info(
                 $"Sync complete: {result.TotalEventsFound} events, {result.QuestsToComplete.Count} to apply, " +
@@ -967,7 +1091,11 @@ namespace TarkovHelper.Services
                 _log.Debug($"Sample unmatched IDs: {string.Join(", ", sampleUnmatched)}");
 
                 // DB의 샘플 ID도 출력
-                var sampleDbIds = tasksByQuestId.Keys.Take(10).ToList();
+                var sampleDbIds = progressService.AllTasks
+                    .SelectMany(t => t.Ids ?? Enumerable.Empty<string>())
+                    .Where(id => !string.IsNullOrEmpty(id))
+                    .Take(10)
+                    .ToList();
                 _log.Debug($"Sample DB IDs: {string.Join(", ", sampleDbIds)}");
             }
 
@@ -975,43 +1103,61 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// What every profile pass in one sync run shares: the profile-independent quest lookups,
-        /// and the result the passes accumulate into. Grouped rather than passed positionally
-        /// because the pass itself only varies by three things — the owner, its events, and its
-        /// stored rows — and those are what a reader needs to see at the call site.
+        /// What every profile pass in one sync run shares: the profile-independent quest data,
+        /// and the result the passes accumulate their statistics into. Grouped rather than passed
+        /// positionally because the pass itself only varies by three things (the owner, its
+        /// events, and its stored rows) and those are what a reader needs to see at the call site.
         /// </summary>
         private sealed class SyncRun
         {
-            public required Dictionary<string, TarkovTask> TasksByQuestId { get; init; }
             public required QuestProgressService Progress { get; init; }
             public required QuestGraphService Graph { get; init; }
             public required SyncResult Result { get; init; }
 
-            /// <summary>Changes from every profile so far, sorted into the result once at the end.</summary>
-            public List<QuestChangeInfo> QuestsToComplete { get; } = new();
+            /// <summary>
+            /// Progress keys already counted as in progress, across every pass.
+            /// <see cref="SyncResult.InProgressQuests"/> is ordered output, not a set: without
+            /// this a quest started in two profiles would be counted twice and "still in progress:
+            /// N" would exceed the number of distinct quests.
+            /// </summary>
+            public HashSet<string> InProgressKeys { get; } = new(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
+        /// The key a quest is deduplicated by across profile passes: its normalized name when it
+        /// has one, its first id otherwise, so two tasks are never merged by an empty key.
+        /// </summary>
+        private static string DedupKeyOf(TarkovTask task)
+            => !string.IsNullOrEmpty(task.NormalizedName)
+                ? task.NormalizedName!
+                : task.Ids?.FirstOrDefault(id => !string.IsNullOrEmpty(id)) ?? task.Name;
+
+        /// <summary>
         /// Derives one profile's changes from the events attributed to it, compared against
-        /// <paramref name="storedProgress"/> — that profile's own stored rows.
+        /// <paramref name="storedProgress"/> (that profile's own rows), and returns them.
         /// <para>
         /// This is the pre-attribution sync body, with every "is this already recorded?" question
-        /// answered from the owning profile's rows instead of from the loaded cache. Reading the
-        /// cache was correct only while a run could touch a single profile; it now names the
-        /// wrong profile for every group but at most one.
+        /// answered from the OWNING profile's rows instead of from whatever the loaded cache holds.
+        /// Reading the cache unconditionally was correct only while a run could touch a single
+        /// profile; it named the wrong profile for every group but at most one. The caller supplies
+        /// the loaded profile's rows from the snapshot and every other profile's from the store.
+        /// </para>
+        /// <para>
+        /// The changes are returned rather than appended to a run-wide list: a pass that shared
+        /// the list had to filter the whole accumulated set back down to its own owner to see what
+        /// it had just produced, which is one read away from acting on another pass's rows.
         /// </para>
         /// </summary>
-        private void RunProfilePass(
+        private List<QuestChangeInfo> RunProfilePass(
             AppProfile owner,
             List<QuestLogEvent> events,
             IReadOnlyDictionary<string, QuestStatus> storedProgress,
             SyncRun run)
         {
-            var tasksByQuestId = run.TasksByQuestId;
             var progressService = run.Progress;
             var graphService = run.Graph;
             var result = run.Result;
-            var questsToComplete = run.QuestsToComplete;
+            var questsToComplete = new List<QuestChangeInfo>();
 
             // STEP 1: Determine final state for each quest (last event wins)
             // Key: normalizedName, Value: (finalEventType, timestamp, task)
@@ -1020,7 +1166,7 @@ namespace TarkovHelper.Services
 
             foreach (var evt in events)
             {
-                var task = FindTaskByQuestId(tasksByQuestId, evt.QuestId);
+                var task = progressService.GetTaskById(evt.QuestId);
                 if (task == null)
                 {
                     if (!result.UnmatchedQuestIds.Contains(evt.QuestId))
@@ -1073,6 +1219,17 @@ namespace TarkovHelper.Services
                     case QuestEventType.Started:
                         // Started quests: only complete prerequisites, not the quest itself
                         // Quest stays Active
+                        //
+                        // One exception for the statistics: a quest whose last log event is
+                        // Started but which is already recorded Done for this profile is not "in
+                        // progress" (the loop below excludes it) and produces no change, so
+                        // without this it would fall into no bucket at all and the summary's
+                        // numbers would not add up. Stored state already matches the log, which is
+                        // exactly what "already current" counts.
+                        if (currentStatus == QuestStatus.Done)
+                        {
+                            result.AlreadyCurrentCount++;
+                        }
                         break;
 
                     case QuestEventType.Completed:
@@ -1172,9 +1329,11 @@ namespace TarkovHelper.Services
             // These are mutually exclusive quests where user must choose which one they completed
             result.AlternativeQuestGroups.AddRange(
                 CollectAlternativeQuestGroups(
-                    owner, progressService, graphService, storedProgress, questFinalStates, terminalStateQuests));
+                    owner, progressService, graphService, storedProgress, questFinalStates));
 
-            // Build InProgressQuests list: quests whose final state is Started (not Completed/Failed)
+            // Build InProgressQuests list: quests whose final state is Started (not Completed/Failed).
+            // Deduplicated across passes: the same quest can be in progress in two profiles at
+            // once, and the summary reports a count of distinct quests.
             foreach (var kvp in questFinalStates)
             {
                 var (eventType, _, task) = kvp.Value;
@@ -1184,28 +1343,27 @@ namespace TarkovHelper.Services
                 {
                     // Check if already done in saved progress
                     var currentStatus = QuestProgressService.StoredStatusOf(storedProgress, task);
-                    if (currentStatus != QuestStatus.Done)
+                    if (currentStatus != QuestStatus.Done && run.InProgressKeys.Add(DedupKeyOf(task)))
                     {
                         result.InProgressQuests.Add(task);
                     }
                 }
             }
 
-            // Build CompletedQuests list from this profile's newly planned completions
-            foreach (var change in questsToComplete.Where(q =>
-                         q.OwnerProfile == owner && q.ChangeType == QuestEventType.Completed && !q.IsPrerequisite))
-            {
-                var task = progressService.GetTask(change.NormalizedName);
-                if (task != null && !result.CompletedQuests.Contains(task))
-                {
-                    result.CompletedQuests.Add(task);
-                }
-            }
+            return questsToComplete;
         }
 
         /// <summary>
+        /// What one apply run wrote: how many rows landed in each profile, and which profiles threw.
+        /// A failed partition is not the same as an untouched one, and a bare count dictionary cannot
+        /// tell them apart: the failed one is simply missing from it.
+        /// </summary>
+        public sealed record QuestApplyOutcome(
+            Dictionary<AppProfile, int> AppliedByProfile, List<AppProfile> FailedProfiles);
+
+        /// <summary>
         /// Applies derived quest changes, each to the profile it was attributed to, and reports
-        /// how many rows landed in each.
+        /// how many rows landed in each and which profiles failed.
         /// <para>
         /// One sync run distributes across every profile the retained logs cover, so the changes
         /// are grouped by owner and the batch save runs once per group with that group's profile
@@ -1213,88 +1371,80 @@ namespace TarkovHelper.Services
         /// change removes (PRD R1).
         /// </para>
         /// </summary>
-        public Task<Dictionary<AppProfile, int>> ApplyQuestChangesAsync(List<QuestChangeInfo> changes)
+        public Task<QuestApplyOutcome> ApplyQuestChangesAsync(List<QuestChangeInfo> changes)
             => ApplyQuestChangesAsync(changes, QuestProgressService.Instance);
 
         /// <summary>Same apply with the progress service supplied explicitly, for tests.</summary>
-        internal async Task<Dictionary<AppProfile, int>> ApplyQuestChangesAsync(
+        internal async Task<QuestApplyOutcome> ApplyQuestChangesAsync(
             List<QuestChangeInfo> changes, QuestProgressService progressService)
         {
             var selectedChanges = changes.Where(c => c.IsSelected).ToList();
             var appliedByProfile = new Dictionary<AppProfile, int>();
+            var failedProfiles = new List<AppProfile>();
 
             _log.Info($"ApplyQuestChangesAsync: {changes.Count} total changes, {selectedChanges.Count} selected");
 
             foreach (var group in selectedChanges.GroupBy(c => c.OwnerProfile))
             {
-                // Build batch of changes for this profile
-                var batchChanges = new List<(TarkovTask Task, QuestStatus Status)>();
-
-                foreach (var change in group)
+                // One failing profile must not cost the profiles that already succeeded their
+                // report: the counts below are the only signal the player gets about where a sync
+                // landed, and losing all of them because one partition threw hides the successes
+                // as well as the failure. The failure is not swallowed either, only isolated: the
+                // catch names the profile in FailedProfiles so the summary can report it.
+                try
                 {
-                    var task = progressService.GetTask(change.NormalizedName);
-                    if (task == null)
+                    // Build batch of changes for this profile
+                    var batchChanges = new List<(TarkovTask Task, QuestStatus Status)>();
+
+                    foreach (var change in group)
                     {
-                        _log.Warning($"Task not found for NormalizedName: {change.NormalizedName}");
-                        continue;
+                        var task = progressService.GetTask(change.NormalizedName);
+                        if (task == null)
+                        {
+                            _log.Warning($"Task not found for NormalizedName: {change.NormalizedName}");
+                            continue;
+                        }
+
+                        var status = change.ChangeType switch
+                        {
+                            QuestEventType.Completed => QuestStatus.Done,
+                            QuestEventType.Failed => QuestStatus.Failed,
+                            _ => QuestStatus.Active
+                        };
+
+                        if (status != QuestStatus.Active)
+                        {
+                            batchChanges.Add((task, status));
+                            _log.Debug($"Queued change for {group.Key}: {change.NormalizedName} -> {change.ChangeType}");
+                        }
                     }
 
-                    var status = change.ChangeType switch
-                    {
-                        QuestEventType.Completed => QuestStatus.Done,
-                        QuestEventType.Failed => QuestStatus.Failed,
-                        _ => QuestStatus.Active
-                    };
+                    // Apply this profile's changes in one batch (single DB transaction, single UI update)
+                    if (batchChanges.Count == 0) continue;
 
-                    if (status != QuestStatus.Active)
+                    // Report what was WRITTEN, not what was queued. The two differ routinely: the
+                    // batch skips rows already recorded and adds Failed rows for the mutually
+                    // exclusive alternatives a completion rules out, and a profile switch between
+                    // the read and the write can leave it writing nothing at all. A profile
+                    // nothing landed in is left out of the map entirely, so the summary cannot
+                    // name a partition it did not touch.
+                    var applied = await progressService.ApplyQuestChangesBatchAsync(batchChanges, group.Key);
+                    if (applied > 0)
                     {
-                        batchChanges.Add((task, status));
-                        _log.Debug($"Queued change for {group.Key}: {change.NormalizedName} -> {change.ChangeType}");
+                        appliedByProfile[group.Key] = applied;
                     }
+
+                    _log.Info($"Batch applied {applied} quest records to {group.Key} from {batchChanges.Count} queued changes");
                 }
-
-                // Apply this profile's changes in one batch (single DB transaction, single UI update)
-                if (batchChanges.Count == 0) continue;
-
-                await progressService.ApplyQuestChangesBatchAsync(batchChanges, group.Key);
-                appliedByProfile[group.Key] = batchChanges.Count;
-                _log.Info($"Batch applied {batchChanges.Count} quest changes to {group.Key}");
+                catch (Exception ex)
+                {
+                    _log.Error($"Failed to apply quest changes to {group.Key}", ex);
+                    failedProfiles.Add(group.Key);
+                }
             }
 
             _log.Info("ApplyQuestChangesAsync completed");
-            return appliedByProfile;
-        }
-
-        /// <summary>
-        /// Build a lookup dictionary for quest IDs
-        /// </summary>
-        private Dictionary<string, TarkovTask> BuildQuestIdLookup(IReadOnlyList<TarkovTask> tasks)
-        {
-            var lookup = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var task in tasks)
-            {
-                if (task.Ids != null)
-                {
-                    foreach (var id in task.Ids)
-                    {
-                        if (!string.IsNullOrEmpty(id) && !lookup.ContainsKey(id))
-                        {
-                            lookup[id] = task;
-                        }
-                    }
-                }
-            }
-
-            return lookup;
-        }
-
-        /// <summary>
-        /// Find task by quest ID
-        /// </summary>
-        private TarkovTask? FindTaskByQuestId(Dictionary<string, TarkovTask> lookup, string questId)
-        {
-            return lookup.TryGetValue(questId, out var task) ? task : null;
+            return new QuestApplyOutcome(appliedByProfile, failedProfiles);
         }
 
         /// <summary>
@@ -1305,8 +1455,7 @@ namespace TarkovHelper.Services
             QuestProgressService progressService,
             QuestGraphService graphService,
             IReadOnlyDictionary<string, QuestStatus> storedProgress,
-            Dictionary<string, (QuestEventType EventType, DateTime Timestamp, TarkovTask Task)> questFinalStates,
-            HashSet<string> terminalStateQuests)
+            Dictionary<string, (QuestEventType EventType, DateTime Timestamp, TarkovTask Task)> questFinalStates)
         {
             var groups = new List<AlternativeQuestGroup>();
             var processedGroups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1326,7 +1475,7 @@ namespace TarkovHelper.Services
                     if (!progressService.HasAlternativeQuests(prereq)) continue;
 
                     // Skip if already processed this group
-                    var groupKey = GetAlternativeGroupKey(prereq, progressService);
+                    var groupKey = GetAlternativeGroupKey(prereq);
                     if (processedGroups.Contains(groupKey)) continue;
                     processedGroups.Add(groupKey);
 
@@ -1377,7 +1526,7 @@ namespace TarkovHelper.Services
         /// <summary>
         /// Get a unique key for an alternative quest group
         /// </summary>
-        private string GetAlternativeGroupKey(TarkovTask task, QuestProgressService progressService)
+        private static string GetAlternativeGroupKey(TarkovTask task)
         {
             var names = new List<string> { task.NormalizedName ?? "" };
 

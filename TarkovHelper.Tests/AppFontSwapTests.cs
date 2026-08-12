@@ -13,7 +13,7 @@ namespace TarkovHelper.Tests;
 /// with a green suite.
 ///
 /// WPF allows one Application per AppDomain, so a single shared App instance
-/// serves every test in this class. App's ctor does no WPF bootstrapping —
+/// serves every test in this class. App's ctor does no WPF bootstrapping;
 /// the startup wiring lives in OnStartup, which never runs here.
 /// </summary>
 public sealed class AppFontSwapTests

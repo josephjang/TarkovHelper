@@ -11,7 +11,7 @@ namespace TarkovHelper.Tests;
 /// UI Automation, and assert the persisted user_data.db values.
 ///
 /// Coverage gaps, on purpose: zoom/pan restore is asserted only via its persisted
-/// round-trip (UIA cannot see render transforms — the on-screen values are guarded by
+/// round-trip (UIA cannot see render transforms; the on-screen values are guarded by
 /// MapViewStatePersistenceTests plus manual checks), and raid precedence is unit-tested
 /// only (driving a fake EFT log through the FileSystemWatcher is too fragile for CI).
 /// </summary>
@@ -85,7 +85,7 @@ public sealed class MapStateE2ETests : E2ETestBase
         using var app = AppDriver.Launch(configDir);
         app.SelectTab(MapTab, MapCombo);
 
-        // No saved state: today's default behavior — first map in map_configs.json.
+        // No saved state: today's default behavior: first map in map_configs.json.
         Assert.Equal(MapDisplayName("Woods"), app.WaitForComboSelection(MapCombo));
 
         app.CloseAndWaitForExit();
@@ -105,7 +105,7 @@ public sealed class MapStateE2ETests : E2ETestBase
     /// <summary>
     /// Expected combo text for a map key, resolved from the app's own map_configs.json.
     /// The combo shows displayName, not the key (WaitForComboSelection reads the UIA
-    /// Name = ComboBoxItem.Content) — equal for Woods/Customs today, but resolving it
+    /// Name = ComboBoxItem.Content), equal for Woods/Customs today, but resolving it
     /// keeps these assertions correct for maps whose display name diverges
     /// (e.g. Labs → "The Lab") and for future renames.
     /// </summary>

@@ -26,11 +26,22 @@ namespace TarkovHelper.Services
 
         public event EventHandler? InventoryChanged;
 
+        /// <summary>
+        /// The highest reload revision requested so far. A load that finishes after a newer one
+        /// was requested discards its result instead of publishing quantities for a profile the
+        /// user has already navigated away from (the same guard QuestProgressService uses).
+        /// </summary>
+        private long _latestRevision;
+
         private ItemInventoryService()
         {
             LoadInventory();
             InitializeSaveTimer();
-            ProfileService.Instance.ActiveProfileChanged += (_, _) => _ = ReloadForProfileAsync();
+            // The event's own profile and revision are carried into the reload. Discarding them
+            // and re-reading ProfileService inside the async body is how the quest cache used to
+            // file one profile's rows under another's id: the reads happen after an await, by
+            // which time a second transition may have landed.
+            ProfileService.Instance.ActiveProfileChanged += (_, e) => _ = ReloadForProfileAsync(e.Profile, e.Revision);
         }
 
         private void InitializeSaveTimer()
@@ -258,15 +269,18 @@ namespace TarkovHelper.Services
                 _inventoryData = new ItemInventoryData();
             }
 
+            // Resolved before the Task.Run body: a switch between scheduling and running would
+            // otherwise clear the profile the user just moved to instead of the one they reset.
+            var profileId = ProfileService.Instance.ActiveProfileId;
             Task.Run(async () =>
             {
                 try
                 {
-                    await _userDataDb.ClearAllItemInventoryAsync(ProfileService.Instance.ActiveProfileId);
+                    await _userDataDb.ClearAllItemInventoryAsync(profileId);
                 }
                 catch (Exception ex)
                 {
-                    _log.Error($"Reset failed: {ex.Message}");
+                    _log.Error($"Reset failed for {profileId}", ex);
                 }
             }).GetAwaiter().GetResult();
 
@@ -288,36 +302,62 @@ namespace TarkovHelper.Services
             _saveTimer?.Start();
         }
 
+        /// <summary>
+        /// Loads the selected profile's quantities during construction: the one load with no
+        /// <see cref="ProfileService.ActiveProfileChanged"/> to learn the profile from. The
+        /// profile and revision come from one atomic read, so a transition landing between them
+        /// cannot pair the old profile with the new revision, and the load goes through the same
+        /// staleness guard as every later reload.
+        /// </summary>
         private void LoadInventory()
         {
             // Task.Run으로 데드락 방지
             // 마이그레이션은 MainWindow에서 먼저 수행됨
+            var (profile, revision) = ProfileService.Instance.CurrentTransition;
             Task.Run(async () =>
             {
-                await LoadInventoryFromDbAsync();
+                await LoadInventoryFromDbAsync(ProfileService.GetProfileId(profile), revision);
             }).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Reload inventory for the active game mode and notify the UI.
+        /// Reload inventory for <paramref name="profile"/> and notify the UI.
         /// Pending debounced saves are flushed first (using their captured profile ids)
         /// so the previous profile's edits are persisted before its data is swapped out.
+        /// <para>
+        /// The profile is a parameter and is turned into a storage id before the first await:
+        /// re-reading the selection inside the async body made a reload that started for one
+        /// profile finish by publishing another's quantities. <paramref name="revision"/> is the
+        /// transition this load serves, so a load that loses a race discards itself instead of
+        /// publishing over the newer one.
+        /// </para>
         /// </summary>
-        public async Task ReloadForProfileAsync()
+        public async Task ReloadForProfileAsync(AppProfile profile, long revision)
         {
+            var profileId = ProfileService.GetProfileId(profile);
+
             _saveTimer?.Stop();
             SavePendingItems();
 
-            await LoadInventoryFromDbAsync();
+            if (!await LoadInventoryFromDbAsync(profileId, revision)) return;
+
             InventoryChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        private async Task LoadInventoryFromDbAsync()
+        /// <summary>
+        /// Reads <paramref name="profileId"/>'s quantities and publishes them, unless a newer
+        /// transition was requested while the read was in flight. Returns false when the result
+        /// was discarded as stale.
+        /// </summary>
+        private async Task<bool> LoadInventoryFromDbAsync(string profileId, long revision)
         {
+            ClaimRevision(revision);
+
+            ItemInventoryData newData;
             try
             {
-                var items = await _userDataDb.LoadItemInventoryAsync(ProfileService.Instance.ActiveProfileId);
-                var newData = new ItemInventoryData
+                var items = await _userDataDb.LoadItemInventoryAsync(profileId);
+                newData = new ItemInventoryData
                 {
                     LastUpdated = DateTime.UtcNow,
                     Items = new Dictionary<string, ItemInventory>(StringComparer.OrdinalIgnoreCase)
@@ -332,16 +372,37 @@ namespace TarkovHelper.Services
                         NonFirQuantity = kvp.Value.NonFirQuantity
                     };
                 }
-
-                lock (_lock)
-                {
-                    _inventoryData = newData;
-                }
             }
             catch (Exception ex)
             {
-                _log.Error($"Load failed: {ex.Message}");
-                _inventoryData = new ItemInventoryData();
+                // An unreadable store must not leave the previous profile's quantities on screen
+                // under the new profile's name: publish empty, which is what "nothing owned"
+                // means.
+                _log.Error($"Load failed for {profileId}", ex);
+                newData = new ItemInventoryData();
+            }
+
+            if (Interlocked.Read(ref _latestRevision) != revision)
+            {
+                _log.Debug($"Discarding stale inventory load for {profileId} (revision {revision})");
+                return false;
+            }
+
+            lock (_lock)
+            {
+                _inventoryData = newData;
+            }
+            return true;
+        }
+
+        /// <summary>Raises <see cref="_latestRevision"/> to <paramref name="revision"/> if it is newer.</summary>
+        private void ClaimRevision(long revision)
+        {
+            while (true)
+            {
+                var current = Interlocked.Read(ref _latestRevision);
+                if (revision <= current) return;
+                if (Interlocked.CompareExchange(ref _latestRevision, revision, current) == current) return;
             }
         }
 
