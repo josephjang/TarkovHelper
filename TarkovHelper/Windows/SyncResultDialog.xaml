@@ -53,6 +53,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <Border Grid.Row="0" Background="{DynamicResource BackgroundLightBrush}"
                             CornerRadius="4,4,0,0" Padding="12,8">
@@ -72,11 +73,20 @@
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
+                                            <!--
+                                                Both cells carry an AutomationId so an automation
+                                                client can read the profile and its count without
+                                                matching the localized wording. The ids repeat per
+                                                row by design: rows are found under the list's own
+                                                AutomationId and paired within each row.
+                                            -->
                                             <TextBlock Grid.Column="0" Text="{Binding ProfileName}"
+                                                       AutomationProperties.AutomationId="TxtSyncProfileName"
                                                        FontSize="{DynamicResource FontSizeXSmall}"
                                                        Foreground="{DynamicResource TextPrimaryBrush}"
                                                        VerticalAlignment="Center"/>
                                             <TextBlock Grid.Column="1" Text="{Binding AppliedText}"
+                                                       AutomationProperties.AutomationId="TxtSyncProfileApplied"
                                                        FontSize="{DynamicResource FontSizeXSmall}"
                                                        Foreground="{DynamicResource AccentBrush}"
                                                        VerticalAlignment="Center"/>
@@ -86,7 +96,16 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </ScrollViewer>
-                    <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderBrush}"
+                    <!--
+                        A profile whose write threw is absent from the applied list for a reason
+                        the list cannot express, so it is named here instead of being read as a
+                        profile that simply needed no change.
+                    -->
+                    <TextBlock x:Name="TxtApplyFailed" Grid.Row="2"
+                               AutomationProperties.AutomationId="TxtSyncApplyFailed"
+                               Visibility="Collapsed" Margin="12,8,12,0" TextWrapping="Wrap"
+                               FontSize="{DynamicResource FontSizeTiny}" Foreground="#EF5350"/>
+                    <Border Grid.Row="3" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderBrush}"
                             Padding="12,8">
                         <TextBlock x:Name="TxtStats"
                                    Text=""

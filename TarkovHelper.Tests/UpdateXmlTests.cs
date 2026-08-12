@@ -5,7 +5,7 @@ using TarkovHelper.Services;
 namespace TarkovHelper.Tests;
 
 /// <summary>
-/// Guards the repo-root update.xml — the update feed served raw from main that every
+/// Guards the repo-root update.xml, the update feed served raw from main that every
 /// installed client polls. It must stay parseable by the app's own parser and must keep
 /// pointing at this fork (josephjang), not upstream (Zeliper): a client
 /// following an upstream URL would replace itself with the upstream build.
@@ -13,8 +13,8 @@ namespace TarkovHelper.Tests;
 /// The xml's version is intentionally NOT asserted against the csproj version: during a
 /// release, update.xml lags one step behind by design (it is bumped only after the
 /// GitHub Release asset exists, so clients never see a download URL that 404s).
-/// The complementary half of this release invariant — the tag matching the csproj
-/// version, plus the CalVer tag-format guard — lives in .github/workflows/release.yml.
+/// The complementary half of this release invariant (the tag matching the csproj
+/// version, plus the CalVer tag-format guard) lives in .github/workflows/release.yml.
 /// </summary>
 public sealed class UpdateXmlTests
 {

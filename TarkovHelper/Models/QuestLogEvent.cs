@@ -42,9 +42,23 @@ namespace TarkovHelper.Models
         public string TraderId { get; set; } = string.Empty;
 
         /// <summary>
-        /// Event timestamp from dt field (Unix timestamp converted to DateTime)
+        /// Event timestamp from dt field (Unix timestamp converted to DateTime). When the log
+        /// block carried no readable dt this holds the parse time as an ordering placeholder;
+        /// see <see cref="HasTimestamp"/> before using it as evidence of anything.
         /// </summary>
         public DateTime Timestamp { get; set; }
+
+        /// <summary>
+        /// Whether <see cref="Timestamp"/> came from the log's own dt field.
+        /// <para>
+        /// False means the block had none and the placeholder is the parse time. That placeholder
+        /// must never reach the session-mode lookup: "now" resolves to the LAST transition in the
+        /// folder, so an undated event from an old PvE session would be attributed to whatever
+        /// mode that session happened to end in. An undated event is unattributed evidence and is
+        /// counted as such.
+        /// </para>
+        /// </summary>
+        public bool HasTimestamp { get; set; }
 
         /// <summary>
         /// Original log line for debugging
@@ -61,9 +75,16 @@ namespace TarkovHelper.Models
         /// the session folder it was parsed from.
         /// <para>
         /// Null means "no evidence" and never a default: an event from before the first mode
-        /// marker in its folder has nothing saying where it belongs, and assigning it to the
-        /// selected profile (or to any default) is exactly the misfiling this attribution
-        /// exists to stop. Consumers must drop a null-owner event and report its count.
+        /// marker in its folder (or one with no timestamp to look up) has nothing saying where it
+        /// belongs, and assigning it to the selected profile (or to any default) is exactly the
+        /// misfiling this attribution exists to stop.
+        /// </para>
+        /// <para>
+        /// <see cref="TarkovHelper.Services.LogSyncService"/> enforces the drop rather than
+        /// trusting each consumer to remember it: the live path never raises a null-owner event,
+        /// and the sync path filters them out and reports
+        /// <see cref="SyncResult.UnattributedEventCount"/>. A consumer holding one of these
+        /// directly still has to check.
         /// </para>
         /// </summary>
         public AppProfile? OwnerProfile { get; set; }
@@ -120,11 +141,6 @@ namespace TarkovHelper.Models
         public List<TarkovTask> InProgressQuests { get; set; } = new();
 
         /// <summary>
-        /// List of quests that were completed (from log events)
-        /// </summary>
-        public List<TarkovTask> CompletedQuests { get; set; } = new();
-
-        /// <summary>
         /// Groups of alternative quests (mutually exclusive) that need user selection
         /// Each group contains quests where one must be chosen as completed
         /// </summary>
@@ -144,6 +160,15 @@ namespace TarkovHelper.Models
         public Dictionary<AppProfile, int> AppliedCountsByProfile { get; set; } = new();
 
         /// <summary>
+        /// Profiles whose batch threw while being written. The apply step isolates each profile so
+        /// one failure cannot cost the others their report, which leaves a failed partition simply
+        /// absent from <see cref="AppliedCountsByProfile"/> and indistinguishable from one that
+        /// needed no change. PRD R2 makes this report the player's only signal, so an
+        /// attempted-and-failed partition has to be named.
+        /// </summary>
+        public List<AppProfile> FailedProfiles { get; set; } = new();
+
+        /// <summary>
         /// Quests whose final state in the logs already matched what was stored for their own
         /// profile, so nothing was written for them.
         /// </summary>
@@ -155,9 +180,6 @@ namespace TarkovHelper.Models
         /// something was dropped rather than silently misfiled.
         /// </summary>
         public int UnattributedEventCount { get; set; }
-
-        /// <summary>Total quest records written across every profile.</summary>
-        public int TotalApplied => AppliedCountsByProfile.Values.Sum();
 
         /// <summary>
         /// Whether the sync was successful overall
@@ -185,8 +207,14 @@ namespace TarkovHelper.Models
         /// The profile whose progress this choice resolves. The same either-or can be open in
         /// more than one profile at once, so the group carries its owner rather than inheriting
         /// whichever profile happens to be selected when the player answers.
+        /// <para>
+        /// Required, because the default of an <see cref="AppProfile"/> field is
+        /// <see cref="AppProfile.PvpZone"/>: an initializer that simply forgot this would file the
+        /// choice into the permanent PvP partition, the one that is most expensive to lose and
+        /// hardest to notice. The partition key must never come from a default.
+        /// </para>
         /// </summary>
-        public AppProfile OwnerProfile { get; set; }
+        public required AppProfile OwnerProfile { get; set; }
     }
 
     /// <summary>
@@ -348,8 +376,14 @@ namespace TarkovHelper.Models
         /// The profile this change belongs to, carried from the event that produced it so the
         /// apply step and the summary never have to re-derive it (and can never disagree about
         /// it). Only attributed events become a change, so this is never "unknown".
+        /// <para>
+        /// Required, because the default of an <see cref="AppProfile"/> field is
+        /// <see cref="AppProfile.PvpZone"/>: an initializer that simply forgot this would write
+        /// the change into the permanent PvP partition, silently and irreversibly. Making the
+        /// compiler ask for it is what stops the partition key coming from a default.
+        /// </para>
         /// </summary>
-        public AppProfile OwnerProfile { get; set; }
+        public required AppProfile OwnerProfile { get; set; }
 
         /// <summary>
         /// Event timestamp for chronological ordering

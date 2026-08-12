@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -10,7 +11,7 @@ namespace TarkovHelper.Services.Eft;
 /// the leading timestamp, and the byte framing that guarantees only complete lines reach
 /// either of them.
 /// <para>
-/// Extracted from <see cref="EftRaidEventService"/> because a second consumer arrived —
+/// Extracted from <see cref="EftRaidEventService"/> because a second consumer arrived:
 /// <see cref="SessionModeTimeline"/>, which attributes quest-log events to the game mode of
 /// the session that produced them. Writing a second <c>Session mode</c> matcher was the
 /// obvious shortcut and was rejected: this pattern has already been corrected once, for a
@@ -31,9 +32,12 @@ internal static class EftLogPatterns
         @"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})",
         RegexOptions.Compiled);
 
+    /// <summary>The one shape EFT writes a log timestamp in, and the only one accepted.</summary>
+    private const string TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff";
+
     /// <summary>
     /// Recognizes a completed <c>Session mode</c> line and maps its token to the profile it
-    /// names. Returns false — leaving <paramref name="profileHint"/> Unknown — for any other
+    /// names. Returns false (leaving <paramref name="profileHint"/> Unknown) for any other
     /// line, including a token this build does not know.
     /// </summary>
     internal static bool TryParseSessionProfile(string line, out SessionProfileHint profileHint)
@@ -63,11 +67,22 @@ internal static class EftLogPatterns
     /// separate convenience: substituting <c>DateTime.Now</c> for a missing timestamp would
     /// place an undated line at the end of a historical timeline rather than dropping it.
     /// </para>
+    /// <para>
+    /// Parsing is exact and invariant, never <c>DateTime.TryParse</c> with the ambient culture.
+    /// EFT writes one fixed shape and the regex has already pinned it, but the ambient parse
+    /// reinterprets that shape through the user's calendar: measured on .NET 8, the same line
+    /// yields year 1483 under th-TH (Buddhist), 2647 under fa-IR (Persian), and fails outright
+    /// under ar-SA. Any of those makes every <see cref="SessionModeTimeline"/> entry sort
+    /// centuries away from the events it is supposed to attribute, so a Thai, Persian, or Arabic
+    /// Windows install would resolve every event to "no game mode" and record nothing.
+    /// </para>
     /// </summary>
     internal static bool TryExtractTimestamp(string line, out DateTime timestamp)
     {
         var match = TimestampRegex.Match(line);
-        if (match.Success && DateTime.TryParse(match.Groups[1].Value, out timestamp))
+        if (match.Success && DateTime.TryParseExact(
+                match.Groups[1].Value, TimestampFormat,
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out timestamp))
         {
             return true;
         }
@@ -146,7 +161,7 @@ internal static class EftLogPatterns
         }
         else
         {
-            // Nothing complete yet — leave the whole partial tail for the next read.
+            // Nothing complete yet: leave the whole partial tail for the next read.
             return (lines, lastPosition);
         }
 

@@ -944,10 +944,10 @@
         </p>
 
         <ul>
-          <li><strong>Hand entry</strong> (the user ticks a quest) &mdash; correct. The user is looking at the profile they mean.</li>
-          <li><strong>Syncing from logs</strong> &mdash; wrong, always. The logs span every mode; the screen shows one.</li>
-          <li><strong>A live raid event</strong> &mdash; wrong whenever the player has switched the view to compare another mode.</li>
-          <li><strong>The moment after an automatic switch</strong> &mdash; wrong for a window. The global moves before the cache does.</li>
+          <li><strong>Hand entry</strong> (the user ticks a quest): correct. The user is looking at the profile they mean.</li>
+          <li><strong>Syncing from logs</strong>: wrong, always. The logs span every mode; the screen shows one.</li>
+          <li><strong>A live raid event</strong>: wrong whenever the player has switched the view to compare another mode.</li>
+          <li><strong>The moment after an automatic switch</strong>: wrong for a window. The global moves before the cache does.</li>
         </ul>
 
         <div class="note is-wrong">
@@ -964,7 +964,7 @@
           <code>SetActiveProfile</code> assigns the global and raises its event synchronously,
           from the log watcher's thread pool. Subscribers answer with a fire-and-forget reload
           and return immediately. In the gap, <code>ActiveProfileId</code> names the new profile
-          while the cache still holds the old one's rows &mdash; so a quest ticked in that window
+          while the cache still holds the old one's rows, so a quest ticked in that window
           is written to a profile whose data was never displayed, and then vanishes from the
           screen when the reload lands. The player sees nothing recorded; the wrong profile
           gained an entry.
@@ -980,7 +980,7 @@
             <p class="sub">
               This is <code>SessionModeTimeline.Resolve(at)</code>, running for real. The
               transitions below are the measured four-switch capture from one folder. Drag the
-              event and watch which partition it resolves to &mdash; and where it resolves to
+              event and watch which partition it resolves to, and where it resolves to
               nothing at all.
             </p>
           </div>
@@ -1025,8 +1025,8 @@
         <p>
           Two things are worth provoking before you move on. Drag the handle to the far left,
           before <code>09:00:00</code>: there is no transition at or before that instant, so
-          <code>Resolve</code> returns <code>null</code>. That is not a failure to handle
-          &mdash; it is the honest answer, and the apply step drops the event and counts it.
+          <code>Resolve</code> returns <code>null</code>. That is not a failure to handle:
+          it is the honest answer, and the apply step drops the event and counts it.
           Then flip the strategy to <strong>per folder</strong> and drag again: a single answer
           for the whole folder is wrong for three of the four spans.
         </p>
@@ -1105,7 +1105,7 @@ public AppProfile? OwnerProfile { get; set; }</span></pre>
         <h3>The part that is easy to miss in review</h3>
         <p>
           Attribution alone is not enough. Sync also asks <em>is this quest already recorded?</em>
-          &mdash; and that question used to be answered from the in-memory cache, which holds at
+          and that question used to be answered from the in-memory cache, which holds at
           most one profile. Once a run spans three, the cache names the wrong profile for every
           group but one.
         </p>
@@ -1177,7 +1177,7 @@ public AppProfile? OwnerProfile { get; set; }</span></pre>
 
         <p>
           Now switch to <strong>After</strong> and click through the profiles again. Nothing
-          moves either &mdash; but for the opposite reason. Attribution no longer depends on the
+          moves either, but for the opposite reason. Attribution no longer depends on the
           selection at all, which is exactly what makes the selection safe to change.
         </p>
       </section>
@@ -1286,7 +1286,7 @@ _ = SaveProgressBatchAsync(changedQuests, published.ProfileId);</pre>
         <p>
           The beat that matters is the third. Under <strong>Before</strong>, the edit reads a
           global that has already moved and a cache that has not, so the two disagree and the
-          row lands in PvE &mdash; a profile whose data the player has never seen. Under
+          row lands in PvE, a profile whose data the player has never seen. Under
           <strong>After</strong> there is only one thing to read, and it is still the season
           snapshot, so the row goes where the player meant it to.
         </p>
@@ -1311,7 +1311,7 @@ _ = SaveProgressBatchAsync(changedQuests, published.ProfileId);</pre>
           the player was the last defence against wrong attribution. Once attribution comes from
           the logs, it asks the player to confirm a judgment they have no better information
           about than the app does, over a list that now spans several profiles. It is replaced by
-          a per-profile summary &mdash; which the PRD states as a requirement, not a nicety,
+          a per-profile summary, which the PRD states as a requirement, not a nicety,
           precisely because a bad sync is now harder to walk back. The one prompt that survives is
           the one no evidence can settle: which of two mutually exclusive prerequisites the player
           actually took.
@@ -1320,7 +1320,7 @@ _ = SaveProgressBatchAsync(changedQuests, published.ProfileId);</pre>
         <h3>The cascade stopped using derived status</h3>
         <p>
           <code>CascadeLookups.Status</code> is now the recorded-only view rather than
-          <code>GetStatus</code>. The two are interchangeable here &mdash; the core consults
+          <code>GetStatus</code>. The two are interchangeable here: the core consults
           Status solely through gates testing <code>== Done</code> and <code>== Failed</code>, and
           <code>GetStatus</code> reports either of those exactly when progress records it. The
           payoff is that it keeps <code>SettingsService</code> (player level, faction, editions,
@@ -1395,7 +1395,7 @@ Task.Run(async () =&gt; await ReloadForProfileAsync(profile, revision, notify: f
         <div id="quizList"></div>
 
         <div class="gate is-locked" id="gate">
-          <h3 id="gateTitle">Approval checklist &mdash; locked</h3>
+          <h3 id="gateTitle">Approval checklist: locked</h3>
           <p id="gateBody">Answer all eight questions correctly to unlock the reviewer checklist.</p>
         </div>
       </section>
@@ -1405,7 +1405,7 @@ Task.Run(async () =&gt; await ReloadForProfileAsync(profile, revision, notify: f
           Sources: <code>docs/decisions/fix-profile-data-attribution.md</code>,
           <code>docs/decisions/fix-profile-data-attribution.spec.md</code>,
           <code>docs/eft-1-1-profile-selection-log-analysis.md</code>. The labs reimplement the
-          decision logic faithfully but are illustrations, not the shipped code &mdash; the
+          decision logic faithfully but are illustrations, not the shipped code; the
           shipped behaviour is pinned by the tests named throughout.
         </p>
       </footer>
@@ -1923,7 +1923,7 @@ Task.Run(async () =&gt; await ReloadForProfileAsync(profile, revision, notify: f
       if (correct === QUESTIONS.length) {
         railLabel.textContent = "Gate open";
         gate.className = "gate is-open";
-        gateTitle.textContent = "Approval checklist — unlocked";
+        gateTitle.textContent = "Approval checklist: unlocked";
         gateBody.innerHTML = "";
         gateBody.appendChild(document.createTextNode(
           "Eight of eight. You have the model; now check the diff against it. Walk these before approving:"));
@@ -1938,7 +1938,7 @@ Task.Run(async () =&gt; await ReloadForProfileAsync(profile, revision, notify: f
       } else {
         railLabel.textContent = "Gate locked";
         gate.className = "gate is-locked";
-        gateTitle.textContent = "Approval checklist — locked";
+        gateTitle.textContent = "Approval checklist: locked";
         gateBody.innerHTML = "";
         gateBody.appendChild(document.createTextNode(
           "Answer all eight questions correctly to unlock the reviewer checklist. " +

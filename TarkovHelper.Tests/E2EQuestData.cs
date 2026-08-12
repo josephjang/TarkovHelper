@@ -18,7 +18,7 @@ internal static class E2EQuestData
 
     /// <summary>
     /// Opens the asset db read-only, runs one command, and hands it to
-    /// <paramref name="read"/> — the single home for the connection plumbing all
+    /// <paramref name="read"/>: the single home for the connection plumbing all
     /// five query methods share (parameters are added inside <paramref name="read"/>).
     /// </summary>
     private static T Query<T>(string sql, Func<SqliteCommand, T> read)
@@ -144,8 +144,8 @@ internal static class E2EQuestData
     /// exactly one auto-failed alternative ("Will be FAILED (1)") regardless of the
     /// length of its prerequisite chain, and Confirm must persist the alternative
     /// as Failed. The English name is a unique search substring like the other
-    /// queries. Also returns both quest Ids — the keys QuestProgress rows are
-    /// written under — for persistence assertions.
+    /// queries. Also returns both quest Ids (the keys QuestProgress rows are
+    /// written under) for persistence assertions.
     /// </summary>
     public static (string QuestName, string AltName, string QuestId, string AltId) FindQuestWithSingleAlternative()
     {

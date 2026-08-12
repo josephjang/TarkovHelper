@@ -14,13 +14,38 @@ public sealed class ProfileService
     public const string SeasonProfileId = "season";
     private const string SettingKey = "app.activeGameMode";
 
+    /// <summary>
+    /// Guards the selection and its revision as one unit. They are two halves of a single
+    /// fact ("transition N put us on profile P"), and they are written from at least two
+    /// threads: the dispatcher when the user clicks, and the EFT log watcher's thread pool
+    /// when fresh evidence arrives. Assigning the fields outside a lock let two transitions
+    /// assign in one order and take revisions in the other, leaving the service reporting one
+    /// profile while the winning revision belonged to another.
+    /// <para>
+    /// Static, not per instance, so the gate exists even on an instance built by
+    /// <c>RuntimeHelpers.GetUninitializedObject</c>, which skips field initializers and would
+    /// leave an instance field null with every lock on it throwing (ProfileSwitchingTests builds
+    /// one that way). This class is a singleton, so a per-type gate is a per-instance gate in
+    /// production, and two test instances sharing one only serialize with each other.
+    /// </para>
+    /// </summary>
+    private static readonly object _gate = new();
+
     private AppProfile _activeProfile = AppProfile.PvpZone;
     private bool _isAutoDetected;
     private long _transitionRevision;
 
-    public AppProfile ActiveProfile => _activeProfile;
-    public string ActiveProfileId => GetProfileId(_activeProfile);
-    public bool IsAutoDetected => _isAutoDetected;
+    public AppProfile ActiveProfile
+    {
+        get { lock (_gate) return _activeProfile; }
+    }
+
+    public string ActiveProfileId => GetProfileId(ActiveProfile);
+
+    public bool IsAutoDetected
+    {
+        get { lock (_gate) return _isAutoDetected; }
+    }
 
     /// <summary>
     /// Monotonic counter of announced transitions, incremented once per raised
@@ -33,7 +58,26 @@ public sealed class ProfileService
     /// repeats a value across two different loads.
     /// </para>
     /// </summary>
-    public long TransitionRevision => Interlocked.Read(ref _transitionRevision);
+    public long TransitionRevision
+    {
+        get { lock (_gate) return _transitionRevision; }
+    }
+
+    /// <summary>
+    /// The current selection and the revision it was announced under, read together under
+    /// <see cref="_gate"/>.
+    /// <para>
+    /// A caller that reads <see cref="ActiveProfile"/> and <see cref="TransitionRevision"/> as
+    /// two separate properties can have a transition land between them and end up pairing the
+    /// OLD profile with the NEW revision: its load then reads one profile's rows and publishes
+    /// them as if they served the other profile's transition, and the revision guard sees
+    /// nothing wrong. Anything that carries the pair into an async load must ask for it here.
+    /// </para>
+    /// </summary>
+    public (AppProfile Profile, long Revision) CurrentTransition
+    {
+        get { lock (_gate) return (_activeProfile, _transitionRevision); }
+    }
 
     public event EventHandler<ProfileChangedEventArgs>? ActiveProfileChanged;
 
@@ -56,26 +100,48 @@ public sealed class ProfileService
         // when _isAutoDetected was set, which resolved a stored-vs-detected conflict toward
         // the STORED token and relabelled the detection as manual -- the opposite of this
         // feature's log-wins design -- while firing a same-profile reload for no benefit.
-        if (profile == _activeProfile) return;
+        ProfileChangedEventArgs args;
+        lock (_gate)
+        {
+            if (profile == _activeProfile) return;
 
-        _activeProfile = profile;
-        _isAutoDetected = false;
-        ActiveProfileChanged?.Invoke(this, new ProfileChangedEventArgs(
-            profile, false, profileChanged: true, revision: Interlocked.Increment(ref _transitionRevision)));
+            _activeProfile = profile;
+            _isAutoDetected = false;
+            args = new ProfileChangedEventArgs(
+                profile, false, profileChanged: true, revision: ++_transitionRevision);
+        }
+
+        // Raised outside the lock. Handlers run synchronously on this thread and take locks of
+        // their own (the progress caches do), so holding the gate across the raise is a
+        // lock-ordering hazard, and it would serialize every subscriber's work behind a gate
+        // whose only job is to keep two fields consistent. The args were built under the lock,
+        // so each subscriber still sees a profile and revision that belong together.
+        ActiveProfileChanged?.Invoke(this, args);
     }
 
     public void SetActiveProfile(AppProfile profile, bool isAuto = false)
     {
         if (!Enum.IsDefined(profile)) return;
-        if (_activeProfile == profile && _isAutoDetected == isAuto) return;
 
-        // Repeated identical log evidence flips only the provenance flag. Subscribers that
-        // announce a transition must be able to tell that apart from a real destination
-        // change, or they claim a switch that never happened.
-        var profileChanged = _activeProfile != profile;
+        // The comparison, the assignment and the revision are one atomic step: two threads
+        // transitioning at once (a click on the dispatcher, log evidence on the watcher's
+        // thread) must not be able to assign in one order and number themselves in the other.
+        bool profileChanged;
+        ProfileChangedEventArgs args;
+        lock (_gate)
+        {
+            if (_activeProfile == profile && _isAutoDetected == isAuto) return;
 
-        _activeProfile = profile;
-        _isAutoDetected = isAuto;
+            // Repeated identical log evidence flips only the provenance flag. Subscribers that
+            // announce a transition must be able to tell that apart from a real destination
+            // change, or they claim a switch that never happened.
+            profileChanged = _activeProfile != profile;
+
+            _activeProfile = profile;
+            _isAutoDetected = isAuto;
+            args = new ProfileChangedEventArgs(
+                profile, isAuto, profileChanged, revision: ++_transitionRevision);
+        }
 
         if (profileChanged)
         {
@@ -83,8 +149,8 @@ public sealed class ProfileService
         }
         _log.Info($"Switched to {profile} (auto={isAuto}, changed={profileChanged})");
 
-        ActiveProfileChanged?.Invoke(this, new ProfileChangedEventArgs(
-            profile, isAuto, profileChanged, revision: Interlocked.Increment(ref _transitionRevision)));
+        // Raised outside the lock, for the reasons given in InitializeAsync.
+        ActiveProfileChanged?.Invoke(this, args);
     }
 
     public void ApplyDetectedProfile(SessionProfileHint hint)

@@ -32,7 +32,7 @@ internal sealed class AppDriver : IDisposable
 {
     private readonly Process _process;
     private readonly IntPtr _hwnd;
-    // Root UIA element for the main window, resolved once — every TryFindElement poll
+    // Root UIA element for the main window, resolved once, so every TryFindElement poll
     // reuses it instead of re-entering COM via FromHandle each 250ms tick.
     private readonly AutomationElement _uiaRoot;
 
@@ -62,7 +62,7 @@ internal sealed class AppDriver : IDisposable
         psi.Environment["TARKOVHELPER_DISABLE_DB_UPDATE"] = "1";
         // Without this a Debug-build app opens the Topmost Debug Toolbox at the OS
         // cascade position (upper-left, drifting per launch), which steals focus on
-        // Show() and intermittently obscures the quest list / recommendations area —
+        // Show() and intermittently obscures the quest list / recommendations area.
         // GetClickablePoint then throws on the obscured rows and synthetic clicks
         // land on the toolbox instead of the intended element.
         psi.Environment["TARKOVHELPER_DISABLE_DEBUG_TOOLBOX"] = "1";
@@ -86,10 +86,10 @@ internal sealed class AppDriver : IDisposable
 
     /// <summary>
     /// Waits for the process's "Tarkov Helper" top-level window. Matched by exact
-    /// title because the app opens other top-level windows — owned dialogs such as
-    /// QuestCompleteConfirmDialog (and, outside the harness, the Debug Toolbox,
-    /// which Launch disables via TARKOVHELPER_DISABLE_DEBUG_TOOLBOX) — that make
-    /// Process.MainWindowHandle ambiguous.
+    /// title because the app opens other top-level windows that make
+    /// Process.MainWindowHandle ambiguous: owned dialogs such as
+    /// QuestCompleteConfirmDialog, and outside the harness the Debug Toolbox
+    /// (which Launch disables via TARKOVHELPER_DISABLE_DEBUG_TOOLBOX).
     /// </summary>
     private static IntPtr WaitForMainWindow(Process process)
     {
@@ -111,7 +111,7 @@ internal sealed class AppDriver : IDisposable
     /// Deletes a leftover legacy Data\settings.json next to the app under test.
     /// TARKOVHELPER_CONFIG_PATH isolates user_data.db but NOT that file: it sits under the
     /// app base directory, and LocalizationService.LoadSettings runs MigrateFromJsonIfNeeded
-    /// — which writes app.language into the isolated db — BEFORE reading the language back,
+    /// (which writes app.language into the isolated db) BEFORE reading the language back,
     /// so seeding the db cannot pin it. A stale file from a pre-DB build would flip the app
     /// under test to KO/JA and break every assertion on rendered text (quest names, the
     /// cascade dialog's window title and headers). The app deletes it on first launch
@@ -186,8 +186,8 @@ internal sealed class AppDriver : IDisposable
 
     /// <summary>
     /// Selects a main-window tab (a named RadioButton, e.g. "TabMap") and waits until
-    /// <paramref name="readyElementAutomationId"/> — an element unique to the switched-in
-    /// page — appears. A click that lands during the app's startup loading window is
+    /// <paramref name="readyElementAutomationId"/>, an element unique to the switched-in
+    /// page, appears. A click that lands during the app's startup loading window is
     /// swallowed by MainWindow's _isLoading guard while still checking the radio button
     /// (so re-selecting it would no-op); the retry bounces through another tab to
     /// re-fire the Checked event once loading has finished.
@@ -197,7 +197,7 @@ internal sealed class AppDriver : IDisposable
     {
         if (string.Equals(tabAutomationId, bounceTabAutomationId, StringComparison.Ordinal))
             throw new ArgumentException(
-                $"bounce tab must differ from the target tab '{tabAutomationId}' — bouncing to itself " +
+                $"bounce tab must differ from the target tab '{tabAutomationId}': bouncing to itself " +
                 "just re-selects the checked radio button (a no-op) and would spin to the timeout",
                 nameof(bounceTabAutomationId));
 
@@ -251,7 +251,7 @@ internal sealed class AppDriver : IDisposable
     /// <summary>
     /// Whether the element is currently in the UIA tree and on screen. Collapsed WPF
     /// elements either drop out of the automation tree or report IsOffscreen depending
-    /// on the framework's peer behavior — this covers both.
+    /// on the framework's peer behavior, so this covers both.
     /// </summary>
     public bool IsElementVisible(string automationId)
     {
@@ -279,7 +279,7 @@ internal sealed class AppDriver : IDisposable
 
     /// <summary>
     /// The element's UIA ItemStatus (what the app publishes via
-    /// AutomationProperties.SetItemStatus — e.g. a status chip's
+    /// AutomationProperties.SetItemStatus, e.g. a status chip's
     /// "Selected"/"Unselected"). Empty until the app first sets it.
     /// </summary>
     public string GetItemStatus(string automationId)
@@ -291,7 +291,7 @@ internal sealed class AppDriver : IDisposable
     /// find and the property read. PollUntil calls its condition bare, so an
     /// ElementNotAvailableException from a transient teardown (a tab switch reassigning
     /// MainWindow.Content mid-poll) would fail the test outright instead of being
-    /// retried on the next tick — which is the opposite of what a wait helper is for.
+    /// retried on the next tick, which is the opposite of what a wait helper is for.
     /// </summary>
     public string? TryGetItemStatus(string automationId)
     {
@@ -335,7 +335,7 @@ internal sealed class AppDriver : IDisposable
     /// <summary>
     /// The number of ListItem children the list exposes right now. Virtualizing lists
     /// only expose realized containers, so treat the count as exact only for small
-    /// expected values (0 or 1 after a narrowing filter) — which is what callers use
+    /// expected values (0 or 1 after a narrowing filter), which is what callers use
     /// it for: telling "filtered down to N" apart from "still showing the old list".
     /// </summary>
     public int GetListItemCount(string listAutomationId)
@@ -382,7 +382,7 @@ internal sealed class AppDriver : IDisposable
     /// <summary>
     /// Finds a Text element (TextBlock) by its rendered text, optionally scoped under
     /// another element, and returns it. TextBlock link "buttons" in this app are wired
-    /// via MouseLeftButtonDown, which UIA cannot invoke — pair with ClickElement.
+    /// via MouseLeftButtonDown, which UIA cannot invoke, so pair with ClickElement.
     /// </summary>
     public AutomationElement WaitForTextElement(string text, string? scopeAutomationId = null,
         int timeoutSeconds = 30)
@@ -403,7 +403,7 @@ internal sealed class AppDriver : IDisposable
 
     /// <summary>
     /// Clicks an element with the real mouse (foregrounds the window first). Needed for
-    /// elements without InvokePattern — the app's TextBlock links handle
+    /// elements without InvokePattern: the app's TextBlock links handle
     /// MouseLeftButtonDown directly. Requires the element to be on screen; scroll it
     /// into view first (see ClickTextElementWithScroll).
     /// </summary>
@@ -422,7 +422,7 @@ internal sealed class AppDriver : IDisposable
     /// SetForegroundWindow returns without effect whenever another process owns the
     /// foreground lock (a different app was just activated, an elevated window is on
     /// top, some tray/monitor utilities hold it). Clicking anyway sends the click to
-    /// whatever is really under those screen coordinates — another application — which
+    /// whatever is really under those screen coordinates (another application), which
     /// both fails the test with a misleading "the UI never updated" timeout 30s later
     /// AND injects a stray click into someone else's window. On a shared desktop that
     /// can be a real, data-modifying click in another copy of this very app, so this
@@ -439,13 +439,13 @@ internal sealed class AppDriver : IDisposable
             },
             DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds),
             () => "the app window could not be brought to the foreground, so no click was "
-                + "injected (another window owns the foreground lock — check for a topmost "
+                + "injected (another window owns the foreground lock: check for a topmost "
                 + "or elevated window on this desktop)");
         Thread.Sleep(150);
     }
 
     /// <summary>
-    /// Like <see cref="ClickElement"/> but with Ctrl held — the WPF single-select
+    /// Like <see cref="ClickElement"/> but with Ctrl held: the WPF single-select
     /// ListBox gesture that toggles the clicked row's selection OFF, which UIA's
     /// SelectionItemPattern cannot express for single-selection containers. Clicks
     /// near the element's LEFT edge rather than its centre: list-row templates put
@@ -471,7 +471,7 @@ internal sealed class AppDriver : IDisposable
         var scroll = (ScrollPattern)viewer.GetCurrentPattern(ScrollPattern.Pattern);
         var element = WaitForTextElement(text, scopeAutomationId);
 
-        // The current scroll position first — most links are already in view.
+        // The current scroll position first, since most links are already in view.
         if (TryClickElement(element)) return;
 
         if (scroll.Current.VerticallyScrollable) // when the content fits, there is nothing to walk
@@ -564,7 +564,7 @@ internal sealed class AppDriver : IDisposable
 
     /// <summary>
     /// Waits for a visible top-level window of the app process with the exact title
-    /// (e.g. a modal dialog owned by the main window — owned windows are not reliably
+    /// (e.g. a modal dialog owned by the main window; owned windows are not reliably
     /// UIA descendants of their owner, so they are located via Win32 instead) and
     /// returns its root automation element for scoped searches.
     /// </summary>
@@ -593,7 +593,7 @@ internal sealed class AppDriver : IDisposable
             () => $"window titled '{title}' did not close within {timeoutSeconds}s");
 
     /// <summary>
-    /// Waits for an element by AutomationId among a scope element's descendants —
+    /// Waits for an element by AutomationId among a scope element's descendants,
     /// the dialog-window counterpart of <see cref="WaitForElement(string, int)"/>.
     /// </summary>
     public static AutomationElement WaitForElementUnder(AutomationElement scope, string automationId,
@@ -608,6 +608,38 @@ internal sealed class AppDriver : IDisposable
         }, DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds),
             () => $"element '{automationId}' did not appear under the scope element");
         return element!;
+    }
+
+    /// <summary>
+    /// The rows of a repeating list, read by AutomationId rather than by rendered wording: for
+    /// the list named <paramref name="listAutomationId"/>, the text of each cell named by
+    /// <paramref name="cellAutomationIds"/>, one string array per row in display order.
+    /// <para>
+    /// Cell ids repeat across rows by design, so the cells are collected per column (UIA returns
+    /// descendants in tree order) and zipped. A column of a different length means the template
+    /// changed shape, and the pairing would be meaningless, so it fails loudly instead.
+    /// </para>
+    /// </summary>
+    public static List<string[]> RowsUnder(
+        AutomationElement scope, string listAutomationId, params string[] cellAutomationIds)
+    {
+        var list = WaitForElementUnder(scope, listAutomationId);
+
+        var columns = cellAutomationIds
+            .Select(id => list
+                .FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.AutomationIdProperty, id))
+                .Cast<AutomationElement>()
+                .Select(cell => cell.Current.Name)
+                .ToList())
+            .ToList();
+
+        var rowCount = columns[0].Count;
+        Assert.All(columns, column => Assert.Equal(rowCount, column.Count));
+
+        return Enumerable.Range(0, rowCount)
+            .Select(row => columns.Select(column => column[row]).ToArray())
+            .ToList();
     }
 
     /// <summary>Whether a Text (TextBlock) descendant with the exact rendered text exists under the scope element.</summary>
@@ -656,7 +688,7 @@ public sealed class E2ETheoryAttribute : TheoryAttribute
 /// <summary>
 /// All e2e test classes join this single xUnit collection so they run SERIALLY.
 /// Without it, xUnit runs different classes in parallel by default, which would launch
-/// two real app instances at once — they fight over window focus and the global
+/// two real app instances at once: they fight over window focus and the global
 /// keyboard hook, and one class's Dispose calls the process-global
 /// SqliteConnection.ClearAllPools under the other's in-flight DB access.
 /// </summary>
@@ -691,7 +723,7 @@ public abstract class E2ETestBase : IDisposable
     private protected AppDriver LaunchMaximized() => LaunchMaximized(NewConfigDir());
 
     /// <summary>
-    /// Same, against a caller-held Config dir — for tests that also read the
+    /// Same, against a caller-held Config dir, for tests that also read the
     /// user_data.db in that dir (persistence assertions, relaunch flows).
     /// </summary>
     private protected static AppDriver LaunchMaximized(string configDir)
@@ -868,7 +900,7 @@ internal static class Win32
 /// Pins the test host's DPI awareness before any test code runs. Loading UI Automation
 /// (or other UI stacks) can flip an unset process to DPI-aware mid-run, which would
 /// silently switch GetWindowRect between virtualized and physical coordinates depending
-/// on test ordering — forcing per-monitor-v2 here makes the coordinate space
+/// on test ordering. Forcing per-monitor-v2 here makes the coordinate space
 /// deterministic (AppDriver.GetWindowRect then converts physical px to WPF units).
 /// </summary>
 internal static class TestHostDpiAwareness
@@ -879,7 +911,7 @@ internal static class TestHostDpiAwareness
     [System.Runtime.CompilerServices.ModuleInitializer]
     internal static void Ensure()
     {
-        // Fails harmlessly when awareness is already set — by then it is aware anyway.
+        // Fails harmlessly when awareness is already set: by then it is aware anyway.
         Win32.SetProcessDpiAwarenessContext(PerMonitorAwareV2);
     }
 }
@@ -931,39 +963,40 @@ internal static class E2EDb
     /// <summary>
     /// Reads a quest's persisted progress status (the QuestProgress row keyed by
     /// quest Id or NormalizedName), or null when no row / no db exists yet. Lets
-    /// tests assert a completion actually reached user_data.db — the app's batch
+    /// tests assert a completion actually reached user_data.db, since the app's batch
     /// save is fire-and-forget with a swallowing catch, so in-memory UI state alone
     /// proves nothing about persistence.
     /// </summary>
     public static string? ReadQuestProgress(string configDir, string questKey)
-    {
-        var dbPath = Path.Combine(configDir, "user_data.db");
-        if (!File.Exists(dbPath)) return null;
-
-        using var connection = new SqliteConnection($"Data Source={dbPath}");
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT Status FROM QuestProgress WHERE Id = $key OR NormalizedName = $key LIMIT 1";
-        command.Parameters.AddWithValue("$key", questKey);
-        try
-        {
-            return command.ExecuteScalar() as string;
-        }
-        catch (SqliteException)
-        {
-            // Table not created yet (app has not finished its first save).
-            return null;
-        }
-    }
+        => ReadQuestStatus(
+            configDir,
+            "Id = $key OR NormalizedName = $key",
+            command => command.Parameters.AddWithValue("$key", questKey));
 
     /// <summary>
     /// Reads a quest's persisted status within ONE profile's partition, or null when that
     /// profile has no row for it. The profile-blind overload above cannot express the assertion
-    /// attribution needs — "present here and absent there" — because it stops at the first
+    /// attribution needs ("present here and absent there") because it stops at the first
     /// matching row whichever partition it is in.
     /// </summary>
     public static string? ReadQuestProgress(string configDir, string profileId, string questKey)
+        => ReadQuestStatus(
+            configDir,
+            "ProfileId = $profile AND (Id = $key OR NormalizedName = $key)",
+            command =>
+            {
+                command.Parameters.AddWithValue("$profile", profileId);
+                command.Parameters.AddWithValue("$key", questKey);
+            });
+
+    /// <summary>
+    /// The scaffolding both ReadQuestProgress overloads share: open the db if it exists, run one
+    /// status query, and report "no row" for a table the app has not created yet. Only the WHERE
+    /// clause differs, and it is always a literal from this file (values arrive as parameters
+    /// through <paramref name="bindParameters"/>, never interpolated).
+    /// </summary>
+    private static string? ReadQuestStatus(
+        string configDir, string where, Action<SqliteCommand> bindParameters)
     {
         var dbPath = Path.Combine(configDir, "user_data.db");
         if (!File.Exists(dbPath)) return null;
@@ -971,11 +1004,8 @@ internal static class E2EDb
         using var connection = new SqliteConnection($"Data Source={dbPath}");
         connection.Open();
         using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT Status FROM QuestProgress " +
-            "WHERE ProfileId = $profile AND (Id = $key OR NormalizedName = $key) LIMIT 1";
-        command.Parameters.AddWithValue("$profile", profileId);
-        command.Parameters.AddWithValue("$key", questKey);
+        command.CommandText = $"SELECT Status FROM QuestProgress WHERE {where} LIMIT 1";
+        bindParameters(command);
         try
         {
             return command.ExecuteScalar() as string;

@@ -8,8 +8,8 @@ namespace TarkovHelper.Tests;
 /// suites share.
 ///
 /// Lives here rather than on <see cref="E2ETestBase"/> so that base class stays what
-/// its own doc says it is — page-agnostic scaffolding (throwaway Config dirs, launch,
-/// cleanup, the shared poll loop) — for the map, header and window-bounds suites that
+/// its own doc says it is: page-agnostic scaffolding (throwaway Config dirs, launch,
+/// cleanup, the shared poll loop) for the map, header and window-bounds suites that
 /// inherit it and have no business seeing QuestListPage's naming conventions.
 /// </summary>
 internal static class QuestTabDriver
@@ -30,10 +30,10 @@ internal static class QuestTabDriver
             .ToArray();
 
     /// <summary>
-    /// Polls until exactly the tag's chip reports selected — the assert-only probe for
+    /// Polls until exactly the tag's chip reports selected: the assert-only probe for
     /// the quest list's status filter (the chips hold the only status-filter state).
     /// Flows that assert a pre-existing selection (e.g. relaunch restore) must use
-    /// THIS, never <see cref="SelectStatusChip"/> — its click path could mutate the
+    /// THIS, never <see cref="SelectStatusChip"/>, whose click path could mutate the
     /// very state under test.
     ///
     /// The timeout message names whatever IS selected instead: the combo assertions
@@ -50,9 +50,9 @@ internal static class QuestTabDriver
     /// <summary>
     /// Selects a status chip idempotently: waits for the chips to initialize (a chip
     /// publishes a non-empty ItemStatus only once the page has loaded its data and is
-    /// acting on clicks — see QuestListPage.UpdateStatusChips), invokes the chip only
-    /// when it is not already selected — a blind click on the selected chip would
-    /// TOGGLE the filter back to "All" — and then waits for it to report Selected.
+    /// acting on clicks; see QuestListPage.UpdateStatusChips), invokes the chip only
+    /// when it is not already selected (a blind click on the selected chip would
+    /// TOGGLE the filter back to "All"), and then waits for it to report Selected.
     /// </summary>
     internal static void SelectStatusChip(AppDriver app, string tag)
     {
@@ -77,7 +77,7 @@ internal static class QuestTabDriver
         SelectStatusChip(app, statusFilter);
         app.SetTextBoxValue("TxtSearch", questName);
         // The search filter is debounced (QuestListPage.TxtSearch_TextChanged), so wait
-        // for it to apply before touching row 0 — otherwise this could grab the first
+        // for it to apply before touching row 0, or this could grab the first
         // row of the still-unfiltered list. The E2EQuestData queries guarantee the
         // name is a unique search substring, so exactly one row survives.
         AppDriver.PollUntil(() => app.GetListItemCount("LstQuests") == 1,

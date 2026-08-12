@@ -46,7 +46,7 @@ public sealed class SettingsValueTests
     public void Invariant_reading_never_misparses_a_dot_via_group_separators()
     {
         // On de-DE a bare double.TryParse("1.5") reads the dot as a thousands
-        // separator and yields 15 — the exact bug that silently discarded saved views.
+        // separator and yields 15, the exact bug that silently discarded saved views.
         WithCulture("de-DE", () =>
         {
             Assert.True(SettingsValue.TryParseDouble("1.5", out var value));

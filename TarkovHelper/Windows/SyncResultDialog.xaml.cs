@@ -9,7 +9,7 @@ namespace TarkovHelper.Windows;
 /// <para>
 /// Reports what a sync applied, per profile, and asks only the questions the logs cannot
 /// answer: which of two mutually exclusive prerequisites the player actually took (PRD R2a).
-/// The per-quest confirmation list this used to show is gone — once attribution comes from the
+/// The per-quest confirmation list this used to show is gone: once attribution comes from the
 /// logs rather than from the selected profile, confirming quest names one by one asks the
 /// player to second-guess a judgment they have no better information about than the app does,
 /// over a list that now spans several profiles. See fix-profile-data-attribution.md.
@@ -27,11 +27,6 @@ public partial class SyncResultDialog : Window
     /// </summary>
     public List<QuestChangeInfo>? SelectedChanges { get; private set; }
 
-    /// <summary>
-    /// Gets the count of alternative quest groups that were processed.
-    /// </summary>
-    public int AlternativeGroupCount => _alternativeGroups?.Count ?? 0;
-
     public SyncResultDialog(SyncResult result)
     {
         InitializeComponent();
@@ -47,7 +42,7 @@ public partial class SyncResultDialog : Window
     /// <param name="result">The sync result to display.</param>
     /// <param name="owner">Optional owner window for centering.</param>
     /// <returns>The alternative-quest choices to apply, or null if the player skipped them.</returns>
-    public static List<QuestChangeInfo>? ShowResult(SyncResult result, Window? owner, out int alternativeCount)
+    public static List<QuestChangeInfo>? ShowResult(SyncResult result, Window? owner)
     {
         var dialog = new SyncResultDialog(result);
         if (owner != null)
@@ -55,13 +50,12 @@ public partial class SyncResultDialog : Window
             dialog.Owner = owner;
         }
         dialog.ShowDialog();
-        alternativeCount = dialog.AlternativeGroupCount;
         return dialog.SelectedChanges;
     }
 
     /// <summary>
     /// One summary row: a profile that was written to, and how much landed there. Public because
-    /// the XAML DataTemplate binds to it — WPF binding resolves members by reflection and a row
+    /// the XAML DataTemplate binds to it: WPF binding resolves members by reflection, and a row
     /// type the templating engine cannot see renders blank instead of failing loudly.
     /// </summary>
     public sealed record AppliedProfileRow(string ProfileName, string AppliedText);
@@ -101,9 +95,21 @@ public partial class SyncResultDialog : Window
     private void UpdateLocalizedText()
     {
         TxtTitle.Text = _loc.SyncSummaryTitle;
-        TxtAppliedHeader.Text = _result.AppliedCountsByProfile.Count > 0
-            ? _loc.SyncAppliedHeader
-            : _loc.SyncAppliedNone;
+
+        // A run whose only profile threw wrote nothing, but "No quests changed." would be the
+        // opposite of the truth: something was attempted and lost. Any failure keeps the header
+        // neutral and lets the message below say what happened.
+        TxtAppliedHeader.Text =
+            _result.AppliedCountsByProfile.Count > 0 || _result.FailedProfiles.Count > 0
+                ? _loc.SyncAppliedHeader
+                : _loc.SyncAppliedNone;
+
+        if (_result.FailedProfiles.Count > 0)
+        {
+            TxtApplyFailed.Text = string.Format(_loc.SyncApplyFailedFormat,
+                string.Join(", ", _result.FailedProfiles.OrderBy(p => p).Select(_loc.ProfileName)));
+            TxtApplyFailed.Visibility = Visibility.Visible;
+        }
 
         TxtStats.Text = string.Format(
             _loc.SyncStatsFormat,
@@ -175,36 +181,32 @@ public partial class SyncResultDialog : Window
 
             // Each change carries the group's profile, so the apply step writes the answer to
             // the profile the question was asked about rather than to whatever is on screen.
+            // One builder for both outcomes: every field but the task and the change type is
+            // shared, and the two used to be separate initializers that had to be kept in step
+            // by hand.
             var owner = group.OriginalGroup.OwnerProfile;
+            var timestamp = DateTime.Now;
 
-            var task = selectedChoice.OriginalChoice.Task;
-            selectedChanges.Add(new QuestChangeInfo
+            QuestChangeInfo MakeChange(TarkovTask task, QuestEventType changeType) => new()
             {
                 QuestName = task.Name,
                 NormalizedName = task.NormalizedName ?? "",
                 Trader = task.Trader,
                 IsPrerequisite = true,
-                ChangeType = QuestEventType.Completed,
+                ChangeType = changeType,
                 OwnerProfile = owner,
                 IsSelected = true,
-                Timestamp = DateTime.Now
-            });
+                Timestamp = timestamp
+            };
+
+            selectedChanges.Add(
+                MakeChange(selectedChoice.OriginalChoice.Task, QuestEventType.Completed));
 
             // Fail the other alternatives
             foreach (var otherChoice in group.Choices.Where(c => c != selectedChoice && !c.IsCompleted))
             {
-                var otherTask = otherChoice.OriginalChoice.Task;
-                selectedChanges.Add(new QuestChangeInfo
-                {
-                    QuestName = otherTask.Name,
-                    NormalizedName = otherTask.NormalizedName ?? "",
-                    Trader = otherTask.Trader,
-                    IsPrerequisite = true,
-                    ChangeType = QuestEventType.Failed,
-                    OwnerProfile = owner,
-                    IsSelected = true,
-                    Timestamp = DateTime.Now
-                });
+                selectedChanges.Add(
+                    MakeChange(otherChoice.OriginalChoice.Task, QuestEventType.Failed));
             }
         }
 

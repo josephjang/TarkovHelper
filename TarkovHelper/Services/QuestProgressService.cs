@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
-using TarkovHelper.Debug;
 using TarkovHelper.Models;
+using TarkovHelper.Services.Logging;
 
 namespace TarkovHelper.Services
 {
@@ -12,7 +12,7 @@ namespace TarkovHelper.Services
     /// throughout, which gives an internally consistent view without a lock; writers derive the
     /// next snapshot from the one they read, publish it with a compare-and-swap, and persist
     /// under <em>that</em> snapshot's ProfileId. Nothing on a write path asks
-    /// <see cref="ProfileService"/> which profile is selected — see
+    /// <see cref="ProfileService"/> which profile is selected. See
     /// <c>fix-profile-data-attribution.spec.md</c> for why that question has the wrong answer
     /// for everything except hand entry, and <c>ProfileAttributionSourceTests</c> for the guard
     /// that keeps it out.
@@ -20,6 +20,8 @@ namespace TarkovHelper.Services
     /// </summary>
     public class QuestProgressService
     {
+        private static readonly ILogger _log = Log.For<QuestProgressService>();
+
         private static QuestProgressService? _instance;
         public static QuestProgressService Instance => _instance ??= new QuestProgressService();
 
@@ -28,10 +30,12 @@ namespace TarkovHelper.Services
             // Allowlisted selection read. The snapshot has to start naming *some* profile, and
             // before any rows are loaded the only honest answer is the one currently selected.
             // Every later destination arrives on ActiveProfileChanged; no write path repeats
-            // this lookup.
+            // this lookup. The profile and the revision come from one atomic read: taken
+            // separately, a transition landing between them would pair the old profile with the
+            // new revision, and the guard in ReloadForProfileAsync would see nothing wrong.
             var profileService = ProfileService.Instance;
-            _snapshot = ProgressSnapshot.Empty(
-                ProfileService.GetProfileId(profileService.ActiveProfile), profileService.TransitionRevision);
+            var (profile, revision) = profileService.CurrentTransition;
+            _snapshot = ProgressSnapshot.Empty(ProfileService.GetProfileId(profile), revision);
             profileService.ActiveProfileChanged += OnActiveProfileChanged;
         }
 
@@ -45,6 +49,13 @@ namespace TarkovHelper.Services
         private long _latestRevision;
 
         /// <summary>
+        /// True when the load that produced the current snapshot could not read part (or all) of
+        /// the store and published empty rows in their place. It is what makes the empty publish
+        /// recoverable: see <see cref="OnActiveProfileChanged"/>.
+        /// </summary>
+        private volatile bool _lastLoadFailed;
+
+        /// <summary>
         /// Test seam: the live snapshot. Production code publishes only through
         /// <see cref="Mutate{T}"/> or <see cref="ReloadForProfileAsync"/>; tests seed and read
         /// it directly because <c>GetUninitializedObject</c> skips the constructor.
@@ -55,13 +66,18 @@ namespace TarkovHelper.Services
             set => Volatile.Write(ref _snapshot, value);
         }
 
+        /// <summary>
+        /// Persistence, behind the narrow <see cref="IQuestProgressStore"/> surface rather than
+        /// <see cref="UserDataDbService"/> directly, so tests can substitute a fake and see which
+        /// profile each write landed in. Settable for the same reason:
+        /// <c>GetUninitializedObject</c> skips field initializers, so a test assigns it.
+        /// </summary>
+        internal IQuestProgressStore Store { get; set; } = UserDataDbService.Instance;
+
         private Dictionary<string, TarkovTask> _tasksByNormalizedName = new();
         private Dictionary<string, TarkovTask> _tasksByBsgId = new();
         private Dictionary<string, TarkovTask> _tasksById = new();
         private List<TarkovTask> _allTasks = new();
-
-        // V2 진행 데이터 (이중 키 저장)
-        private QuestProgressDataV2 _progressDataV2 = new();
 
         /// <summary>
         /// 데이터 소스 (JSON 또는 DB)
@@ -74,10 +90,22 @@ namespace TarkovHelper.Services
         private void OnActiveProfileChanged(object? sender, ProfileChangedEventArgs e)
         {
             // A provenance-only re-confirmation (EFT re-logs the session mode on every profile
-            // screen visit) names the profile the snapshot already holds. Reloading it would
-            // re-read identical rows and could republish a view taken before an edit made while
-            // the read was in flight, so only a real destination change reloads.
-            if (!e.ProfileChanged) return;
+            // screen visit) normally names the profile the snapshot already holds. Reloading it
+            // would re-read identical rows and could republish a view taken before an edit made
+            // while the read was in flight, so the usual answer is "do nothing".
+            //
+            // Two states make it worth reloading anyway, and they are the reason this is not a
+            // plain "if (!e.ProfileChanged) return":
+            //  - the last load failed, so ReloadForProfileAsync's catch published empty rows and
+            //    the user is looking at every quest un-completed;
+            //  - the snapshot names a different profile than this event does, which a reload
+            //    that lost its race can leave behind.
+            // Both used to be curable only by switching profile away and back by hand. A
+            // re-confirmation is the one event that keeps arriving on its own, so it is where
+            // self-healing belongs.
+            if (!e.ProfileChanged && !_lastLoadFailed &&
+                string.Equals(Snapshot.ProfileId, ProfileService.GetProfileId(e.Profile), StringComparison.Ordinal))
+                return;
 
             _ = ReloadForProfileAsync(e.Profile, e.Revision);
         }
@@ -120,7 +148,7 @@ namespace TarkovHelper.Services
 
             if (!await dbService.LoadQuestsAsync())
             {
-                System.Diagnostics.Debug.WriteLine("[QuestProgressService] Failed to load quests from DB, falling back to JSON");
+                _log.Warning("Failed to load quests from DB, falling back to JSON");
                 return false;
             }
 
@@ -128,84 +156,8 @@ namespace TarkovHelper.Services
             Initialize(tasks);
             IsLoadedFromDb = true;
 
-            // V2 형식으로 진행 데이터 reconcile
-            ReconcileProgressWithDb();
-
-            System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Initialized from DB with {tasks.Count} quests");
+            _log.Info($"Initialized from DB with {tasks.Count} quests");
             return true;
-        }
-
-        /// <summary>
-        /// DB 업데이트 후 진행 데이터를 reconcile합니다.
-        /// ID 또는 NormalizedName으로 매핑하고 누락된 키를 채웁니다.
-        /// </summary>
-        private void ReconcileProgressWithDb()
-        {
-            var changed = false;
-
-            // 완료 퀘스트 reconcile
-            foreach (var entry in _progressDataV2.CompletedQuests)
-            {
-                TarkovTask? matched = null;
-
-                // 1차: ID로 매핑
-                if (!string.IsNullOrEmpty(entry.Id) && _tasksById.TryGetValue(entry.Id, out matched))
-                {
-                    // ID 매핑 성공 - NormalizedName 업데이트
-                    if (matched.NormalizedName != null && entry.NormalizedName != matched.NormalizedName)
-                    {
-                        entry.NormalizedName = matched.NormalizedName;
-                        changed = true;
-                    }
-                }
-                // 2차: NormalizedName으로 폴백
-                else if (!string.IsNullOrEmpty(entry.NormalizedName) &&
-                         _tasksByNormalizedName.TryGetValue(entry.NormalizedName, out matched))
-                {
-                    // NormalizedName 매핑 성공 - ID 업데이트
-                    var matchedId = matched.Ids?.FirstOrDefault();
-                    if (!string.IsNullOrEmpty(matchedId) && entry.Id != matchedId)
-                    {
-                        entry.Id = matchedId;
-                        changed = true;
-                    }
-                }
-                else
-                {
-                    // 매핑 실패 - 고아 레코드로 유지 (삭제하지 않음)
-                    System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Orphan completed entry: {entry.Id ?? entry.NormalizedName}");
-                }
-            }
-
-            // 실패 퀘스트 reconcile
-            foreach (var entry in _progressDataV2.FailedQuests)
-            {
-                TarkovTask? matched = null;
-
-                if (!string.IsNullOrEmpty(entry.Id) && _tasksById.TryGetValue(entry.Id, out matched))
-                {
-                    if (matched.NormalizedName != null && entry.NormalizedName != matched.NormalizedName)
-                    {
-                        entry.NormalizedName = matched.NormalizedName;
-                        changed = true;
-                    }
-                }
-                else if (!string.IsNullOrEmpty(entry.NormalizedName) &&
-                         _tasksByNormalizedName.TryGetValue(entry.NormalizedName, out matched))
-                {
-                    var matchedId = matched.Ids?.FirstOrDefault();
-                    if (!string.IsNullOrEmpty(matchedId) && entry.Id != matchedId)
-                    {
-                        entry.Id = matchedId;
-                        changed = true;
-                    }
-                }
-            }
-
-            if (changed)
-            {
-                SaveProgress();
-            }
         }
 
         /// <summary>
@@ -215,42 +167,64 @@ namespace TarkovHelper.Services
         {
             _allTasks = tasks;
 
-            // Build dictionaries, handling duplicates by keeping the first occurrence
-            _tasksByNormalizedName = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
-            _tasksByBsgId = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
-            _tasksById = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var task in tasks.Where(t => !string.IsNullOrEmpty(t.NormalizedName)))
-            {
-                if (!_tasksByNormalizedName.ContainsKey(task.NormalizedName!))
-                {
-                    _tasksByNormalizedName[task.NormalizedName!] = task;
-                }
-
-                // Build Id/BsgId lookup (task.Ids contains IDs)
-                if (task.Ids != null)
-                {
-                    foreach (var id in task.Ids)
-                    {
-                        if (!string.IsNullOrEmpty(id))
-                        {
-                            if (!_tasksByBsgId.ContainsKey(id))
-                            {
-                                _tasksByBsgId[id] = task;
-                            }
-                            if (!_tasksById.ContainsKey(id))
-                            {
-                                _tasksById[id] = task;
-                            }
-                        }
-                    }
-                }
-            }
+            var indexes = BuildTaskIndexes(tasks);
+            _tasksByNormalizedName = indexes.ByNormalizedName;
+            _tasksByBsgId = indexes.ByBsgId;
+            _tasksById = indexes.ById;
 
             // One call loads both quest and objective rows: they are two halves of one snapshot
             // and must be published together (they used to be two independent loads that each
             // resolved the profile again, so the two caches could end up from different profiles).
             LoadProgress();
+        }
+
+        /// <summary>The three lookups <see cref="Initialize"/> publishes.</summary>
+        internal sealed record TaskIndexes(
+            Dictionary<string, TarkovTask> ByNormalizedName,
+            Dictionary<string, TarkovTask> ByBsgId,
+            Dictionary<string, TarkovTask> ById);
+
+        /// <summary>
+        /// Indexes tasks by NormalizedName, BsgId and Id, first occurrence winning.
+        /// <para>
+        /// The id indexes cover EVERY task, including one whose NormalizedName is empty. They
+        /// replaced two hand-rolled BuildQuestIdLookup copies (MainWindow's live quest-event
+        /// handler and the sync path) that indexed every task; narrowing them to named tasks stops
+        /// the live handler recording a completion for an unnamed quest at all, because it resolves
+        /// the task by id and returns when the lookup misses. Only ByNormalizedName needs a name,
+        /// because a name is its key.
+        /// </para>
+        /// <para>
+        /// Extracted from Initialize so the id set is assertable without running the whole
+        /// initialize, which loads progress from the store and asks ProfileService which profile
+        /// is selected.
+        /// </para>
+        /// </summary>
+        internal static TaskIndexes BuildTaskIndexes(IEnumerable<TarkovTask> tasks)
+        {
+            var byNormalizedName = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
+            var byBsgId = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
+            var byId = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var task in tasks)
+            {
+                if (!string.IsNullOrEmpty(task.NormalizedName) &&
+                    !byNormalizedName.ContainsKey(task.NormalizedName))
+                {
+                    byNormalizedName[task.NormalizedName] = task;
+                }
+
+                if (task.Ids == null) continue;
+
+                foreach (var id in task.Ids)
+                {
+                    if (string.IsNullOrEmpty(id)) continue;
+                    if (!byBsgId.ContainsKey(id)) byBsgId[id] = task;
+                    if (!byId.ContainsKey(id)) byId[id] = task;
+                }
+            }
+
+            return new TaskIndexes(byNormalizedName, byBsgId, byId);
         }
 
         /// <summary>
@@ -688,7 +662,7 @@ namespace TarkovHelper.Services
         public void CompleteQuest(TarkovTask task, bool completePrerequisites = true)
         {
             var taskId = task.Ids?.FirstOrDefault();
-            System.Diagnostics.Debug.WriteLine($"[QuestProgressService] CompleteQuest: {taskId} ({task.Name}), prerequisites: {completePrerequisites}");
+            _log.Debug($"CompleteQuest: {taskId} ({task.Name}), prerequisites: {completePrerequisites}");
 
             // Compute the full plan first, then apply it. The decision logic lives in
             // ComputeCompletionCascade, shared with GetCompletionCascade so the
@@ -705,15 +679,15 @@ namespace TarkovHelper.Services
         /// <summary>
         /// Applies a cascade the user already confirmed in QuestCompleteConfirmDialog
         /// (or an empty-cascade preview from the one-click path). The plan captured by
-        /// <see cref="GetCompletionCascade"/> is written verbatim — never recomputed —
+        /// <see cref="GetCompletionCascade"/> is written verbatim, never recomputed,
         /// so the quests the dialog listed are exactly the quests whose progress
         /// changes, even when background log-sync events altered other state while
         /// the modal was open.
         /// </summary>
         public void ApplyCompletionCascade(QuestCompletionCascade cascade)
         {
-            System.Diagnostics.Debug.WriteLine(
-                $"[QuestProgressService] ApplyCompletionCascade: {cascade.Plan.CompletionsInOrder.Count} completions, {cascade.Plan.AlternativesToFail.Count} failures");
+            _log.Debug(
+                $"ApplyCompletionCascade: {cascade.Plan.CompletionsInOrder.Count} completions, {cascade.Plan.AlternativesToFail.Count} failures");
 
             // The plan the dialog listed is written verbatim, never recomputed, so the quests
             // the user confirmed are exactly the quests whose progress changes.
@@ -721,8 +695,8 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// The rows a plan writes: each planned quest Done, each planned alternative Failed —
-        /// the same write order and keys the pre-refactor interleaved code produced.
+        /// The rows a plan writes: each planned quest Done, then each planned alternative Failed,
+        /// in the write order and under the keys the pre-refactor interleaved code produced.
         /// </summary>
         private static List<(string Id, string? NormalizedName, QuestStatus Status)> RowsOf(QuestCompletionPlan plan)
         {
@@ -737,7 +711,7 @@ namespace TarkovHelper.Services
             foreach (var failure in plan.AlternativesToFail)
             {
                 changedQuests.Add((failure.Key, failure.Quest.NormalizedName, QuestStatus.Failed));
-                System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Auto-failed alternative quest: {failure.Key} ({failure.Quest.Name})");
+                _log.Debug($"Auto-failed alternative quest: {failure.Key} ({failure.Quest.Name})");
             }
 
             return changedQuests;
@@ -760,24 +734,63 @@ namespace TarkovHelper.Services
 
             if (changedQuests.Count == 0)
             {
-                System.Diagnostics.Debug.WriteLine("[QuestProgressService] No changes to save");
+                _log.Debug("No changes to save");
                 return;
             }
 
-            System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Saving {changedQuests.Count} changed quests (batch)");
+            _log.Debug($"Saving {changedQuests.Count} changed quests (batch)");
             // Fire-and-forget async save - don't block UI
             _ = SaveProgressBatchAsync(changedQuests, published.ProfileId);
-            System.Diagnostics.Debug.WriteLine("[QuestProgressService] Progress save initiated");
+            _log.Debug("Progress save initiated");
             ProgressChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        /// <summary>Applies persisted rows to a quest map, last write per key winning.</summary>
+        /// <summary>
+        /// Applies persisted rows to a quest map, last write per key winning, each row collapsing
+        /// its quest to a single entry (see <see cref="SetQuestRow(ImmutableDictionary{string, QuestStatus}.Builder, string, string?, QuestStatus)"/>).
+        /// </summary>
         private static ImmutableDictionary<string, QuestStatus> WithRows(
             ImmutableDictionary<string, QuestStatus> quests,
             IEnumerable<(string Id, string? NormalizedName, QuestStatus Status)> rows)
         {
             var builder = quests.ToBuilder();
-            foreach (var row in rows) builder[row.Id] = row.Status;
+            foreach (var row in rows) SetQuestRow(builder, row.Id, row.NormalizedName, row.Status);
+            return builder.ToImmutable();
+        }
+
+        /// <summary>
+        /// Records one quest under <paramref name="key"/> and removes the other spelling it may
+        /// already be recorded under, so one quest never occupies two entries at once.
+        /// <para>
+        /// The two key policies do not match and cannot be made to: a write keys by
+        /// <see cref="ProgressKeyOf"/> (an Id) while <c>UserDataDbService.LoadQuestProgressAsync</c>
+        /// keys each row by <c>normalizedName ?? id</c> taken from the ROW, which is null for a
+        /// legacy row. So a name-keyed row loaded from the store plus any in-memory write leaves
+        /// both spellings live, and the dual-key OR in <see cref="IsRecordedAs"/> then reports the
+        /// STALE one: a quest recorded Done under its name and just failed under its Id still
+        /// answers "recorded Done", and the completion cascade refuses to re-complete it.
+        /// Collapsing to one entry here is what makes that read a safety net instead of a hazard.
+        /// </para>
+        /// </summary>
+        private static void SetQuestRow(
+            ImmutableDictionary<string, QuestStatus>.Builder builder,
+            string key, string? normalizedName, QuestStatus status)
+        {
+            builder[key] = status;
+            if (!string.IsNullOrEmpty(normalizedName) &&
+                !string.Equals(normalizedName, key, StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Remove(normalizedName);
+            }
+        }
+
+        /// <summary>Single-row twin of the builder overload above.</summary>
+        private static ImmutableDictionary<string, QuestStatus> SetQuestRow(
+            ImmutableDictionary<string, QuestStatus> quests,
+            string key, string? normalizedName, QuestStatus status)
+        {
+            var builder = quests.ToBuilder();
+            SetQuestRow(builder, key, normalizedName, status);
             return builder.ToImmutable();
         }
 
@@ -802,19 +815,49 @@ namespace TarkovHelper.Services
             => snapshot.Quests.TryGetValue(key, out var status) ? status : null;
 
         /// <summary>
-        /// True when progress already records this quest Done under either key it may be
-        /// stored under — its progress key or its NormalizedName (legacy migration rows).
-        /// The snapshot twin of the cascade core's IsDoneRecordedOrPlanned, kept in one
-        /// place so the batch paths cannot drift from the traversal's done-check.
+        /// True when progress already records this quest with <paramref name="status"/> under
+        /// either key it may be stored under: its progress key (an Id, for current data) or its
+        /// NormalizedName.
+        /// <para>
+        /// Both keys have to be asked, always. Every row that came out of the store arrives
+        /// NormalizedName-keyed wherever it carries a name, because
+        /// <c>UserDataDbService.LoadQuestProgressAsync</c> keys each row by
+        /// <c>normalizedName ?? id</c> while <see cref="ProgressKeyOf"/> answers with the Id. That
+        /// is true of the loaded snapshot a reload publishes and of the DETACHED one
+        /// <see cref="LoadSnapshotForAsync"/> builds for an off-screen profile alike. An Id-only
+        /// check therefore reports "not recorded" for a quest that is recorded, and the planner
+        /// re-writes the same row on every sync and counts it as newly applied. Every "is this
+        /// already recorded?" question a plan asks goes through here so the branches cannot drift
+        /// apart.
+        /// </para>
+        /// <para>
+        /// The OR is safe only because a quest never occupies both keys at once. The Id spelling
+        /// appears only from an in-memory write, and every such write goes through
+        /// <see cref="SetQuestRow(ImmutableDictionary{string, QuestStatus}.Builder, string, string?, QuestStatus)"/>,
+        /// which drops the name it was loaded under. Without that, a loaded row left standing
+        /// beside a fresh write would make this answer from the STALE one.
+        /// </para>
         /// </summary>
-        private static bool IsRecordedDone(ProgressSnapshot snapshot, TarkovTask task)
-            => RecordedDoneUnder(snapshot, ProgressKeyOf(task)) || RecordedDoneUnder(snapshot, task.NormalizedName);
-
-        private static bool RecordedDoneUnder(ProgressSnapshot snapshot, string? key)
-            => !string.IsNullOrEmpty(key) && RecordedStatus(snapshot, key) == QuestStatus.Done;
+        private static bool IsRecordedAs(ProgressSnapshot snapshot, TarkovTask task, QuestStatus status)
+            => RecordedUnder(snapshot, ProgressKeyOf(task), status)
+               || RecordedUnder(snapshot, task.NormalizedName, status);
 
         /// <summary>
-        /// This service's lookups for the cascade core, bound to one captured snapshot — the
+        /// The snapshot twin of the cascade core's IsDoneRecordedOrPlanned, kept in one place so
+        /// the batch paths cannot drift from the traversal's done-check.
+        /// </summary>
+        private static bool IsRecordedDone(ProgressSnapshot snapshot, TarkovTask task)
+            => IsRecordedAs(snapshot, task, QuestStatus.Done);
+
+        /// <summary>Failed twin of <see cref="IsRecordedDone"/>, for the sync and log-event planners.</summary>
+        private static bool IsRecordedFailed(ProgressSnapshot snapshot, TarkovTask task)
+            => IsRecordedAs(snapshot, task, QuestStatus.Failed);
+
+        private static bool RecordedUnder(ProgressSnapshot snapshot, string? key, QuestStatus status)
+            => !string.IsNullOrEmpty(key) && RecordedStatus(snapshot, key) == status;
+
+        /// <summary>
+        /// This service's lookups for the cascade core, bound to one captured snapshot. The
         /// single construction site.
         /// <para>
         /// <see cref="CascadeLookups.Status"/> is deliberately the recorded-only view rather
@@ -824,6 +867,12 @@ namespace TarkovHelper.Services
         /// it. Using the recorded view keeps the cascade free of SettingsService (player level,
         /// faction, editions), which is profile-scoped state the core would otherwise read from
         /// the selected profile while planning a change for a different one.
+        /// </para>
+        /// <para>
+        /// So <c>Status</c> answers Done or Failed only from what is recorded, and Active for
+        /// everything else. It never reports Locked, LevelLocked or Unavailable, whatever the
+        /// quest's requirements say. A gate added to the core that needs a DERIVED status cannot
+        /// be written against this delegate.
         /// </para>
         /// </summary>
         private CascadeLookups LookupsFor(ProgressSnapshot snapshot) => new()
@@ -836,8 +885,8 @@ namespace TarkovHelper.Services
 
         /// <summary>
         /// A quest's recorded terminal status under the key policy
-        /// <see cref="GetStatus(TarkovTask, ProgressSnapshot)"/> uses — Id first, NormalizedName
-        /// only when the Id lookup misses — or null when nothing terminal is recorded (a
+        /// <see cref="GetStatus(TarkovTask, ProgressSnapshot)"/> uses (Id first, NormalizedName
+        /// only when the Id lookup misses), or null when nothing terminal is recorded (a
         /// recorded non-terminal value reports null too, matching GetStatus, which ignores one
         /// and falls through to derivation).
         /// <para>
@@ -877,8 +926,8 @@ namespace TarkovHelper.Services
             => RecordedStatusOf(quests, task) ?? QuestStatus.Active;
 
         /// <summary>
-        /// A requirement whose Status list names "complete" — or names nothing, the
-        /// legacy default (see <see cref="IsStatusSatisfied"/>) — is one the game
+        /// A requirement whose Status list names "complete", or names nothing (the
+        /// legacy default, see <see cref="IsStatusSatisfied"/>), is one the game
         /// satisfies by completing the prerequisite. Fail- and Accept/Start-type
         /// requirements are satisfied by other player actions, so the completion
         /// cascade must never auto-complete their targets.
@@ -890,7 +939,7 @@ namespace TarkovHelper.Services
         /// <summary>
         /// The progress key a quest is recorded and written under: first non-empty
         /// Ids entry, else NormalizedName; null/empty when the task carries neither.
-        /// (An empty-string Id — a data anomaly — must fall through to the name, not
+        /// (An empty-string Id, a data anomaly, must fall through to the name, not
         /// become the literal key "".)
         /// </summary>
         private static string? ProgressKeyOf(TarkovTask quest)
@@ -904,7 +953,7 @@ namespace TarkovHelper.Services
         /// the legacy TaskNormalizedName. The single home for the Id-first-else-name
         /// convention every requirement reader shares (ArePrerequisitesMet, the cascade
         /// core, QuestListPage's prerequisite rows); null when the row resolves to no known
-        /// quest — each reader applies its own null policy, which is why this helper stops
+        /// quest; each reader applies its own null policy, which is why this helper stops
         /// at resolution and does not judge satisfaction.
         /// </summary>
         internal static TarkovTask? ResolveRequirementTask(
@@ -919,7 +968,7 @@ namespace TarkovHelper.Services
         /// The mutually exclusive alternatives a completion of <paramref name="task"/> would
         /// mark Failed: each listed alternative that resolves (by NormalizedName, Id fallback)
         /// and is neither Done nor already Failed, paired with the key its status is recorded
-        /// under — first non-empty Id, else the raw listed name (the legacy fallback key).
+        /// under: first non-empty Id, else the raw listed name (the legacy fallback key).
         /// Shared by ComputeCompletionCascade and ApplyQuestChangesBatchAsync so the two
         /// auto-fail paths cannot drift; the caller supplies the status view it needs (the
         /// core's planned-aware EffectiveStatus, the batch's already-mutated GetStatus).
@@ -951,25 +1000,30 @@ namespace TarkovHelper.Services
         /// The read-only lookups <see cref="ComputeCompletionCascade"/> runs against.
         /// A named payload rather than four positional delegates: TaskById and TaskByName
         /// have identical types, so a swapped pair would compile and silently resolve
-        /// nothing — every prerequisite would vanish from the plan with no error. Required
+        /// nothing: every prerequisite would vanish from the plan with no error. Required
         /// members make each call site name what it passes.
         /// </summary>
         internal sealed class CascadeLookups
         {
-            /// <summary>Quest by database Id — <see cref="GetTaskById"/>.</summary>
+            /// <summary>Quest by database Id: <see cref="GetTaskById"/>.</summary>
             public required Func<string, TarkovTask?> TaskById { get; init; }
-            /// <summary>Quest by NormalizedName — <see cref="GetTask"/>.</summary>
+            /// <summary>Quest by NormalizedName: <see cref="GetTask"/>.</summary>
             public required Func<string, TarkovTask?> TaskByName { get; init; }
-            /// <summary>Derived quest status — <see cref="GetStatus"/>.</summary>
+            /// <summary>
+            /// The quest's RECORDED status (Done or Failed as progress records it, Active
+            /// otherwise), never a derived one. <see cref="LookupsFor"/> binds it to a captured
+            /// snapshot and the tests bind it to a plain dictionary; neither consults quest
+            /// requirements, so this never answers Locked, LevelLocked or Unavailable.
+            /// </summary>
             public required Func<TarkovTask, QuestStatus> Status { get; init; }
-            /// <summary>Raw recorded status for a progress key; null when unrecorded.</summary>
+            /// <summary>Raw recorded status for one progress key, whatever it is; null when unrecorded.</summary>
             public required Func<string, QuestStatus?> RecordedStatus { get; init; }
         }
 
         /// <summary>
         /// Pure decision core shared by <see cref="CompleteQuest"/> and
         /// <see cref="GetCompletionCascade"/>: computes the ordered plan of quests
-        /// completing <paramref name="task"/> would newly mark Done (post-order —
+        /// completing <paramref name="task"/> would newly mark Done (post-order:
         /// prerequisites before dependents, the clicked quest last when it is planned
         /// at all) and the alternatives it would mark Failed, mutating nothing.
         ///
@@ -980,26 +1034,27 @@ namespace TarkovHelper.Services
         /// legacy Previous name list; a prerequisite that itself has
         /// AlternativeQuests is skipped entirely, subtree included (the user must
         /// choose which alternative to complete); alternatives already Done or
-        /// Failed are left alone. The pre-refactor code wrote Done into
-        /// _questProgress mid-traversal and later gates read those writes — the
+        /// Failed are left alone. The pre-refactor code wrote Done into the progress
+        /// cache mid-traversal and later gates read those writes back; the
         /// plannedDone set reproduces that, so e.g. an alternative the cascade
         /// itself completes is not also failed.
         ///
         /// Requirement semantics mirror <see cref="ArePrerequisitesMet"/>'s reading
         /// of the same rows (the pre-refactor traversal ignored both fields and
         /// over-completed): a requirement satisfied by something other than
-        /// completing its target — Fail- or Accept/Start-type (<see
-        /// cref="RequiresCompletion"/>) — is never auto-completed, and a multi-member
+        /// completing its target, i.e. Fail- or Accept/Start-type (<see
+        /// cref="RequiresCompletion"/>), is never auto-completed, and a multi-member
         /// OR group (GroupId &gt; 0, any one member satisfies) is never auto-completed
         /// either, because completing every branch of an either-or records quests the
         /// player didn't do; both follow the alternative-prerequisite precedent (the
         /// user must choose). A single-member "group" behaves as a plain requirement.
         ///
         /// Internal and lookup-driven so unit tests can drive it from plain
-        /// dictionaries: <see cref="CascadeLookups.Status"/> is the derived
-        /// <see cref="GetStatus"/>; <see cref="CascadeLookups.RecordedStatus"/> is the
-        /// raw _questProgress lookup, needed because the entry check reads the
-        /// NormalizedName key even for tasks that have an Id, which GetStatus does not.
+        /// dictionaries. Both status lookups read recorded progress and nothing else:
+        /// <see cref="CascadeLookups.Status"/> answers per quest under the Id-first key
+        /// policy, and <see cref="CascadeLookups.RecordedStatus"/> answers for one exact
+        /// key, which the entry check needs because it asks the NormalizedName key even
+        /// for tasks that have an Id.
         /// </summary>
         internal static QuestCompletionPlan ComputeCompletionCascade(
             TarkovTask task,
@@ -1025,7 +1080,7 @@ namespace TarkovHelper.Services
             }
 
             // The prerequisites this completion may auto-complete, resolved from
-            // TaskRequirements or — only when TaskRequirements is null — the legacy
+            // TaskRequirements or, only when TaskRequirements is null, the legacy
             // Previous name list (which always means "must be completed").
             // This walk stays separate from ArePrerequisitesMet's and QuestListPage's:
             // their questions differ (satisfaction vs auto-completability vs display;
@@ -1042,7 +1097,7 @@ namespace TarkovHelper.Services
 
                     foreach (var req in node.TaskRequirements)
                     {
-                        // Any one member of a multi-member OR group satisfies it — the
+                        // Any one member of a multi-member OR group satisfies it, and the
                         // user must choose which; completing all of them over-records.
                         if (req.GroupId > 0 && groupSizes[req.GroupId] > 1) continue;
 
@@ -1114,20 +1169,20 @@ namespace TarkovHelper.Services
 
         /// <summary>
         /// Save changed quests in batch (fire-and-forget, doesn't block UI) under
-        /// <paramref name="profileId"/> — always the ProfileId of the snapshot the changes were
-        /// derived from, never the selection at the moment this happens to run.
+        /// <paramref name="profileId"/>, which is always the ProfileId of the snapshot the
+        /// changes were derived from, never the selection at the moment this happens to run.
         /// </summary>
         private async Task SaveProgressBatchAsync(
             List<(string Id, string? NormalizedName, QuestStatus Status)> changedQuests, string profileId)
         {
             try
             {
-                await _store.SaveQuestProgressBatchAsync(changedQuests, profileId);
-                System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Batch saved {changedQuests.Count} quest changes to {profileId}");
+                await Store.SaveQuestProgressBatchAsync(changedQuests, profileId);
+                _log.Debug($"Batch saved {changedQuests.Count} quest changes to {profileId}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Batch save failed: {ex.Message}");
+                _log.Error($"Batch save to {profileId} failed", ex);
             }
         }
 
@@ -1135,7 +1190,7 @@ namespace TarkovHelper.Services
         /// The rows completing <paramref name="tasks"/> would write against
         /// <paramref name="snapshot"/>: each not-already-Done quest marked Done, alternative
         /// quests skipped (the user must choose which one they completed), duplicates collapsed.
-        /// Pure — the caller publishes and persists.
+        /// Pure: the caller publishes and persists.
         /// </summary>
         internal static List<(string Id, string? NormalizedName, QuestStatus Status)> PlanBatchCompletion(
             ProgressSnapshot snapshot, IEnumerable<TarkovTask> tasks, bool skipAlternativeQuests = true)
@@ -1153,7 +1208,7 @@ namespace TarkovHelper.Services
                 // Skip alternative quests - user must choose which one to complete
                 if (skipAlternativeQuests && task.HasAlternatives)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Skipping alternative quest in batch: {task.Name}");
+                    _log.Debug($"Skipping alternative quest in batch: {task.Name}");
                     continue;
                 }
 
@@ -1168,7 +1223,7 @@ namespace TarkovHelper.Services
 
         /// <summary>
         /// Apply multiple quest changes in batch (for sync operations) to
-        /// <paramref name="owner"/>'s partition.
+        /// <paramref name="owner"/>'s partition, returning how many rows were written.
         /// <para>
         /// The profile is a parameter, not a lookup: one sync run distributes changes across
         /// every profile whose sessions the logs cover, so there is no single "current" profile
@@ -1177,50 +1232,120 @@ namespace TarkovHelper.Services
         /// reaches the database and nothing else, which is what the PRD's silent-write decision
         /// requires.
         /// </para>
+        /// <para>
+        /// The count is what the caller reports as applied, so it must be the rows that actually
+        /// reached the store: 0 when everything in <paramref name="changes"/> was already
+        /// recorded, and never an optimistic count of what was attempted.
+        /// </para>
         /// </summary>
-        public async Task ApplyQuestChangesBatchAsync(
+        public Task<int> ApplyQuestChangesBatchAsync(
             IEnumerable<(TarkovTask Task, QuestStatus Status)> changes, AppProfile owner)
         {
-            var ownerId = ProfileService.GetProfileId(owner);
+            // Materialized once: the plan runs again on a CAS retry and again if the write has to
+            // fall back off screen, and a lazy sequence would be consumed by the first pass.
             var materialized = changes.ToList();
 
-            var snapshot = Snapshot;
-            if (!string.Equals(ownerId, snapshot.ProfileId, StringComparison.Ordinal))
-            {
-                var recorded = await LoadSnapshotForAsync(ownerId);
-                var offscreen = PlanQuestChanges(recorded, materialized);
-                if (offscreen.Count == 0) return;
+            return ApplyForOwnerAsync(
+                owner, snapshot => PlanQuestChanges(snapshot, materialized), "Batch");
+        }
 
-                await _store.SaveQuestProgressBatchAsync(offscreen, ownerId);
-                System.Diagnostics.Debug.WriteLine(
-                    $"[QuestProgressService] Batch saved {offscreen.Count} quest changes to unloaded profile {ownerId}");
-                return;
+        /// <summary>
+        /// Writes the rows <paramref name="plan"/> produces into <paramref name="owner"/>'s
+        /// partition, and returns how many were written.
+        /// <para>
+        /// Two shapes, one contract. When <paramref name="owner"/> is the loaded profile the plan
+        /// is derived from the live snapshot and published onto it in one compare-and-swap, so
+        /// the rows are on screen and stored. Otherwise (or when a profile switch wins the swap)
+        /// the plan runs against a detached snapshot read straight from the store and the rows go
+        /// only to the database, which is the PRD's silent-write decision.
+        /// </para>
+        /// </summary>
+        /// <param name="plan">
+        /// Pure: it is re-run per CAS retry and once more on the off-screen fallback, and must
+        /// answer for whatever snapshot it is handed rather than one it captured.
+        /// </param>
+        /// <param name="logLabel">Names the write in the log line, e.g. "Batch".</param>
+        private async Task<int> ApplyForOwnerAsync(
+            AppProfile owner,
+            Func<ProgressSnapshot, List<(string Id, string? NormalizedName, QuestStatus Status)>> plan,
+            string logLabel)
+        {
+            var ownerId = ProfileService.GetProfileId(owner);
+
+            if (string.Equals(ownerId, Snapshot.ProfileId, StringComparison.Ordinal))
+            {
+                var (_, changed) = Mutate<List<(string Id, string? NormalizedName, QuestStatus Status)>?>(current =>
+                {
+                    // Re-check the owner inside the loop body: a profile switch can publish a
+                    // different snapshot between the read above and the swap, and writing this
+                    // profile's rows onto another's cache would show progress that is not theirs.
+                    // null says "the profile switched under us", which the caller must be able to
+                    // tell apart from an empty row list ("nothing needed changing"): the rows
+                    // still belong to a partition we know the name of, so they get written there
+                    // instead of being dropped. Dropping them is not recoverable, because sync
+                    // only re-reads sessions inside the configured SyncDaysRange window.
+                    if (!string.Equals(ownerId, current.ProfileId, StringComparison.Ordinal))
+                        return (current, null);
+
+                    var rows = plan(current);
+                    return rows.Count == 0
+                        ? (current, rows)
+                        : (current with { Quests = WithRows(current.Quests, rows) }, rows);
+                });
+
+                if (changed != null)
+                {
+                    if (changed.Count == 0) return 0;
+
+                    // Save all changes in one batch transaction. Reaching here means the swap
+                    // succeeded against a snapshot for ownerId, so these rows are both stored and
+                    // on screen. Deliberately not the swallowing SaveProgressBatchAsync helper:
+                    // this call is awaited by a caller that logs and counts, so a failed write
+                    // must be reported rather than silently lost.
+                    await Store.SaveQuestProgressBatchAsync(changed, ownerId);
+                    _log.Debug($"{logLabel}: saved {changed.Count} quest changes to {ownerId}");
+
+                    ProgressChanged?.Invoke(this, EventArgs.Empty);
+                    return changed.Count;
+                }
+
+                _log.Debug(
+                    $"{logLabel}: profile switched to {Snapshot.ProfileId} mid-write, re-planning {ownerId} off screen");
             }
 
-            var (_, changedItems) = Mutate(current =>
+            return await ApplyOffScreenAsync(owner, ownerId, plan, logLabel);
+        }
+
+        /// <summary>
+        /// Plans against <paramref name="ownerId"/>'s stored rows and writes them without
+        /// touching the snapshot, for a profile that is not the loaded one.
+        /// </summary>
+        private async Task<int> ApplyOffScreenAsync(
+            AppProfile owner,
+            string ownerId,
+            Func<ProgressSnapshot, List<(string Id, string? NormalizedName, QuestStatus Status)>> plan,
+            string logLabel)
+        {
+            var recorded = await LoadSnapshotForAsync(ownerId);
+            var rows = plan(recorded);
+            if (rows.Count == 0) return 0;
+
+            await Store.SaveQuestProgressBatchAsync(rows, ownerId);
+            _log.Debug($"{logLabel}: saved {rows.Count} quest changes to unloaded profile {ownerId}");
+
+            // The user can switch TO this profile while the write is in flight. That reload read
+            // the store before these rows landed, so the snapshot now names ownerId without
+            // holding them and the quests look un-completed until something re-reads. Reload for
+            // the revision the published snapshot carries: if a newer transition has arrived
+            // since, the reload discards itself and that newer load reads these rows anyway.
+            var published = Snapshot;
+            if (string.Equals(published.ProfileId, ownerId, StringComparison.Ordinal))
             {
-                // Re-check the owner inside the loop body: a profile switch can publish a
-                // different snapshot between the read above and the swap, and writing this
-                // profile's rows onto another's cache would show progress that is not theirs.
-                // Bailing out here loses the write rather than misfiling it, which the next sync
-                // recovers from; misfiling it is what nothing recovers from.
-                if (!string.Equals(ownerId, current.ProfileId, StringComparison.Ordinal))
-                    return (current, new List<(string Id, string? NormalizedName, QuestStatus Status)>());
+                _log.Debug($"{logLabel}: {ownerId} became the loaded profile mid-write, reloading it");
+                await ReloadForProfileAsync(owner, published.Revision);
+            }
 
-                var rows = PlanQuestChanges(current, materialized);
-                return rows.Count == 0
-                    ? (current, rows)
-                    : (current with { Quests = WithRows(current.Quests, rows) }, rows);
-            });
-
-            if (changedItems.Count == 0) return;
-
-            // Save all changes in one batch transaction. Reaching here means the swap succeeded
-            // against a snapshot for ownerId, so these rows are both stored and on screen.
-            await _store.SaveQuestProgressBatchAsync(changedItems, ownerId);
-            System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Batch saved {changedItems.Count} quest changes to {ownerId}");
-
-            ProgressChanged?.Invoke(this, EventArgs.Empty);
+            return rows.Count;
         }
 
         /// <summary>
@@ -1235,7 +1360,7 @@ namespace TarkovHelper.Services
             var changedItems = new List<(string Id, string? NormalizedName, QuestStatus Status)>();
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            // Rows planned so far, so a later change in the same batch sees the earlier ones —
+            // Rows planned so far, so a later change in the same batch sees the earlier ones,
             // reproducing what the pre-snapshot code got from mutating the cache in place.
             var pending = snapshot;
 
@@ -1251,25 +1376,41 @@ namespace TarkovHelper.Services
                         if (visited.Add(taskKey) && !IsRecordedDone(pending, task))
                         {
                             changedItems.Add((taskKey, task.NormalizedName, QuestStatus.Done));
-                            pending = pending with { Quests = pending.Quests.SetItem(taskKey, QuestStatus.Done) };
+                            pending = pending with
+                            {
+                                Quests = SetQuestRow(
+                                    pending.Quests, taskKey, task.NormalizedName, QuestStatus.Done),
+                            };
 
-                            // Fail alternative quests (mutually exclusive) — same planning
+                            // Fail alternative quests (mutually exclusive), using the same planning
                             // helper as the cascade core, against the already-planned state.
                             foreach (var failure in PlanAlternativeFailures(
                                          task, GetTaskById, GetTask,
                                          alt => StoredStatusOf(pending.Quests, alt)))
                             {
                                 changedItems.Add((failure.Key, failure.Quest.NormalizedName, QuestStatus.Failed));
-                                pending = pending with { Quests = pending.Quests.SetItem(failure.Key, QuestStatus.Failed) };
+                                pending = pending with
+                                {
+                                    Quests = SetQuestRow(
+                                        pending.Quests, failure.Key, failure.Quest.NormalizedName,
+                                        QuestStatus.Failed),
+                                };
                             }
                         }
                         break;
 
                     case QuestStatus.Failed:
-                        if (RecordedStatus(pending, taskKey) != QuestStatus.Failed)
+                        // Dual-key, like the Done branch above: an off-screen profile's rows come
+                        // back NormalizedName-keyed, so an Id-only check would re-write an
+                        // already-Failed quest on every sync and count it as applied.
+                        if (!IsRecordedFailed(pending, task))
                         {
                             changedItems.Add((taskKey, task.NormalizedName, QuestStatus.Failed));
-                            pending = pending with { Quests = pending.Quests.SetItem(taskKey, QuestStatus.Failed) };
+                            pending = pending with
+                            {
+                                Quests = SetQuestRow(
+                                    pending.Quests, taskKey, task.NormalizedName, QuestStatus.Failed),
+                            };
                         }
                         break;
                 }
@@ -1284,48 +1425,16 @@ namespace TarkovHelper.Services
         /// <para>
         /// When <paramref name="owner"/> is the loaded profile the change goes through the
         /// snapshot and refreshes the UI; otherwise it is written straight to that profile's
-        /// rows, leaving the snapshot untouched. Callers must not invoke this for an
-        /// unattributed event: an event with no evidence is dropped, never guessed at.
+        /// rows, leaving the snapshot untouched (see <see cref="ApplyForOwnerAsync"/>, which both
+        /// apply paths share). Callers must not invoke this for an unattributed event: an event
+        /// with no evidence is dropped, never guessed at.
         /// </para>
         /// </summary>
-        public async Task ApplyLogEventAsync(TarkovTask task, QuestEventType eventType, AppProfile owner)
-        {
-            var ownerId = ProfileService.GetProfileId(owner);
-            var snapshot = Snapshot;
-
-            if (!string.Equals(ownerId, snapshot.ProfileId, StringComparison.Ordinal))
-            {
-                var recorded = await LoadSnapshotForAsync(ownerId);
-                var rows = PlanLogEvent(recorded, task, eventType);
-                if (rows.Count == 0) return;
-
-                await _store.SaveQuestProgressBatchAsync(rows, ownerId);
-                System.Diagnostics.Debug.WriteLine(
-                    $"[QuestProgressService] Log event {eventType} for {task.Name} saved to unloaded profile {ownerId}");
-                return;
-            }
-
-            var (_, changed) = Mutate(current =>
-            {
-                // See ApplyQuestChangesBatchAsync: a switch landing between the read above and
-                // the swap means these rows belong to a profile that is no longer loaded, and
-                // dropping the write beats writing it onto the new profile's cache.
-                if (!string.Equals(ownerId, current.ProfileId, StringComparison.Ordinal))
-                    return (current, new List<(string Id, string? NormalizedName, QuestStatus Status)>());
-
-                var rows = PlanLogEvent(current, task, eventType);
-                return rows.Count == 0
-                    ? (current, rows)
-                    : (current with { Quests = WithRows(current.Quests, rows) }, rows);
-            });
-
-            if (changed.Count == 0) return;
-
-            // Not the swallowing SaveProgressBatchAsync helper: this call is awaited by a caller
-            // that logs, so a failed write should be reported rather than silently lost.
-            await _store.SaveQuestProgressBatchAsync(changed, ownerId);
-            ProgressChanged?.Invoke(this, EventArgs.Empty);
-        }
+        public Task ApplyLogEventAsync(TarkovTask task, QuestEventType eventType, AppProfile owner)
+            => ApplyForOwnerAsync(
+                owner,
+                snapshot => PlanLogEvent(snapshot, task, eventType),
+                $"Log event {eventType} for {task.Name}");
 
         /// <summary>
         /// The rows one log event writes against <paramref name="snapshot"/>. Completed runs the
@@ -1346,13 +1455,15 @@ namespace TarkovHelper.Services
                 {
                     var taskKey = ProgressKeyOf(task);
                     if (string.IsNullOrEmpty(taskKey)) return new();
-                    if (RecordedStatus(snapshot, taskKey) == QuestStatus.Failed) return new();
+                    // Dual-key: the snapshot may be a detached one loaded for an off-screen
+                    // profile, whose rows are keyed by NormalizedName rather than by Id.
+                    if (IsRecordedFailed(snapshot, task)) return new();
                     return new() { (taskKey!, task.NormalizedName, QuestStatus.Failed) };
                 }
 
                 case QuestEventType.Started:
                 {
-                    // A started quest stays Active; only what it proves — its prerequisites —
+                    // A started quest stays Active; only what it proves (its prerequisites)
                     // is recorded. Alternatives among them are skipped: the log says the quest
                     // started, not which of two mutually exclusive predecessors was taken.
                     if (string.IsNullOrEmpty(task.NormalizedName)) return new();
@@ -1373,7 +1484,7 @@ namespace TarkovHelper.Services
         /// </summary>
         private async Task<ProgressSnapshot> LoadSnapshotForAsync(string profileId)
         {
-            var quests = await _store.LoadQuestProgressAsync(profileId);
+            var quests = await Store.LoadQuestProgressAsync(profileId);
             return ProgressSnapshot.From(
                 profileId, revision: -1, quests, ImmutableDictionary<string, bool>.Empty);
         }
@@ -1388,7 +1499,10 @@ namespace TarkovHelper.Services
             if (string.IsNullOrEmpty(taskKey)) return;
 
             var (published, _) = Mutate(current =>
-                (current with { Quests = current.Quests.SetItem(taskKey!, QuestStatus.Failed) }, 0));
+                (current with
+                {
+                    Quests = SetQuestRow(current.Quests, taskKey!, task.NormalizedName, QuestStatus.Failed),
+                }, 0));
 
             // Fire-and-forget async save - don't block UI. The profile is resolved here, from
             // the snapshot this edit was published onto, rather than inside the Task.Run body:
@@ -1398,11 +1512,11 @@ namespace TarkovHelper.Services
             {
                 try
                 {
-                    await _store.SaveQuestProgressAsync(taskKey!, task.NormalizedName, QuestStatus.Failed, profileId);
+                    await Store.SaveQuestProgressAsync(taskKey!, task.NormalizedName, QuestStatus.Failed, profileId);
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Failed to save failed quest: {ex.Message}");
+                    _log.Error($"Failed to save failed quest {taskKey} to {profileId}", ex);
                 }
             });
             ProgressChanged?.Invoke(this, EventArgs.Empty);
@@ -1433,16 +1547,16 @@ namespace TarkovHelper.Services
             {
                 try
                 {
-                    await _store.DeleteQuestProgressAsync(taskKey!, profileId);
+                    await Store.DeleteQuestProgressAsync(taskKey!, profileId);
                     // Also delete by NormalizedName for clean migration
                     if (alsoByName)
                     {
-                        await _store.DeleteQuestProgressAsync(task.NormalizedName!, profileId);
+                        await Store.DeleteQuestProgressAsync(task.NormalizedName!, profileId);
                     }
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Failed to delete quest progress: {ex.Message}");
+                    _log.Error($"Failed to delete quest progress for {taskKey} in {profileId}", ex);
                 }
             });
             ProgressChanged?.Invoke(this, EventArgs.Empty);
@@ -1463,13 +1577,13 @@ namespace TarkovHelper.Services
             {
                 try
                 {
-                    await _store.ClearAllQuestProgressAsync(profileId);
-                    await _store.ClearAllObjectiveProgressAsync(profileId);
-                    System.Diagnostics.Debug.WriteLine($"[QuestProgressService] All progress cleared from DB for {profileId}");
+                    await Store.ClearAllQuestProgressAsync(profileId);
+                    await Store.ClearAllObjectiveProgressAsync(profileId);
+                    _log.Info($"All progress cleared from DB for {profileId}");
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Reset failed: {ex.Message}");
+                    _log.Error($"Reset failed for {profileId}", ex);
                 }
             }).GetAwaiter().GetResult();
 
@@ -1677,17 +1791,17 @@ namespace TarkovHelper.Services
                 {
                     if (item.IsCompleted)
                     {
-                        await _store.SaveObjectiveProgressAsync(item.Key, item.QuestId, true, profileId);
+                        await Store.SaveObjectiveProgressAsync(item.Key, item.QuestId, true, profileId);
                     }
                     else
                     {
-                        await _store.DeleteObjectiveProgressAsync(item.Key, profileId);
+                        await Store.DeleteObjectiveProgressAsync(item.Key, profileId);
                     }
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Failed to save objective progress: {ex.Message}");
+                _log.Error($"Failed to save objective progress to {profileId}", ex);
             }
         }
 
@@ -1733,52 +1847,6 @@ namespace TarkovHelper.Services
         #region Persistence
 
         /// <summary>
-        /// Persistence, behind the narrow <see cref="IQuestProgressStore"/> surface rather than
-        /// <see cref="UserDataDbService"/> directly, so tests can substitute a fake and see which
-        /// profile each write landed in. Internal and non-readonly for the same reason:
-        /// <c>GetUninitializedObject</c> skips field initializers, so a test assigns it.
-        /// </summary>
-        internal IQuestProgressStore _store = UserDataDbService.Instance;
-
-        private void SaveProgress()
-        {
-            // DB에 저장 (Task.Run으로 데드락 방지)
-            var snapshot = Snapshot;
-            Task.Run(async () => await SaveProgressToDbAsync(snapshot)).GetAwaiter().GetResult();
-        }
-
-        /// <summary>
-        /// Rewrites every row of <paramref name="snapshot"/> under its own ProfileId. The
-        /// profile comes from the snapshot rather than being re-read per row: the loop awaits
-        /// between rows, so a transition landing mid-loop used to scatter one rewrite across two
-        /// partitions.
-        /// </summary>
-        private async Task SaveProgressToDbAsync(ProgressSnapshot snapshot)
-        {
-            try
-            {
-                foreach (var kvp in snapshot.Quests)
-                {
-                    var normalizedName = kvp.Key;
-                    var status = kvp.Value;
-
-                    // ID 조회
-                    string id = normalizedName;
-                    if (_tasksByNormalizedName.TryGetValue(normalizedName, out var task))
-                    {
-                        id = task.Ids?.FirstOrDefault() ?? normalizedName;
-                    }
-
-                    await _store.SaveQuestProgressAsync(id, normalizedName, status, snapshot.ProfileId);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Failed to save progress to DB: {ex.Message}");
-            }
-        }
-
-        /// <summary>
         /// Loads the selected profile's rows during startup initialization.
         /// <para>
         /// Allowlisted selection read: this is the one load that has to ask which profile is
@@ -1791,13 +1859,17 @@ namespace TarkovHelper.Services
         {
             // Task.Run으로 데드락 방지
             // 마이그레이션은 MainWindow에서 먼저 수행됨
+            //
+            // One atomic read for the pair: taken as two properties, a transition landing between
+            // them would pair the old profile with the new revision, and this load would then
+            // publish one profile's rows as the answer to another profile's transition with the
+            // revision guard none the wiser.
             var profileService = ProfileService.Instance;
-            var profile = profileService.ActiveProfile;
-            var revision = profileService.TransitionRevision;
+            var (profile, revision) = profileService.CurrentTransition;
 
             // notify: false is load-bearing, not an optimization. This call blocks the dispatcher
             // thread on GetResult(), and ProgressChanged subscribers marshal their refresh back to
-            // the dispatcher — raising it here deadlocks the app on startup and after every
+            // the dispatcher, so raising it here deadlocks the app on startup and after every
             // in-place data reload. Initialize's callers redraw once they finish anyway, which is
             // why the pre-snapshot initial load never raised it either.
             Task.Run(async () => await ReloadForProfileAsync(profile, revision, notify: false))
@@ -1809,7 +1881,9 @@ namespace TarkovHelper.Services
         /// UI. Called when the user (or log detection) switches profiles.
         /// <para>
         /// Both dictionaries are read before either is published, so the two can never be
-        /// observed half-swapped. <paramref name="revision"/> is the transition this load serves:
+        /// observed half-swapped; they do not, however, fail together, and one unreadable half
+        /// leaves the other's rows intact. <paramref name="revision"/> is the transition this
+        /// load serves:
         /// if a newer one is requested while these reads are in flight, this load discards its
         /// result and lets the newer one publish, rather than leaving the snapshot naming the
         /// newer profile while holding this one's rows.
@@ -1827,34 +1901,62 @@ namespace TarkovHelper.Services
             var profileId = ProfileService.GetProfileId(profile);
             ClaimRevision(revision);
 
+            // Each half gets its own catch. Publishing both together is a statement about
+            // ATOMICITY (a reader must never see one profile's quests beside another's
+            // objectives), not about failing together: an unreadable objective table is no reason
+            // to throw away quest rows that read back fine and show every quest un-completed.
+            // Whichever half failed falls back to its own empty map, which is what "nothing
+            // recorded" means, and _lastLoadFailed remembers that the published view is a
+            // fallback so the next re-confirmation can heal it.
+            var failed = false;
+
             Dictionary<string, QuestStatus> quests;
-            Dictionary<string, bool> objectives;
             try
             {
-                quests = await _store.LoadQuestProgressAsync(profileId);
-                objectives = await _store.LoadObjectiveProgressAsync(profileId);
+                quests = await Store.LoadQuestProgressAsync(profileId);
             }
             catch (Exception ex)
             {
-                // An unreadable store must not leave the previous profile's rows on screen under
-                // the new profile's name: publish empty, which is what "nothing recorded" means.
-                System.Diagnostics.Debug.WriteLine($"[QuestProgressService] Failed to load progress from DB: {ex.Message}");
+                _log.Error($"Failed to load quest progress for {profileId}", ex);
                 quests = new Dictionary<string, QuestStatus>(StringComparer.OrdinalIgnoreCase);
+                failed = true;
+            }
+
+            Dictionary<string, bool> objectives;
+            try
+            {
+                objectives = await Store.LoadObjectiveProgressAsync(profileId);
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"Failed to load objective progress for {profileId}", ex);
                 objectives = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+                failed = true;
             }
 
             if (Interlocked.Read(ref _latestRevision) != revision)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"[QuestProgressService] Discarding stale load for {profileId} (revision {revision})");
+                _log.Debug($"Discarding stale load for {profileId} (revision {revision})");
                 return;
             }
 
-            Snapshot = ProgressSnapshot.From(profileId, revision, quests, objectives);
-            System.Diagnostics.Debug.WriteLine(
-                $"[QuestProgressService] Loaded {quests.Count} quest and {objectives.Count} objective rows for {profileId}");
+            // Set before the publish, so a throwing subscriber below cannot leave it stale.
+            _lastLoadFailed = failed;
 
-            if (notify) ProgressChanged?.Invoke(this, EventArgs.Empty);
+            // Publish and notify inside their own try. Callers reach this method through
+            // "_ = ReloadForProfileAsync(...)", so an exception escaping here (a throwing
+            // ProgressChanged subscriber, most likely) would fault a Task nobody observes.
+            try
+            {
+                Snapshot = ProgressSnapshot.From(profileId, revision, quests, objectives);
+                _log.Debug($"Loaded {quests.Count} quest and {objectives.Count} objective rows for {profileId}");
+
+                if (notify) ProgressChanged?.Invoke(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"Publishing reloaded progress for {profileId} failed", ex);
+            }
         }
 
         /// <summary>Raises <see cref="_latestRevision"/> to <paramref name="revision"/> if it is newer.</summary>
