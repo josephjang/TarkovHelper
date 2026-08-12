@@ -5,7 +5,7 @@ using TarkovHelper.Services;
 namespace TarkovHelper.Tests;
 
 /// <summary>
-/// Unit guards for QuestProgressService.ComputeCompletionCascade — the pure
+/// Unit guards for QuestProgressService.ComputeCompletionCascade, the pure
 /// traversal core shared by CompleteQuest and GetCompletionCascade (see
 /// feature-quest-complete-cascade-confirm.spec.md). The tests encode the
 /// pre-refactor CompleteQuest semantics that were kept (dual-key done-check,
@@ -50,7 +50,7 @@ public sealed class QuestCompletionCascadeTests
         /// <summary>
         /// Mirrors the real QuestProgressService.GetStatus recorded-state read order:
         /// the Id key is consulted first, and the NormalizedName key whenever the Id
-        /// lookup MISSES — including for tasks that do have an Id. Only a recorded
+        /// lookup MISSES, including for tasks that do have an Id. Only a recorded
         /// Done/Failed short-circuits; everything else reports Active, which is the
         /// only distinction the cascade gates make.
         /// </summary>
@@ -252,7 +252,7 @@ public sealed class QuestCompletionCascadeTests
         quest.TaskRequirements = new List<TaskRequirement> { RequireById(prereq) };
         // Legacy migration shape: an Active row sits under the Id key while the Done
         // row sits under the NormalizedName. GetStatus resolves the Id hit (Active,
-        // no short-circuit) and never reads the name key — only the traversal's
+        // no short-circuit) and never reads the name key; only the traversal's
         // node-entry check does, and it must see the name-keyed Done row and leave
         // the prerequisite out of the plan.
         world.Recorded["p1"] = QuestStatus.Active;
@@ -334,7 +334,7 @@ public sealed class QuestCompletionCascadeTests
         Assert.Equal(first.ToFail, second.ToFail);
     }
 
-    #region Requirement semantics (Status / GroupId — mirrored from ArePrerequisitesMet)
+    #region Requirement semantics (Status / GroupId, mirrored from ArePrerequisitesMet)
 
     [Fact]
     public void Fail_type_prerequisite_is_never_auto_completed()
@@ -342,7 +342,7 @@ public sealed class QuestCompletionCascadeTests
         var world = new QuestWorld();
         var mustFail = world.Add("hw", "must-fail-prereq");
         var quest = world.Add("q", "requires-a-failure");
-        // The game requires the prerequisite to be FAILED — completing it for the
+        // The game requires the prerequisite to be FAILED, so completing it for the
         // player would be the exact opposite of the required state.
         quest.TaskRequirements = new List<TaskRequirement> { RequireById(mustFail, "Fail") };
 
@@ -374,7 +374,7 @@ public sealed class QuestCompletionCascadeTests
         var branchA = world.Add("a", "or-branch-a");
         var branchB = world.Add("b", "or-branch-b");
         var quest = world.Add("q", "either-or-quest");
-        // Any ONE of the group satisfies the requirement — the user must choose
+        // Any ONE of the group satisfies the requirement, and the user must choose
         // which branch they actually did; completing both over-records.
         quest.TaskRequirements = new List<TaskRequirement>
         {
@@ -549,9 +549,9 @@ public sealed class QuestCompletionCascadeTests
     /// <summary>
     /// Uninitialized-instance service (same pattern as TestLocalization.WithLanguage):
     /// the private ctor's ProfileService subscription and the DB load are skipped and
-    /// the lookup fields are seeded directly, so the public preview entry point —
-    /// GetCompletionCascade and QuestCompletionCascade.IsEmpty, the actual
-    /// dialog-or-no-dialog decision — is exercised for real.
+    /// the lookup fields are seeded directly, so the public preview entry point
+    /// (GetCompletionCascade and QuestCompletionCascade.IsEmpty, the actual
+    /// dialog-or-no-dialog decision) is exercised for real.
     /// </summary>
     private static QuestProgressService CreateServiceWith(params TarkovTask[] tasks)
         => ProgressServiceHarness.Create(new ProgressStoreFake(), AppProfile.PvpZone, tasks);
@@ -559,18 +559,10 @@ public sealed class QuestCompletionCascadeTests
     private static IReadOnlyDictionary<string, QuestStatus> RecordedProgressOf(QuestProgressService service)
         => ProgressServiceHarness.LoadedQuestsOf(service);
 
-    private static TarkovTask NewTask(string id, string name) => new()
-    {
-        Ids = new List<string> { id },
-        Name = name,
-        NormalizedName = name,
-        Trader = "Prapor",
-    };
-
     [Fact]
     public void GetCompletionCascade_is_empty_for_a_standalone_quest()
     {
-        var quest = NewTask("s1", "instance-standalone");
+        var quest = TestTasks.Quest("s1", "instance-standalone");
         var service = CreateServiceWith(quest);
 
         var cascade = service.GetCompletionCascade(quest);
@@ -583,8 +575,8 @@ public sealed class QuestCompletionCascadeTests
     [Fact]
     public void GetCompletionCascade_lists_prerequisites_and_mutates_nothing()
     {
-        var prereq = NewTask("p1", "instance-prereq");
-        var quest = NewTask("q1", "instance-quest");
+        var prereq = TestTasks.Quest("p1", "instance-prereq");
+        var quest = TestTasks.Quest("q1", "instance-quest");
         quest.TaskRequirements = new List<TaskRequirement> { new() { TaskId = "p1" } };
         var service = CreateServiceWith(prereq, quest);
 
@@ -600,8 +592,8 @@ public sealed class QuestCompletionCascadeTests
     [Fact]
     public void ResolveRequirementTask_prefers_the_id_over_a_conflicting_name()
     {
-        var byId = NewTask("real-id", "real-quest");
-        var decoy = NewTask("other-id", "decoy-quest");
+        var byId = TestTasks.Quest("real-id", "real-quest");
+        var decoy = TestTasks.Quest("other-id", "decoy-quest");
         var service = CreateServiceWith(byId, decoy);
         Assert.Same(byId, service.ResolveRequirementTask(
             new TaskRequirement { TaskId = "real-id", TaskNormalizedName = "decoy-quest" }));
@@ -642,7 +634,7 @@ public sealed class QuestCompletionCascadeTests
     [Fact]
     public void PlanBatchCompletion_skips_a_quest_recorded_done_under_its_name_only()
     {
-        var quest = NewTask("q-id", "batch-migrated");
+        var quest = TestTasks.Quest("q-id", "batch-migrated");
 
         var rows = QuestProgressService.PlanBatchCompletion(
             SnapshotWith(("batch-migrated", QuestStatus.Done)), new[] { quest });
@@ -654,9 +646,9 @@ public sealed class QuestCompletionCascadeTests
     [Fact]
     public void PlanBatchCompletion_skips_alternative_quests_and_duplicates()
     {
-        var alt = NewTask("alt-id", "batch-alt");
+        var alt = TestTasks.Quest("alt-id", "batch-alt");
         alt.AlternativeQuests = new List<string> { "batch-other" };
-        var plain = NewTask("plain-id", "batch-plain");
+        var plain = TestTasks.Quest("plain-id", "batch-plain");
 
         var rows = QuestProgressService.PlanBatchCompletion(
             SnapshotWith(), new[] { alt, plain, plain });

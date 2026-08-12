@@ -4,14 +4,14 @@ namespace TarkovHelper.Tests;
 
 /// <summary>
 /// End-to-end coverage for preserve-quest-filters-on-navigation (see
-/// feature-preserve-quest-filters-on-navigation.spec.md): navigating to a quest —
+/// feature-preserve-quest-filters-on-navigation.spec.md): navigating to a quest,
 /// via a prerequisite link, a recommendation, or a quest link on the Items/Collector
-/// tabs — must never change the quest-list filters. When the target is hidden by the
+/// tabs, must never change the quest-list filters. When the target is hidden by the
 /// current filters, only the detail panel switches, the list selection clears, and
 /// a notice offers the explicit "show in list" reset.
 ///
-/// The notice's Border (PnlFilteredOutNotice) has no UI Automation peer — WPF panels
-/// and borders are invisible to UIA — so its Button, BtnShowInList, is the probe for
+/// The notice's Border (PnlFilteredOutNotice) has no UI Automation peer (WPF panels
+/// and borders are invisible to UIA), so its Button, BtnShowInList, is the probe for
 /// "notice visible" throughout.
 ///
 /// Quest/prerequisite pairs come from E2EQuestData (derived from the bundled
@@ -31,7 +31,7 @@ public sealed class QuestNavigationE2ETests : E2ETestBase
     /// <summary>
     /// On the Quests tab: filter to Locked + the quest's name, open the quest
     /// (shared QuestTabDriver.ShowQuestDetail choreography), and click its prerequisite
-    /// link — landing in the "shown quest hidden by filters" state (the prerequisite
+    /// link, landing in the "shown quest hidden by filters" state (the prerequisite
     /// is Active, so the Locked filter excludes it).
     /// </summary>
     private static void NavigateToHiddenPrereq(AppDriver app, string questName, string prereqName)
@@ -81,7 +81,7 @@ public sealed class QuestNavigationE2ETests : E2ETestBase
         app.WaitForElementVisibility("BtnShowInList", visible: true);
 
         // The list selection is intentionally null in this state, but the detail
-        // panel's action buttons must still act on the shown quest — Mark Complete
+        // panel's action buttons must still act on the shown quest: Mark Complete
         // completes the prerequisite, which flips its button row (Complete hides,
         // Reset appears) via the progress-change refresh.
         app.InvokeElement("BtnComplete");
@@ -124,7 +124,7 @@ public sealed class QuestNavigationE2ETests : E2ETestBase
         app.WaitForElementVisibility("BtnShowInList", visible: true);
 
         // Clearing the search alone does not reveal the prerequisite (it is Active,
-        // the filter still says Locked) — the notice must stay truthful. Wait for the
+        // the filter still says Locked), so the notice must stay truthful. Wait for the
         // debounced clear to actually apply first: the list was narrowed to one row by
         // the search, so it widening past one row is the signal. Without the wait both
         // assertions below hold before the clear lands and could never fail.
@@ -178,7 +178,7 @@ public sealed class QuestNavigationE2ETests : E2ETestBase
 
         var clicked = ClickFirstQuestLinkInItemList(app, questNames);
 
-        // Fresh profile: nothing is Done, so the target is necessarily hidden — the
+        // Fresh profile: nothing is Done, so the target is necessarily hidden, so the
         // filter must survive as Done with the notice up and no selection.
         app.SelectTab("TabQuests", "LstQuests");
         WaitForSelectedStatusChip(app, "Done");
@@ -198,7 +198,7 @@ public sealed class QuestNavigationE2ETests : E2ETestBase
         app.WaitForElementVisibility("RecommendationsExpander", visible: true, timeoutSeconds: 60);
         app.ExpandElement("RecommendationsExpander");
 
-        // Pick a recommendation row's quest-name text that is actually on screen —
+        // Pick a recommendation row's quest-name text that is actually on screen:
         // an expanded panel can have more rows than fit the window, and off-screen
         // rows expose no clickable point.
         System.Windows.Automation.AutomationElement? target = null;
@@ -228,7 +228,7 @@ public sealed class QuestNavigationE2ETests : E2ETestBase
         // search is debounced, so wait for the zero-result state (its Reset button is
         // the probe) before clicking: a click that beats the debounce would take
         // SelectQuestInternal's *visible* branch against the still-unfiltered list, and
-        // the assertions below would still pass once the tick landed — silently
+        // the assertions below would still pass once the tick landed, silently
         // exercising the opposite path from the one this test names.
         const string noMatchSearch = "e2e-no-such-quest";
         app.SetTextBoxValue("TxtSearch", noMatchSearch);
@@ -266,7 +266,7 @@ public sealed class QuestNavigationE2ETests : E2ETestBase
                     .FirstOrDefault(questNames.Contains);
                 if (questLink == null) Thread.Sleep(250);
             }
-            if (questLink == null) continue; // item has no quest requirement — next one
+            if (questLink == null) continue; // item has no quest requirement, so try the next one
 
             app.ClickTextElementWithScroll(questLink, "QuestRequirementsList", "DetailScrollViewer");
             return questLink;

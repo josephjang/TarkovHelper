@@ -1,5 +1,3 @@
-using System.Reflection;
-using System.Runtime.CompilerServices;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
 
@@ -13,17 +11,10 @@ public class ProfileSwitchingTests
     /// </summary>
     private static ProfileService CreateServiceWith(AppProfile profile, bool isAutoDetected)
     {
-        var service = (ProfileService)RuntimeHelpers.GetUninitializedObject(typeof(ProfileService));
-        Set("_activeProfile", profile);
-        Set("_isAutoDetected", isAutoDetected);
+        var service = TestReflection.Uninitialized<ProfileService>();
+        TestReflection.SetPrivateField(service, "_activeProfile", profile);
+        TestReflection.SetPrivateField(service, "_isAutoDetected", isAutoDetected);
         return service;
-
-        void Set(string field, object value)
-        {
-            var f = typeof(ProfileService).GetField(field, BindingFlags.NonPublic | BindingFlags.Instance);
-            Assert.True(f != null, $"ProfileService has no field '{field}'");
-            f!.SetValue(service, value);
-        }
     }
 
     // EFT re-logs the session mode on every profile-screen visit, and the startup scan replays

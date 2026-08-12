@@ -351,8 +351,8 @@ duplication the extraction decision above rejects: a flush truncating at
 permanent PvP. `EftRaidEventService` calls the extracted copy.
 
 **`LogSyncService`'s application-log glob has never matched anything.** EFT names its
-files `<date>_<time>_<version> application.log`, so `application*.log` — anchored at
-"application" — matches nothing. Three places in `LogSyncService` use it: the map
+files `<date>_<time>_<version> application.log`, so `application*.log` (anchored at
+"application") matches nothing. Three places in `LogSyncService` use it: the map
 FileSystemWatcher filter and two `Directory.GetFiles` calls. That whole map path is
 dead as a result; `MapDetected` and `FindLastMapFromLogs` have no subscribers anywhere
 in the solution, and live map detection is `LogMapWatcherService`'s job, using
@@ -364,7 +364,7 @@ the correct pattern; nothing about attribution goes through the dead path.
 `ReloadForProfileAsync` gave the startup path a notification it never used to have.
 `QuestProgressService.Initialize` runs that load with `Task.Run(...).GetAwaiter()
 .GetResult()`, blocking the dispatcher, while `ProgressChanged` subscribers marshal
-their refresh back to it — an unconditional deadlock on startup and after every
+their refresh back to it: an unconditional deadlock on startup and after every
 in-place reload. The startup load therefore passes `notify: false`, matching what the
 pre-snapshot initial load did by construction. The e2e sync test is what caught it;
 no unit test could, since the deadlock needs a real dispatcher.
@@ -380,7 +380,7 @@ where the already-current count comes from.
 **The cascade never needed derived status.** `CascadeLookups.Status` is now the
 recorded-only view rather than `GetStatus`. The core consults it solely through gates
 testing `== Done` and `== Failed`, and `GetStatus` reports either of those exactly when
-progress records it, so the two are interchangeable — and the recorded-only view keeps
+progress records it, so the two are interchangeable, and the recorded-only view keeps
 `SettingsService` (player level, faction, editions, all profile-scoped) out of a
 planner that has to run for a profile that is not the selected one.
 

@@ -10,8 +10,8 @@ namespace TarkovHelper.Tests;
 /// The defect these guard is a question asked of the wrong source, not a wrong answer computed
 /// from the right one: <c>ProfileService.Instance</c> reports what the user has SELECTED, which
 /// is the correct partition for hand entry and wrong for anything read from game logs. No test
-/// of behaviour can prove the lookup is absent from every path — a single reintroduced call on a
-/// rarely-taken branch would misfile silently — so absence is asserted structurally instead.
+/// of behaviour can prove the lookup is absent from every path (a single reintroduced call on a
+/// rarely-taken branch would misfile silently), so absence is asserted structurally instead.
 /// </para>
 /// </summary>
 public sealed class ProfileAttributionSourceTests
@@ -27,24 +27,67 @@ public sealed class ProfileAttributionSourceTests
         @"ProfileService\s*\.\s*Instance", RegexOptions.Compiled);
 
     /// <summary>
-    /// Files that carry progress writes, and the only lines in them allowed to ask which profile
-    /// is selected. Each allowed line is a SELECTION or INITIAL-LOAD site: the service has to
-    /// learn the starting profile from somewhere, and it has to subscribe to changes. Everything
-    /// else takes its profile as a parameter or from the snapshot it derived the change from.
+    /// One permitted selection read, anchored to the member it lives in. The member is what makes
+    /// the allowance a guard rather than a quota: several of these lines are spelled identically,
+    /// so a list of bare strings would let a read deleted from a constructor be paid for by a new
+    /// one inside a write path.
     /// </summary>
-    private static readonly (string RelativePath, string[] AllowedContaining)[] WritePathFiles =
+    /// <param name="Member">Enclosing method, constructor or property accessor.</param>
+    /// <param name="Line">Text the offending line must contain.</param>
+    /// <param name="Reason">Why this one site may ask; read it before adding another.</param>
+    private sealed record AllowedRead(string Member, string Line, string Reason);
+
+    /// <summary>
+    /// Files that carry progress writes, and the only lines in them allowed to ask which profile
+    /// is selected. Each allowed line is a SELECTION or INITIAL-LOAD site, or a hand-entry write
+    /// whose only possible evidence IS the selection. Everything else takes its profile as a
+    /// parameter or from the snapshot it derived the change from.
+    /// </summary>
+    private static readonly (string RelativePath, AllowedRead[] Allowed)[] WritePathFiles =
     {
         ("TarkovHelper/Services/QuestProgressService.cs", new[]
         {
-            // Constructor: seeds the snapshot with the currently selected profile and subscribes
-            // to later changes.
-            "var profileService = ProfileService.Instance;",
-            // Startup load: the one load with no ActiveProfileChanged to learn the profile from.
-            "var profileService = ProfileService.Instance;",
+            new AllowedRead("QuestProgressService", "var profileService = ProfileService.Instance;",
+                "Constructor: seeds the snapshot with the selected profile and subscribes to changes."),
+            new AllowedRead("LoadProgress", "var profileService = ProfileService.Instance;",
+                "Startup load: the one load with no ActiveProfileChanged to learn the profile from."),
         }),
-        ("TarkovHelper/Services/LogSyncService.cs", Array.Empty<string>()),
-        ("TarkovHelper/Services/Eft/SessionModeTimeline.cs", Array.Empty<string>()),
-        ("TarkovHelper/Services/Eft/EftLogPatterns.cs", Array.Empty<string>()),
+        ("TarkovHelper/Services/LogSyncService.cs", Array.Empty<AllowedRead>()),
+        ("TarkovHelper/Services/Eft/SessionModeTimeline.cs", Array.Empty<AllowedRead>()),
+        ("TarkovHelper/Services/Eft/EftLogPatterns.cs", Array.Empty<AllowedRead>()),
+
+        // The concrete store. Its own doc says none of its methods may consult ProfileService:
+        // every one of them takes the partition as an argument, so this list is empty and must
+        // stay empty.
+        ("TarkovHelper/Services/UserDataDbService.cs", Array.Empty<AllowedRead>()),
+
+        // Hideout and inventory progress is hand entry only - no log carries it - so the
+        // selection IS the evidence for these writes. They are listed anyway because the
+        // dangerous shape is the same one: a read taken inside a deferred body rather than
+        // before it. Each site below resolves the profile before its Task.Run, which is what
+        // keeps a switch from redirecting the row.
+        ("TarkovHelper/Services/HideoutProgressService.cs", new[]
+        {
+            new AllowedRead("HideoutProgressService", "ProfileService.Instance.ActiveProfileChanged +=",
+                "Constructor: subscribes to transitions, carrying the event's own profile and revision."),
+            new AllowedRead("SaveSingleModule", "var profileId = ProfileService.Instance.ActiveProfileId;",
+                "Hand-entered module level; resolved before the deferred save body."),
+            new AllowedRead("ResetAllProgress", "var profileId = ProfileService.Instance.ActiveProfileId;",
+                "Hand-invoked reset of the profile on screen; resolved before the deferred body."),
+            new AllowedRead("LoadProgress", "var (profile, revision) = ProfileService.Instance.CurrentTransition;",
+                "Startup load: the one load with no ActiveProfileChanged to learn the profile from."),
+        }),
+        ("TarkovHelper/Services/ItemInventoryService.cs", new[]
+        {
+            new AllowedRead("ItemInventoryService", "ProfileService.Instance.ActiveProfileChanged +=",
+                "Constructor: subscribes to transitions, carrying the event's own profile and revision."),
+            new AllowedRead("ResetAllInventory", "var profileId = ProfileService.Instance.ActiveProfileId;",
+                "Hand-invoked reset of the profile on screen; resolved before the deferred body."),
+            new AllowedRead("ScheduleSave", "_pendingSaves[itemNormalizedName] = ProfileService.Instance.ActiveProfileId;",
+                "Debounced save: the profile is captured at dirty-time, not when the timer fires."),
+            new AllowedRead("LoadInventory", "var (profile, revision) = ProfileService.Instance.CurrentTransition;",
+                "Startup load: the one load with no ActiveProfileChanged to learn the profile from."),
+        }),
     };
 
     [Fact]
@@ -57,24 +100,29 @@ public sealed class ProfileAttributionSourceTests
             var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
             Assert.True(File.Exists(path), $"{relativePath} is missing; update this allowlist");
 
-            var remaining = new List<string>(allowed);
+            var lines = File.ReadAllLines(path);
+            var remaining = new List<AllowedRead>(allowed);
             var offenders = new List<string>();
 
-            foreach (var (line, number) in File.ReadAllLines(path).Select((l, i) => (l, i + 1)))
+            foreach (var (line, index) in lines.Select((l, i) => (l, i)))
             {
                 if (!SelectionLookup.IsMatch(line)) continue;
 
                 var trimmed = line.Trim();
-                var matchIndex = remaining.FindIndex(a => trimmed.Contains(a, StringComparison.Ordinal));
+                var member = EnclosingMember(lines, index);
+
+                // Member AND text, so a read moved out of an allowed member into a write path is
+                // a new offender even when it is spelled exactly the same. Consuming the match
+                // bounds the count too: a second copy inside the same member is a new lookup.
+                var matchIndex = remaining.FindIndex(a =>
+                    a.Member == member && trimmed.Contains(a.Line, StringComparison.Ordinal));
                 if (matchIndex >= 0)
                 {
-                    // Consume it, so the allowlist bounds the COUNT as well as the shape: a
-                    // second copy of an allowed line is still a new lookup.
                     remaining.RemoveAt(matchIndex);
                     continue;
                 }
 
-                offenders.Add($"{relativePath}:{number}: {trimmed}");
+                offenders.Add($"{relativePath}:{index + 1} (in {member}): {trimmed}");
             }
 
             Assert.True(offenders.Count == 0,
@@ -85,8 +133,104 @@ public sealed class ProfileAttributionSourceTests
 
             Assert.True(remaining.Count == 0,
                 $"{relativePath} no longer contains these allowlisted selection reads; " +
-                $"remove them from the allowlist:\n{string.Join("\n", remaining)}");
+                "remove them from the allowlist:\n" +
+                string.Join("\n", remaining.Select(a => $"{a.Member}: {a.Line}")));
         }
+    }
+
+    /// <summary>
+    /// A member declaration: an access modifier, then the member name immediately before its
+    /// parameter list. <c>[^=;]*?</c> keeps field and property initializers out (they carry an
+    /// <c>=</c> before their parentheses), and the leading modifier keeps ordinary call sites
+    /// out. Local functions are deliberately not matched - they have no access modifier - so a
+    /// lookup inside one is attributed to the method that owns it.
+    /// </summary>
+    private static readonly Regex MemberDeclaration = new(
+        @"^\s*(?:public|private|internal|protected)\b[^=;]*?(\w+)\s*\(", RegexOptions.Compiled);
+
+    /// <summary>
+    /// The member <paramref name="index"/> falls inside: the nearest declaration at or above it,
+    /// or "(file scope)" when there is none.
+    /// </summary>
+    internal static string EnclosingMember(IReadOnlyList<string> lines, int index)
+    {
+        for (var i = index; i >= 0; i--)
+        {
+            var match = MemberDeclaration.Match(lines[i]);
+            if (match.Success) return match.Groups[1].Value;
+        }
+
+        return "(file scope)";
+    }
+
+    // The anchoring is only as good as this scan, and the scan is a heuristic over text. These
+    // are the shapes it has to tell apart to be worth relying on.
+    [Fact]
+    public void The_enclosing_member_scan_attributes_a_line_to_the_member_that_contains_it()
+    {
+        var source = new[]
+        {
+            "    public sealed class Thing",                  // 0
+            "    {",                                          // 1
+            "        private readonly object _sync = new();",  // 2
+            "        private Thing()",                         // 3
+            "        {",                                       // 4
+            "            var a = ProfileService.Instance;",    // 5
+            "        }",                                       // 6
+            "        private async Task<int> WriteAsync(string id)", // 7
+            "        {",                                       // 8
+            "            var b = ProfileService.Instance;",    // 9
+            "            void Local(string x)",                // 10
+            "            {",                                   // 11
+            "                var c = ProfileService.Instance;",// 12
+            "            }",                                   // 13
+            "        }",                                       // 14
+        };
+
+        Assert.Equal("Thing", EnclosingMember(source, 5));
+        Assert.Equal("WriteAsync", EnclosingMember(source, 9));
+        // A local function belongs to its owner, not to itself: moving a lookup into one must
+        // not launder it past the allowlist.
+        Assert.Equal("WriteAsync", EnclosingMember(source, 12));
+        // An initializer is not a member declaration, so it cannot capture the lines below it.
+        Assert.Equal("(file scope)", EnclosingMember(source, 2));
+    }
+
+    /// <summary>The source lines that belong to <paramref name="member"/>, signature included.</summary>
+    private static string[] LinesOfMember(string[] lines, string member)
+    {
+        var body = lines
+            .Select((line, index) => (line, index))
+            .Where(entry => EnclosingMember(lines, entry.index) == member)
+            .Select(entry => entry.line)
+            .ToArray();
+
+        Assert.True(body.Length > 0, $"no member named '{member}' was found");
+        return body;
+    }
+
+    // LogSyncService raises QuestEventDetected in a tight loop over one tail read and does not
+    // await the handler, while the handler reads a profile's rows before it writes them. Two
+    // events for one quest (Completed then Failed) would plan against the same pre-write rows and
+    // the loser's status would stick, leaving a quest the game failed recorded as Done. The
+    // behavioural version of this needs a real MainWindow and dispatcher, so the gate's presence
+    // is asserted structurally, the same way the selection reads above are.
+    [Fact]
+    public void The_live_quest_event_handler_serializes_itself_and_marshals_to_the_dispatcher()
+    {
+        var lines = File.ReadAllLines(Path.Combine(
+            TestRepo.Root(), "TarkovHelper", "MainWindow.xaml.cs"));
+        var handler = string.Join("\n", LinesOfMember(lines, "OnQuestEventDetected"));
+
+        Assert.Contains("_questEventGate.WaitAsync()", handler);
+        Assert.Contains("_questEventGate.Release()", handler);
+        // Not a blocking Dispatcher.Invoke: the handler runs on a thread-pool thread and the
+        // progress service raises events whose subscribers touch UI state.
+        Assert.Contains("Dispatcher.InvokeAsync", handler);
+        Assert.DoesNotContain("Dispatcher.Invoke(", handler);
+
+        // A gate of any other size would not serialize.
+        Assert.Contains("_questEventGate = new(1, 1)", string.Join("\n", lines));
     }
 
     // The event carries its owning profile precisely so consumers cannot fall back to the

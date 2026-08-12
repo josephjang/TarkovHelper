@@ -29,11 +29,19 @@ public partial class MainWindow : Window
     private readonly HideoutProgressService _hideoutProgressService = HideoutProgressService.Instance;
     private readonly SettingsService _settingsService = SettingsService.Instance;
     private readonly LogSyncService _logSyncService = LogSyncService.Instance;
+
+    // Serializes live quest events. LogSyncService raises QuestEventDetected in a tight loop
+    // over one tail read, and the handler is asynchronous, so without this gate event N+1
+    // would start planning while event N is still between its read and its write. Two events
+    // for one quest (Completed then Failed) would then plan against the same pre-write rows
+    // and the loser's status would stick: a quest the game failed left recorded as Done.
+    private readonly SemaphoreSlim _questEventGate = new(1, 1);
+
     private readonly DispatcherTimer _profileTransitionCueTimer;
     private bool _isLoading;
     private bool _isUpdatingProfileUI;
 
-    // 시작 로딩(_isLoading) 중 눌린 탭 — 로딩이 끝나면 Window_Loaded가 재생한다
+    // 시작 로딩(_isLoading) 중 눌린 탭: 로딩이 끝나면 Window_Loaded가 재생한다
     private object? _pendingTabDuringLoad;
     private QuestListPage? _questListPage;
     private HideoutPage? _hideoutPage;
@@ -74,7 +82,7 @@ public partial class MainWindow : Window
         // method only reaches UpdateProfileUI after awaiting the user-DB and profile
         // initialization, and the window is already visible (the loading overlay starts
         // collapsed), so the selector would otherwise show no selection for the whole
-        // of a first-run schema migration. Safe here — the cue timer exists above, and
+        // of a first-run schema migration. Safe here: the cue timer exists above, and
         // the restored profile still repaints this once InitializeAsync resolves.
         UpdateProfileUI(ProfileService.Instance.ActiveProfile);
 
@@ -122,7 +130,7 @@ public partial class MainWindow : Window
         UpdateAllLocalizedText();
 
         // The language combo lives inside the Settings overlay, so that overlay is
-        // typically open (and being looked at) when the language changes — refresh its
+        // typically open (and being looked at) when the language changes, so refresh its
         // strings immediately instead of leaving them stale until the next open.
         // Cheap and safe when the overlay is closed: it only assigns text properties.
         UpdateSettingsLocalizedText();
@@ -334,7 +342,7 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Re-points the log watchers (quest sync + raid events) at the current
-    /// LogFolderPath. Called after the user changes the log folder in Settings —
+    /// LogFolderPath. Called after the user changes the log folder in Settings:
     /// FileSystemWatchers bind to the path they were started with, so without a
     /// restart they keep watching the old folder until the app is relaunched.
     /// (StartMonitoring on both services stops any previous watcher first.)
@@ -572,7 +580,7 @@ public partial class MainWindow : Window
     {
         if (_isLoading)
         {
-            // 시작 로딩 중의 탭 클릭은 라디오 버튼만 체크되고 페이지 전환은 무시된다 —
+            // 시작 로딩 중의 탭 클릭은 라디오 버튼만 체크되고 페이지 전환은 무시된다.
             // 그대로 return만 하면 이미 체크된 탭을 다시 눌러도 Checked가 재발화하지 않아
             // "죽은 탭"이 된다. 클릭을 기억해 두었다가 로딩이 끝나는 즉시 반영한다.
             _pendingTabDuringLoad = sender;
@@ -580,7 +588,7 @@ public partial class MainWindow : Window
         }
 
         // A tab switch navigates away from the header context, so dismiss the profile
-        // drawer — otherwise the centered popover keeps floating over the newly
+        // drawer; otherwise the centered popover keeps floating over the newly
         // selected tab's content. Matches the close-on-Settings / close-on-full-screen
         // policy. Null check: TabQuests's IsChecked="True" fires this handler during
         // InitializeComponent, before ProfileDrawer (declared later in the XAML) exists.
@@ -1763,7 +1771,9 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handle real-time quest event detection
+    /// Handle real-time quest event detection. Raised on a file-watcher thread, one event after
+    /// another with no wait between them, so the handler both serializes itself and marshals its
+    /// work onto the UI thread before touching the progress service.
     /// </summary>
     private async void OnQuestEventDetected(object? sender, QuestLogEvent evt)
     {
@@ -1771,28 +1781,23 @@ public partial class MainWindow : Window
         // down with no handler above it, so the whole body is guarded.
         try
         {
-            // The owner is the mode the raid was actually played in, which is not necessarily the
-            // profile on screen: a player comparing another mode while a raid runs must still have
-            // their progress recorded where it belongs (PRD R4).
-            if (evt.OwnerProfile is not { } owner)
+            // One event at a time. The raise loop does not await this handler, and
+            // ApplyLogEventAsync reads a profile's rows before it writes them, so overlapping
+            // events for one quest would plan against the same stale rows and the last write
+            // to land would win regardless of log order.
+            await _questEventGate.WaitAsync();
+            try
             {
-                // PRD R3: no session mode evidence means no destination. Recording it under the
-                // selection is exactly the misfiling this change removes, so the event is dropped.
-                _log.Warning(
-                    $"Ignoring quest event {evt.QuestId} ({evt.EventType}): no session mode evidence in its log folder");
-                return;
+                // On the UI thread, and not with a blocking Invoke: this runs on a thread-pool
+                // thread, and QuestProgressService.ProgressChanged (raised inside the call
+                // below) has subscribers such as IntegratedItemService that update UI state
+                // without marshalling themselves.
+                await Dispatcher.InvokeAsync(() => HandleQuestEventAsync(evt)).Task.Unwrap();
             }
-
-            var progressService = QuestProgressService.Instance;
-            var tasksByQuestId = BuildQuestIdLookup(progressService.AllTasks);
-
-            if (!tasksByQuestId.TryGetValue(evt.QuestId, out var task)) return;
-
-            await progressService.ApplyLogEventAsync(task, evt.EventType, owner);
-
-            // Refresh quest list if visible. ApplyLogEventAsync leaves the snapshot untouched for
-            // a profile that is not loaded, so this is a no-op redraw in that case.
-            Dispatcher.Invoke(() => _questListPage?.RefreshDisplay());
+            finally
+            {
+                _questEventGate.Release();
+            }
         }
         catch (Exception ex)
         {
@@ -1801,30 +1806,40 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Build quest ID lookup dictionary
+    /// Records one log-derived quest event. Runs on the UI thread; its awaits resume there too,
+    /// so every event the progress service raises from it reaches the UI on the right thread.
     /// </summary>
-    private Dictionary<string, TarkovTask> BuildQuestIdLookup(IReadOnlyList<TarkovTask> tasks)
+    private async Task HandleQuestEventAsync(QuestLogEvent evt)
     {
-        var lookup = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
-        foreach (var task in tasks)
+        // The owner is the mode the raid was actually played in, which is not necessarily the
+        // profile on screen: a player comparing another mode while a raid runs must still have
+        // their progress recorded where it belongs (PRD R4).
+        if (evt.OwnerProfile is not { } owner)
         {
-            if (task.Ids != null)
-            {
-                foreach (var id in task.Ids)
-                {
-                    if (!string.IsNullOrEmpty(id) && !lookup.ContainsKey(id))
-                    {
-                        lookup[id] = task;
-                    }
-                }
-            }
+            // PRD R3: no session mode evidence means no destination. Recording it under the
+            // selection is exactly the misfiling this change removes, so the event is dropped.
+            _log.Warning(
+                $"Ignoring quest event {evt.QuestId} ({evt.EventType}): no session mode evidence in its log folder");
+            return;
         }
-        return lookup;
+
+        var progressService = QuestProgressService.Instance;
+
+        // The service already indexes every quest by every one of its Ids; a second lookup
+        // built here would only be a copy that can fall out of step with it.
+        var task = progressService.GetTaskById(evt.QuestId);
+        if (task == null) return;
+
+        await progressService.ApplyLogEventAsync(task, evt.EventType, owner);
+
+        // Refresh quest list if visible. ApplyLogEventAsync leaves the snapshot untouched for
+        // a profile that is not loaded, so this is a no-op redraw in that case.
+        _questListPage?.RefreshDisplay();
     }
 
     /// <summary>
-    /// Applies everything the sync derived, then shows the summary of where it landed and — only
-    /// when the logs left a genuine either-or open — the choices the player has to make.
+    /// Applies everything the sync derived, then shows the summary of where it landed and, only
+    /// when the logs left a genuine either-or open, the choices the player has to make.
     /// </summary>
     private async Task ApplyAndShowSyncResultAsync(SyncResult result)
     {
@@ -1837,30 +1852,85 @@ public partial class MainWindow : Window
 
         if (result.QuestsToComplete.Count > 0)
         {
-            ShowLoadingOverlay(updatingMessage);
-            result.AppliedCountsByProfile = await _logSyncService.ApplyQuestChangesAsync(result.QuestsToComplete);
-            HideLoadingOverlay();
-
-            // Only the loaded profile's rows are on screen; the others changed silently, which is
-            // what the summary below is for.
-            await LoadAndShowQuestListAsync();
+            var outcome = await ApplyWithOverlayAsync(result.QuestsToComplete, updatingMessage);
+            result.AppliedCountsByProfile = outcome.AppliedByProfile;
+            result.FailedProfiles = outcome.FailedProfiles;
         }
 
-        var alternativeChoices = SyncResultDialog.ShowResult(result, this, out _);
+        var alternativeChoices = SyncResultDialog.ShowResult(result, this);
 
         if (alternativeChoices == null || alternativeChoices.Count == 0) return;
 
-        ShowLoadingOverlay(updatingMessage);
-        var appliedChoices = await _logSyncService.ApplyQuestChangesAsync(alternativeChoices);
-        HideLoadingOverlay();
+        var appliedChoices = await ApplyWithOverlayAsync(alternativeChoices, updatingMessage);
 
-        await LoadAndShowQuestListAsync();
-
+        // The choices land in the profile each group was asked about, which is not necessarily
+        // the one on screen, so they get the same per-profile breakdown the summary dialog gives
+        // the derived changes, failed profiles included (PRD R2). The dialog is closed by now,
+        // hence the message box.
         MessageBox.Show(
-            string.Format(_loc.SyncAlternativesAppliedFormat, appliedChoices.Values.Sum()),
+            BuildAppliedSummary(appliedChoices),
             _loc.SyncSummaryTitle,
             MessageBoxButton.OK,
             MessageBoxImage.Information);
+    }
+
+    /// <summary>
+    /// Applies a batch of quest changes behind the loading overlay and reloads the quest list,
+    /// returning what landed in each profile and which profiles failed. The single place the
+    /// overlay is put up and taken down for a sync write, so a failing apply cannot leave it
+    /// stuck on screen.
+    /// </summary>
+    private async Task<LogSyncService.QuestApplyOutcome> ApplyWithOverlayAsync(
+        List<QuestChangeInfo> changes, string overlayMessage)
+    {
+        ShowLoadingOverlay(overlayMessage);
+        LogSyncService.QuestApplyOutcome outcome;
+        try
+        {
+            outcome = await _logSyncService.ApplyQuestChangesAsync(changes);
+        }
+        finally
+        {
+            HideLoadingOverlay();
+        }
+
+        // Only the loaded profile's rows are on screen; the others changed silently, which is
+        // what the per-profile summary is for.
+        await LoadAndShowQuestListAsync();
+
+        return outcome;
+    }
+
+    /// <summary>
+    /// The applied total followed by one row per profile written to, in the same wording the
+    /// summary dialog uses. Profiles missing from <c>outcome.AppliedByProfile</c> had nothing
+    /// written to them and are left out rather than shown as a zero; a profile whose write THREW
+    /// is missing for a different reason, so it is named separately rather than read as untouched.
+    /// </summary>
+    private string BuildAppliedSummary(LogSyncService.QuestApplyOutcome outcome)
+    {
+        var appliedByProfile = outcome.AppliedByProfile;
+        var lines = new List<string>
+        {
+            string.Format(_loc.SyncAlternativesAppliedFormat, appliedByProfile.Values.Sum())
+        };
+
+        if (appliedByProfile.Count > 0)
+        {
+            // Deterministic order so two runs writing the same profiles read the same way.
+            lines.Add(string.Join(Environment.NewLine, appliedByProfile
+                .OrderBy(entry => entry.Key)
+                .Select(entry =>
+                    $"{_loc.ProfileName(entry.Key)}: {string.Format(_loc.SyncAppliedCountFormat, entry.Value)}")));
+        }
+
+        if (outcome.FailedProfiles.Count > 0)
+        {
+            lines.Add(string.Format(_loc.SyncApplyFailedFormat,
+                string.Join(", ", outcome.FailedProfiles.OrderBy(p => p).Select(_loc.ProfileName))));
+        }
+
+        return string.Join(Environment.NewLine + Environment.NewLine, lines);
     }
 
     #endregion
@@ -2204,7 +2274,7 @@ public partial class MainWindow : Window
 
         SyncStatusDot.Fill = state switch
         {
-            SyncChipState.InRaid => AccentStatusBrush, // gold — the "live" state
+            SyncChipState.InRaid => AccentStatusBrush, // gold, the "live" state
             SyncChipState.Matching => WarningStatusBrush,
             SyncChipState.Watching => SuccessStatusBrush,
             _ => NeutralStatusBrush,
@@ -2231,7 +2301,7 @@ public partial class MainWindow : Window
         ApplyHeaderLayout(HeaderLayout.GetMode(e.NewSize.Width));
     }
 
-    // All tab glyphs, so narrow-width degradation toggles them as one set — a new
+    // All tab glyphs, so narrow-width degradation toggles them as one set; a new
     // tab's glyph only needs to be added here to participate.
     private TextBlock[]? _tabGlyphs;
 
@@ -2241,8 +2311,8 @@ public partial class MainWindow : Window
         _currentHeaderMode = mode;
 
         // Compact: status text collapses to its dot (tooltip remains) and the tab
-        // glyphs go (at the default font size, text-only tabs fit down to MinWidth 600
-        // — JA is within a few px of the limit, and font sizes near the 28 max can
+        // glyphs go (at the default font size, text-only tabs fit down to MinWidth 600;
+        // JA is within a few px of the limit, and font sizes near the 28 max can
         // still clip at 600; with glyphs they clip below ~1000). Minimal: the brand
         // title goes too.
         var full = mode == HeaderLayoutMode.Full;
@@ -2489,11 +2559,11 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Render the title-bar version display from UpdateService state — the single
+    /// Render the title-bar version display from UpdateService state: the single
     /// writer for the chip. Update available: the green "Update vX.Y.Z" install pill.
     /// Otherwise the passive chip: "Checking…" while a check runs, the version tinted
     /// red with an explanatory tooltip when the last check failed (the bar's only
-    /// failure signal), or the plain version. Only the pill is interactive — manual
+    /// failure signal), or the plain version. Only the pill is interactive; manual
     /// checks live in Settings.
     /// </summary>
     private void UpdateVersionChipUI()
@@ -2539,7 +2609,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Render the Settings overlay's Application Update section. The install button
     /// is driven solely by update availability, while the status text reports the
-    /// latest check outcome (via <see cref="UpdateService.GetStatusKind"/>) — so a
+    /// latest check outcome (via <see cref="UpdateService.GetStatusKind"/>), so a
     /// failed re-check stays visible without hiding a previously found update.
     /// </summary>
     private void UpdateSettingsUpdateSectionUI()
@@ -2678,6 +2748,10 @@ public partial class MainWindow : Window
         // background raise (log watcher, raid poller, the 3-minute update timer)
         // during/after teardown can't dispatch UI work against a closed window.
         _logSyncService.MonitoringStatusChanged -= OnLogMonitoringStatusChanged;
+        // Detached here too: the quest-event handler dispatches its whole body onto this
+        // window's Dispatcher, so a tail read completing during teardown would otherwise
+        // await an operation the shutting-down dispatcher never runs.
+        _logSyncService.QuestEventDetected -= OnQuestEventDetected;
         EftRaidEventService.Instance.MonitoringStateChanged -= OnRaidMonitoringStateChanged;
         EftRaidEventService.Instance.RaidEvent -= OnRaidEvent;
         ProfileService.Instance.ActiveProfileChanged -= OnActiveProfileChanged;

@@ -13,7 +13,7 @@ namespace TarkovHelper.Tests;
 public sealed class MapViewStatePersistenceTests
 {
     // MinZoom/MaxZoom resolve to MapViewStatePersistence's public constants via the
-    // `using static` import — asserting against the real bounds, not a copy that
+    // `using static` import, asserting against the real bounds, not a copy that
     // could silently drift from the app's.
 
     private static readonly string[] Maps = { "Woods", "Customs", "Factory" };
@@ -38,7 +38,7 @@ public sealed class MapViewStatePersistenceTests
     {
         var choice = DecideInitialMap("cUsToMs", Maps, activeRaidMapKey: null);
 
-        // The canonical config key, not the saved spelling — combo Tag lookups are exact.
+        // The canonical config key, not the saved spelling: combo Tag lookups are exact.
         Assert.Equal("Customs", choice!.MapKey);
         Assert.Equal(MapChoiceSource.Saved, choice.Source);
     }
@@ -167,7 +167,7 @@ public sealed class MapViewStatePersistenceTests
     [Fact]
     public void Raid_without_any_identifier_yields_null()
     {
-        // Null identity means "cannot prove it's a new raid" — reconciliation preserves
+        // Null identity means "cannot prove it's a new raid": reconciliation preserves
         // the trail rather than clearing it.
         Assert.Null(GetRaidIdentity(Raid(RaidState.InRaid)));
     }

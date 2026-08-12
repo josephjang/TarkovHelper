@@ -30,7 +30,7 @@ public sealed class FontStacksTests
             var tokens = Tokens(language);
             Assert.NotEmpty(tokens);
             // Segoe UI is the last *named* family. (It does not terminate
-            // resolution — WPF's global composite fallback still runs for
+            // resolution: WPF's global composite fallback still runs for
             // anything no named family covers.)
             Assert.Equal("Segoe UI", tokens[^1]);
         }
@@ -89,7 +89,7 @@ public sealed class FontStacksTests
     public void Adding_a_language_forces_a_deliberate_chain_decision()
     {
         // ForLanguage's default arm hands any unlisted language the EN/KO chain, which
-        // puts the Korean-form Noto ahead of every system CJK face — right for a Latin
+        // puts the Korean-form Noto ahead of every system CJK face, right for a Latin
         // language, wrong for one needing Japanese or Chinese forms (ZH is a PRD
         // non-goal today, not an impossibility). Nothing else fails if that inheritance
         // is wrong: WPF renders the wrong forms silently, and the per-language loops

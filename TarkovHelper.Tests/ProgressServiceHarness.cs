@@ -1,5 +1,3 @@
-using System.Reflection;
-using System.Runtime.CompilerServices;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
 
@@ -28,7 +26,7 @@ internal static class ProgressServiceHarness
         ProgressSnapshot snapshot,
         params TarkovTask[] tasks)
     {
-        var service = (QuestProgressService)RuntimeHelpers.GetUninitializedObject(typeof(QuestProgressService));
+        var service = TestReflection.Uninitialized<QuestProgressService>();
 
         var byId = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
         var byName = new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase);
@@ -41,12 +39,13 @@ internal static class ProgressServiceHarness
             if (task.NormalizedName != null) byName[task.NormalizedName] = task;
         }
 
-        SetField(service, "_tasksById", byId);
-        SetField(service, "_tasksByNormalizedName", byName);
-        SetField(service, "_tasksByBsgId", new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase));
-        SetField(service, "_allTasks", tasks.ToList());
+        TestReflection.SetPrivateField(service, "_tasksById", byId);
+        TestReflection.SetPrivateField(service, "_tasksByNormalizedName", byName);
+        TestReflection.SetPrivateField(
+            service, "_tasksByBsgId", new Dictionary<string, TarkovTask>(StringComparer.OrdinalIgnoreCase));
+        TestReflection.SetPrivateField(service, "_allTasks", tasks.ToList());
 
-        service._store = store;
+        service.Store = store;
         service.Snapshot = snapshot;
         return service;
     }
@@ -57,11 +56,4 @@ internal static class ProgressServiceHarness
 
     /// <summary>The profile whose rows the service currently holds.</summary>
     public static string LoadedProfileOf(QuestProgressService service) => service.Snapshot.ProfileId;
-
-    private static void SetField(QuestProgressService service, string field, object value)
-    {
-        var f = typeof(QuestProgressService).GetField(field, BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.True(f != null, $"QuestProgressService has no field '{field}'");
-        f!.SetValue(service, value);
-    }
 }

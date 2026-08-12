@@ -6,7 +6,7 @@ namespace TarkovHelper.Tests;
 /// <summary>
 /// Covers the update.xml parsing contract (UpdateService.ParseUpdateXml) and pins the
 /// update-feed URL constants to this fork. The URL guards exist because a bad merge from
-/// upstream (Zeliper) could silently reintroduce its URLs — an app built with those
+/// upstream (Zeliper) could silently reintroduce its URLs, and an app built with those
 /// would offer to replace itself with the upstream build.
 /// </summary>
 public sealed class UpdateServiceTests

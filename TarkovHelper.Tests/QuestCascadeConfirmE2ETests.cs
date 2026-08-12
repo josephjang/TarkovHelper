@@ -7,8 +7,8 @@ namespace TarkovHelper.Tests;
 /// <summary>
 /// End-to-end coverage for the quest complete-cascade confirmation dialog (see
 /// feature-quest-complete-cascade-confirm.md): completing a quest whose cascade is
-/// non-empty must show QuestCompleteConfirmDialog first — dismissing it (Cancel or
-/// the X) changes nothing, Confirm applies the quest plus its cascade verbatim —
+/// non-empty must show QuestCompleteConfirmDialog first. Dismissing it (Cancel or
+/// the X) changes nothing, Confirm applies the quest plus its cascade verbatim,
 /// while a cascade-free completion stays one-click with no dialog. Both halves of
 /// the preview are covered: auto-completed prerequisites and the red auto-failed
 /// alternatives section, including that Confirm persists the rows to user_data.db
@@ -19,7 +19,7 @@ namespace TarkovHelper.Tests;
 /// and probed with scope-rooted searches. It is opened via InvokePattern
 /// (InvokeElement): WPF's ButtonAutomationPeer raises the click asynchronously
 /// (Dispatcher.BeginInvoke), so the invoke returns before the handler enters the
-/// modal ShowDialog pump — unlike a real mouse click, it cannot miss on a layout
+/// modal ShowDialog pump, and unlike a real mouse click, it cannot miss on a layout
 /// shift or a denied SetForegroundWindow.
 ///
 /// Test data comes from E2EQuestData on a fresh profile: the locked-quest query
@@ -32,10 +32,10 @@ namespace TarkovHelper.Tests;
 public sealed class QuestCascadeConfirmE2ETests : E2ETestBase
 {
     /// <summary>
-    /// Dialog strings derived from the same LocalizationService the dialog reads (EN —
-    /// e2e profiles default to EN; AppDriver.RemoveLegacyLanguageOverride keeps that
+    /// Dialog strings derived from the same LocalizationService the dialog reads (EN,
+    /// because e2e profiles default to EN and AppDriver.RemoveLegacyLanguageOverride keeps that
     /// true), so editing user-facing copy cannot break these tests. The COUNTS stay
-    /// hard-coded on the test side — a cascade previewing 0 or 2 still fails.
+    /// hard-coded on the test side, so a cascade previewing 0 or 2 still fails.
     /// </summary>
     private static readonly LocalizationService Loc = TestLocalization.WithLanguage(AppLanguage.EN);
     private static readonly string DialogTitle = Loc.CascadeConfirmTitle;
@@ -60,7 +60,7 @@ public sealed class QuestCascadeConfirmE2ETests : E2ETestBase
             AppDriver.WaitForElementUnder(dialog, "TxtCascadeCompletedHeader").Current.Name);
 
         // A Collapsed WPF element exposes no automation peer at all, so the failed
-        // section being collapsed means FindFirst returns null — non-null would mean
+        // section being collapsed means FindFirst returns null; non-null would mean
         // the section is actually rendered.
         var failedHeader = dialog.FindFirst(TreeScope.Descendants,
             new PropertyCondition(AutomationElement.AutomationIdProperty, "TxtCascadeFailedHeader"));
@@ -90,7 +90,7 @@ public sealed class QuestCascadeConfirmE2ETests : E2ETestBase
         app.WaitForElementVisibility("BtnComplete", visible: true);
         Assert.False(app.IsElementVisible("BtnReset"), "quest gained a Reset button after dismissing");
 
-        // The prerequisite is untouched too — its detail still offers Mark Complete.
+        // The prerequisite is untouched too: its detail still offers Mark Complete.
         app.ClickTextElementWithScroll(prereqName, "PrerequisitesList", "DetailScrollViewer");
         WaitUntil(() => app.GetElementText("TxtDetailName") == prereqName,
             $"detail panel to show prerequisite '{prereqName}'");
@@ -123,7 +123,7 @@ public sealed class QuestCascadeConfirmE2ETests : E2ETestBase
         app.WaitForElementVisibility("BtnComplete", visible: false);
         app.WaitForElementVisibility("BtnReset", visible: true);
 
-        // Both completions actually reached user_data.db — the batch save is
+        // Both completions actually reached user_data.db. The batch save is
         // fire-and-forget with a swallowing catch, so poll the rows themselves.
         var questId = E2EQuestData.QuestIdByName(questName);
         var prereqId = E2EQuestData.QuestIdByName(prereqName);
@@ -170,7 +170,7 @@ public sealed class QuestCascadeConfirmE2ETests : E2ETestBase
         ShowQuestDetail(app, questName, "All");
         app.InvokeElement("BtnComplete");
 
-        // Race the two possible outcomes: either the dialog opened (a regression —
+        // Race the two possible outcomes: either the dialog opened (a regression:
         // the completion then never applies and the buttons never flip) or the
         // one-click completion flipped the button row. Checking the dialog FIRST
         // keeps the assertion live; waiting for the flip alone would time out on an
