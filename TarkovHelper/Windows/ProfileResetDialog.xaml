@@ -65,8 +65,13 @@
                            Foreground="{DynamicResource TextSecondaryBrush}"
                            Visibility="Collapsed" Margin="0,0,0,8"/>
 
+                <!-- Action Buttons. IsCancel gives the borderless modal its keyboard path:
+                     Escape clicks Cancel. Deliberately NO IsDefault on the confirm button,
+                     unlike the other confirmations: Enter must not be able to wipe a profile.
+                     Only one of the two IsCancel buttons here is ever visible (the panels
+                     swap), so Escape is never ambiguous. -->
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-                    <Button x:Name="BtnCancelReset" Content="Cancel"
+                    <Button x:Name="BtnCancelReset" Content="Cancel" IsCancel="True"
                             Padding="16,8" Margin="0,0,8,0"
                             Click="BtnCancelReset_Click"/>
                     <Button x:Name="BtnConfirmReset" Content="Reset This Profile"
@@ -79,9 +84,12 @@
             </StackPanel>
 
             <!--
-                Result state: success confirms completion; failure names the failure and states
-                that nothing was removed (PRD R5). Same window, swapped in after the outcome is
-                known, so the player cannot lose the result behind a closed dialog.
+                Result state, one headline per outcome status: success confirms completion;
+                failure states that nothing was removed (PRD R5) and adds the library detail
+                below; an abandoned store wait says the outcome is unknown and to restart,
+                because it is the one status that cannot promise nothing was removed. Same
+                window, swapped in after the outcome is known, so the player cannot lose the
+                result behind a closed dialog.
             -->
             <StackPanel x:Name="ResultPanel" Visibility="Collapsed">
                 <TextBlock x:Name="TxtResetResult"
@@ -92,7 +100,7 @@
                            FontSize="{DynamicResource FontSizeTiny}"
                            Foreground="#EF5350"
                            TextWrapping="Wrap" Visibility="Collapsed" Margin="0,0,0,8"/>
-                <Button x:Name="BtnCloseReset" Content="Close"
+                <Button x:Name="BtnCloseReset" Content="Close" IsCancel="True"
                         Padding="16,8" HorizontalAlignment="Right" Margin="0,8,0,0"
                         Click="BtnCloseReset_Click"/>
             </StackPanel>

@@ -1062,19 +1062,24 @@ namespace TarkovHelper.Services
 
                 // The reset fence (PRD R6 of feature-complete-profile-reset.md): events not
                 // after the owner's reset watermark describe progress the player deliberately
-                // removed, and the game retains their session logs for days. "Not after" is the
-                // boundary, so an event stamped exactly at the reset moment is dropped too.
+                // removed, and the game retains their session logs for days. The boundary rule
+                // itself lives in ResetFence.IsFencedOut, so the count below and the events that
+                // survive it stay exact complements instead of two hand-written comparisons that
+                // can drift. This fence sits at scan time because its count is what the player is
+                // shown in the sync summary, before confirming anything is applied.
                 var resetAt = await Store.GetProgressResetAtAsync(ownerId);
                 if (resetAt.HasValue)
                 {
-                    var preReset = ownerEvents.Count(e => e.Timestamp <= resetAt.Value);
+                    var preReset = ownerEvents.Count(e => ResetFence.IsFencedOut(e.Timestamp, resetAt));
                     if (preReset > 0)
                     {
                         result.PreResetEventCount += preReset;
-                        ownerEvents = ownerEvents.Where(e => e.Timestamp > resetAt.Value).ToList();
+                        ownerEvents = ownerEvents
+                            .Where(e => !ResetFence.IsFencedOut(e.Timestamp, resetAt))
+                            .ToList();
                         _log.Info(
-                            $"Dropped {preReset} quest events for {ownerId} from before its reset " +
-                            $"at {resetAt.Value:o}");
+                            $"Dropped {preReset} quest events for {ownerId} that are not after " +
+                            $"its reset at {resetAt.Value:o}");
                     }
                     if (ownerEvents.Count == 0) continue;
                 }

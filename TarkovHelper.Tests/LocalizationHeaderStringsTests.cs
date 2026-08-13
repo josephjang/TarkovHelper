@@ -45,6 +45,7 @@ public class LocalizationHeaderStringsTests
         "ProfileResetDialogTitle", "ProfileResetTargetFormat", "ProfileResetCategories",
         "ProfileResetSurvivorsNote", "ProfileResetRaidWarning", "ProfileResetConfirmButton",
         "ProfileResetWorking", "ProfileResetSuccessFormat", "ProfileResetFailedText",
+        "ProfileResetAbandonedText",
     };
 
     private static readonly string[] FormatKeys =
@@ -87,6 +88,20 @@ public class LocalizationHeaderStringsTests
         {
             Assert.Contains("{0}", GetString(loc, key));
         }
+    }
+
+    // The abandoned-reset text exists precisely because it cannot promise what the failed text
+    // promises ("nothing was removed"). A translation that copied one into the other would put
+    // that promise back in front of a player whose transaction may well have committed.
+    [Theory]
+    [InlineData(AppLanguage.EN)]
+    [InlineData(AppLanguage.KO)]
+    [InlineData(AppLanguage.JA)]
+    public void The_abandoned_reset_text_is_not_a_copy_of_the_failed_text(AppLanguage language)
+    {
+        var loc = TestLocalization.WithLanguage(language);
+
+        Assert.NotEqual(loc.ProfileResetFailedText, loc.ProfileResetAbandonedText);
     }
 
     [Fact]

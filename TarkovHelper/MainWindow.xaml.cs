@@ -1230,14 +1230,17 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Opens the complete-profile-reset dialog (feature-complete-profile-reset.md). The target
-    /// is the profile selected at this moment, captured ONCE and carried through the dialog and
-    /// the reset itself: an automatic profile switch while the dialog is open must not move the
-    /// reset (PRD R1). The reset work is ProfileResetService's; this window only opens the
-    /// dialog and refreshes its pages afterwards.
+    /// is the profile selected at this moment, captured ONCE into a local and carried through
+    /// the dialog and the reset itself: an automatic profile switch while the dialog is open
+    /// must not move the reset (PRD R1). The reset work is ProfileResetService's; this window
+    /// only opens the dialog and refreshes its pages afterwards.
     /// </summary>
     private async void BtnResetProgress_Click(object sender, RoutedEventArgs e)
     {
-        var (target, _) = ProfileService.Instance.CurrentTransition;
+        // The selection alone, read under ProfileService's own gate. Not CurrentTransition:
+        // that pair exists for callers who carry the revision into an async load so a losing
+        // load can be discarded, and nothing here reloads against a revision.
+        var target = ProfileService.Instance.ActiveProfile;
 
         var dialog = new ProfileResetDialog(
             target, () => ProfileResetService.Instance.ResetAsync(target))

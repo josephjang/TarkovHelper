@@ -551,5 +551,20 @@ public partial class LocalizationService
         _ => "The reset failed. Nothing was removed."
     };
 
+    /// <summary>
+    /// The outcome for a store wait the reset gave up on (ProfileResetStatus.Abandoned). It must
+    /// NOT repeat PRD R5's "nothing was removed": abandoning the wait does not cancel the
+    /// transaction, so what happened is genuinely unknown until the player looks.
+    /// </summary>
+    public string ProfileResetAbandonedText => CurrentLanguage switch
+    {
+        AppLanguage.KO => "초기화가 끝나기 전에 대기를 중단했습니다. 백그라운드에서 계속 진행 중일 수 있습니다. " +
+                          "앱을 다시 시작해 이 프로필을 확인한 뒤 다시 시도하세요.",
+        AppLanguage.JA => "リセットが完了する前に待機を中止しました。バックグラウンドで処理が続いている可能性があります。" +
+                          "アプリを再起動してこのプロフィールを確認してから、もう一度お試しください。",
+        _ => "The reset was given up on before it finished. It may still be completing in the " +
+             "background: restart the app and check this profile before trying again."
+    };
+
     #endregion
 }

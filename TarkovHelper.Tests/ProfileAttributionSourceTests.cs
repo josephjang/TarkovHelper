@@ -91,6 +91,28 @@ public sealed class ProfileAttributionSourceTests
             new AllowedRead("LoadInventory", "var (profile, revision) = ProfileService.Instance.CurrentTransition;",
                 "Startup load: the one load with no ActiveProfileChanged to learn the profile from."),
         }),
+
+        // Per-profile settings are hand entry only (level, scav rep, faction, prestige, DSP
+        // count, editions), so the selection IS the evidence for these writes, and the reset
+        // deletes exactly the rows they write. Listed for the same reason the two services
+        // above are: the dangerous shape - a selection read taken inside a deferred body - is
+        // the same one, and this file is the only reset hook that consults the selection at
+        // all instead of a captured _loadedProfileId. Every read below is synchronous with
+        // the store call it feeds, which is what keeps a switch from redirecting the row.
+        ("TarkovHelper/Services/SettingsService.cs", new[]
+        {
+            new AllowedRead("SettingsService", "ProfileService.Instance.ActiveProfileChanged +=",
+                "Constructor: subscribes to transitions so the cache reloads on a switch."),
+            new AllowedRead("HandleProfileReset",
+                "string.Equals(profileId, ProfileService.Instance.ActiveProfileId, StringComparison.Ordinal)",
+                "Reset hook: the cache holds the SELECTED profile's values, so the selection " +
+                "is what decides whether the reset made them stale. Read synchronously, on the " +
+                "thread that calls the hook, before any reload."),
+            new AllowedRead("SaveProfileSetting", "_userDataDb.SetProfileSetting(ProfileService.Instance.ActiveProfileId, key, value);",
+                "Hand-entered setting: resolved in the same synchronous call as the write."),
+            new AllowedRead("GetProfileSetting", "return _userDataDb.GetProfileSetting(ProfileService.Instance.ActiveProfileId, key);",
+                "Read of the selected profile's own row; no deferral between lookup and query."),
+        }),
     };
 
     [Fact]

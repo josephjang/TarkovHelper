@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+using System.Windows.Automation;
 using TarkovHelper.Services;
 
 namespace TarkovHelper.Tests;
@@ -35,6 +37,30 @@ public sealed class ProfileResetE2ETests : E2ETestBase
         return configDir;
     }
 
+    private const byte VkEscape = 0x1B;
+    private const uint KeyUp = 0x0002;
+
+    /// <summary>
+    /// The harness keeps keybd_event private to its Ctrl-click helper, which holds a modifier
+    /// rather than pressing a key; these tests need the key press itself.
+    /// </summary>
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extraInfo);
+
+    /// <summary>
+    /// Presses Escape at <paramref name="window"/>, the keyboard dismissal path a borderless
+    /// modal has no title-bar X for.
+    /// </summary>
+    private static void PressEscape(AutomationElement window)
+    {
+        var hwnd = new IntPtr(window.Current.NativeWindowHandle);
+        Assert.NotEqual(IntPtr.Zero, hwnd);
+        Win32.SetForegroundWindow(hwnd);
+        Thread.Sleep(100); // let the focus change land before the key arrives
+        keybd_event(VkEscape, 0, 0, UIntPtr.Zero);
+        keybd_event(VkEscape, 0, KeyUp, UIntPtr.Zero);
+    }
+
     [E2EFact]
     public void Resetting_the_selected_profile_clears_it_completely_and_spares_the_rest()
     {
@@ -56,6 +82,12 @@ public sealed class ProfileResetE2ETests : E2ETestBase
             Assert.True(AppDriver.HasTextElementUnder(dialog,
                     string.Format(loc.ProfileResetTargetFormat, loc.HeaderPvpSeason)),
                 "the dialog does not name the target profile");
+
+            // Log monitoring is off in this seed, so no raid state is meaningful and the warning
+            // must stay collapsed (the stale-raid half of that rule is unit-tested in
+            // ProfileResetOrchestrationTests, which this run cannot reach).
+            Assert.False(AppDriver.HasTextElementUnder(dialog, loc.ProfileResetRaidWarning),
+                "the raid warning appeared with the raid watcher off");
 
             AppDriver.Invoke(AppDriver.WaitForElementUnder(dialog, "BtnConfirmReset"));
 
@@ -111,6 +143,42 @@ public sealed class ProfileResetE2ETests : E2ETestBase
         }
 
         // Declining changes nothing (PRD R2): rows intact, no fence went up.
+        Assert.Equal("Done",
+            E2EDb.ReadQuestProgress(configDir, ProfileService.SeasonProfileId, "e2e-season-quest"));
+        Assert.Equal("42",
+            E2EDb.ReadProfileSetting(configDir, ProfileService.SeasonProfileId, "app.playerLevel"));
+        Assert.Null(
+            E2EDb.ReadProfileSetting(configDir, ProfileService.SeasonProfileId, "app.progressResetAt"));
+    }
+
+    /// <summary>
+    /// The borderless confirmation has no title-bar X, so Escape is its only dismissal that is
+    /// not a mouse click on Cancel (the house rule the sibling modals state in
+    /// QuestCompleteConfirmDialog.xaml). Declining by keyboard must be as inert as declining by
+    /// mouse: Escape reaches Cancel, never Confirm.
+    /// </summary>
+    [E2EFact]
+    public void Escape_dismisses_the_confirmation_and_resets_nothing()
+    {
+        var configDir = SeedTwoProfiles();
+
+        using (var app = LaunchMaximized(configDir))
+        {
+            WaitUntil(() => app.GetItemStatus("BtnPvpSeason") == "Selected",
+                "PvP Season to be the selected profile");
+
+            app.InvokeElement("BtnSettings");
+            app.WaitForElementVisibility("BtnResetProgress", visible: true);
+            app.InvokeElement("BtnResetProgress");
+
+            var dialog = app.WaitForAppWindow(DialogTitle);
+            PressEscape(dialog);
+            app.WaitForAppWindowClosed(DialogTitle);
+
+            app.CloseAndWaitForExit();
+        }
+
+        // Escape is a decline, not a confirm: every row survives and no watermark was written.
         Assert.Equal("Done",
             E2EDb.ReadQuestProgress(configDir, ProfileService.SeasonProfileId, "e2e-season-quest"));
         Assert.Equal("42",

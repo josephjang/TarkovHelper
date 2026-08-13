@@ -5,6 +5,7 @@ using System.Text;
 using System.Windows.Automation;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Pages;
+using TarkovHelper.Services;
 
 namespace TarkovHelper.Tests;
 
@@ -917,21 +918,27 @@ internal static class TestHostDpiAwareness
 }
 
 /// <summary>
-/// Direct user_data.db access for seeding settings before a launch and asserting the
-/// persisted values after a close. The app's own schema creation is CREATE TABLE IF NOT
-/// EXISTS, so it adopts a pre-created file and adds the remaining tables on startup.
+/// Direct user_data.db access for seeding rows before a launch and asserting the persisted
+/// values after a close. <see cref="CreateUserDataDb"/> builds the file through the app's own
+/// store, so the pre-launch schema is the production schema; the seeders below just INSERT
+/// into it and callers must run CreateUserDataDb first.
 /// </summary>
 internal static class E2EDb
 {
-    /// <summary>Creates a minimal user_data.db so tests can seed settings without a first app launch.</summary>
+    /// <summary>
+    /// Creates user_data.db with the production schema so tests can seed rows without a first
+    /// app launch. Built by the app's own store rather than by hand-written DDL: the app's
+    /// schema creation is CREATE TABLE IF NOT EXISTS, so it silently adopts whatever table a
+    /// pre-created file already holds. A hand-copied CREATE TABLE that drifted from production
+    /// (a column added on the app side, as AppProfileId was added to RaidHistory) would be
+    /// adopted as-is and the app would then fail at runtime on the missing column.
+    ///
+    /// The blocking wait lives here rather than in the calling test method on purpose: xUnit's
+    /// xUnit1031 analyzer flags blocking calls in test methods only.
+    /// </summary>
     public static void CreateUserDataDb(string configDir)
-    {
-        using var connection = new SqliteConnection($"Data Source={Path.Combine(configDir, "user_data.db")}");
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "CREATE TABLE IF NOT EXISTS UserSettings (Key TEXT PRIMARY KEY, Value TEXT NOT NULL)";
-        command.ExecuteNonQuery();
-    }
+        => new UserDataDbService(Path.Combine(configDir, "user_data.db"))
+            .InitializeAsync().GetAwaiter().GetResult();
 
     public static void SeedSetting(string configDir, string key, string value)
     {
@@ -947,28 +954,15 @@ internal static class E2EDb
     }
 
     /// <summary>
-    /// Seeds one QuestProgress row before a launch, creating the table with the app's own
-    /// schema first (the app's CREATE TABLE IF NOT EXISTS adopts it). Lets a reset test start
-    /// from a database that already holds per-profile progress.
+    /// Seeds one QuestProgress row before a launch, so a reset test starts from a database that
+    /// already holds per-profile progress. Requires <see cref="CreateUserDataDb"/> to have run
+    /// on this config dir first (same precondition as <see cref="SeedSetting"/>).
     /// </summary>
     public static void SeedQuestProgress(
         string configDir, string profileId, string id, string? normalizedName, string status)
     {
         using var connection = new SqliteConnection($"Data Source={Path.Combine(configDir, "user_data.db")}");
         connection.Open();
-        using (var create = connection.CreateCommand())
-        {
-            create.CommandText = @"
-                CREATE TABLE IF NOT EXISTS QuestProgress (
-                    ProfileId TEXT NOT NULL DEFAULT 'pvp',
-                    Id TEXT NOT NULL,
-                    NormalizedName TEXT,
-                    Status TEXT NOT NULL,
-                    UpdatedAt TEXT NOT NULL,
-                    PRIMARY KEY (ProfileId, Id)
-                )";
-            create.ExecuteNonQuery();
-        }
         using var insert = connection.CreateCommand();
         insert.CommandText = @"
             INSERT OR REPLACE INTO QuestProgress (ProfileId, Id, NormalizedName, Status, UpdatedAt)
@@ -981,22 +975,14 @@ internal static class E2EDb
         insert.ExecuteNonQuery();
     }
 
-    /// <summary>Seeds one per-profile setting row pre-launch (same table-adoption pattern).</summary>
+    /// <summary>
+    /// Seeds one per-profile setting row pre-launch. Requires <see cref="CreateUserDataDb"/> to
+    /// have run on this config dir first.
+    /// </summary>
     public static void SeedProfileSetting(string configDir, string profileId, string key, string value)
     {
         using var connection = new SqliteConnection($"Data Source={Path.Combine(configDir, "user_data.db")}");
         connection.Open();
-        using (var create = connection.CreateCommand())
-        {
-            create.CommandText = @"
-                CREATE TABLE IF NOT EXISTS ProfileSettings (
-                    ProfileId TEXT NOT NULL,
-                    Key TEXT NOT NULL,
-                    Value TEXT NOT NULL,
-                    PRIMARY KEY (ProfileId, Key)
-                )";
-            create.ExecuteNonQuery();
-        }
         using var insert = connection.CreateCommand();
         insert.CommandText = @"
             INSERT INTO ProfileSettings (ProfileId, Key, Value) VALUES ($profile, $key, $value)
@@ -1009,40 +995,21 @@ internal static class E2EDb
 
     /// <summary>Reads one per-profile setting value, or null when the row/table/db is missing.</summary>
     public static string? ReadProfileSetting(string configDir, string profileId, string key)
-    {
-        var dbPath = Path.Combine(configDir, "user_data.db");
-        if (!File.Exists(dbPath)) return null;
+        => ReadSingleValue(
+            configDir,
+            "SELECT Value FROM ProfileSettings WHERE ProfileId = $profile AND Key = $key",
+            command =>
+            {
+                command.Parameters.AddWithValue("$profile", profileId);
+                command.Parameters.AddWithValue("$key", key);
+            });
 
-        using var connection = new SqliteConnection($"Data Source={dbPath}");
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Value FROM ProfileSettings WHERE ProfileId = $profile AND Key = $key";
-        command.Parameters.AddWithValue("$profile", profileId);
-        command.Parameters.AddWithValue("$key", key);
-        try
-        {
-            return command.ExecuteScalar() as string;
-        }
-        catch (SqliteException)
-        {
-            // Table not created yet.
-            return null;
-        }
-    }
-
-    /// <summary>Reads a persisted setting value, or null when the key/db is missing.</summary>
+    /// <summary>Reads a persisted global setting value, or null when the row/table/db is missing.</summary>
     public static string? ReadSetting(string configDir, string key)
-    {
-        var dbPath = Path.Combine(configDir, "user_data.db");
-        if (!File.Exists(dbPath)) return null;
-
-        using var connection = new SqliteConnection($"Data Source={dbPath}");
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Value FROM UserSettings WHERE Key = $key";
-        command.Parameters.AddWithValue("$key", key);
-        return command.ExecuteScalar() as string;
-    }
+        => ReadSingleValue(
+            configDir,
+            "SELECT Value FROM UserSettings WHERE Key = $key",
+            command => command.Parameters.AddWithValue("$key", key));
 
     /// <summary>
     /// Reads a quest's persisted progress status (the QuestProgress row keyed by
@@ -1074,13 +1041,24 @@ internal static class E2EDb
             });
 
     /// <summary>
-    /// The scaffolding both ReadQuestProgress overloads share: open the db if it exists, run one
-    /// status query, and report "no row" for a table the app has not created yet. Only the WHERE
-    /// clause differs, and it is always a literal from this file (values arrive as parameters
-    /// through <paramref name="bindParameters"/>, never interpolated).
+    /// The clause both ReadQuestProgress overloads vary: only the WHERE differs, and it is
+    /// always a literal from this file (values arrive as parameters through
+    /// <paramref name="bindParameters"/>, never interpolated).
     /// </summary>
     private static string? ReadQuestStatus(
         string configDir, string where, Action<SqliteCommand> bindParameters)
+        => ReadSingleValue(
+            configDir, $"SELECT Status FROM QuestProgress WHERE {where} LIMIT 1", bindParameters);
+
+    /// <summary>
+    /// The scaffolding every reader above shares: open user_data.db if it exists, run one
+    /// single-value query, and report "no value" rather than throwing for a table the app has
+    /// not created yet (a launch that never reached its first save, or a db seeded with only
+    /// the tables one test needs). <paramref name="sql"/> is always a literal from this file;
+    /// test values reach the command as parameters through <paramref name="bindParameters"/>.
+    /// </summary>
+    private static string? ReadSingleValue(
+        string configDir, string sql, Action<SqliteCommand> bindParameters)
     {
         var dbPath = Path.Combine(configDir, "user_data.db");
         if (!File.Exists(dbPath)) return null;
@@ -1088,7 +1066,7 @@ internal static class E2EDb
         using var connection = new SqliteConnection($"Data Source={dbPath}");
         connection.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT Status FROM QuestProgress WHERE {where} LIMIT 1";
+        command.CommandText = sql;
         bindParameters(command);
         try
         {
@@ -1096,7 +1074,7 @@ internal static class E2EDb
         }
         catch (SqliteException)
         {
-            // Table not created yet (app has not finished its first save).
+            // Table not created yet.
             return null;
         }
     }
