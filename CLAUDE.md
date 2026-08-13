@@ -66,6 +66,11 @@ filenames, new docs in English). `TarkovDBEditor/docs/` is a separate, smaller l
 for that project's own internal implementation notes (wiki-parsing quirks, test case
 tracking) — not repo-wide, so it stays put.
 
+Substantial PRs can additionally get an interactive HTML code guide
+(`docs/YYYY-MM-<topic>-code-guide.html`: curriculum chapters, labs that run the
+decision logic, a comprehension gate). Invoke `/code-guide` in Claude Code or
+`$code-guide` in Codex; both use `.agents/skills/code-guide/references/workflow.md`.
+
 ## Writing Conventions
 
 Reader-facing text (docs, comments, commit messages) should read as

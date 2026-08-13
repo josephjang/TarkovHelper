@@ -1,0 +1,7 @@
+interface:
+  display_name: "Create Code Guide"
+  short_description: "Author an interactive HTML code guide for a PR"
+  default_prompt: "Use $code-guide to write the interactive code guide for the current PR."
+
+policy:
+  allow_implicit_invocation: false
