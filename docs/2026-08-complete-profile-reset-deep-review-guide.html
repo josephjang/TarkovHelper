@@ -1,0 +1,2088 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Complete Profile Reset - Deep Review Guide</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Ground and structure, inherited from the earlier guides so the
+         interactive docs read as one set. */
+      --page: #101010;
+      --surface: #181818;
+      --surface-2: #222222;
+      --surface-3: #2d2d2d;
+      --line: #3d3d3d;
+      --line-soft: #2a2a2a;
+      --text: #e0e0e0;
+      --muted: #9e9e9e;
+      --dim: #737373;
+
+      /* Accent: the app's own AccentBrush. */
+      --gold: #c5a84a;
+      --gold-hover: #d4b85a;
+      --gold-ink: #19170f;
+
+      /* Profile hues. These are a LAW, not decoration: the same profile is the same
+         colour in every table, lane and timeline on this page. */
+      --pvp: #5ea9e8;
+      --pve: #4caf50;
+      --season: #ff9800;
+
+      /* Reserved for data that survived a reset it should not have (or vice versa). */
+      --wrong: #ef5350;
+      --right: #4caf50;
+
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+
+      --body: "Segoe UI", "Noto Sans", system-ui, sans-serif;
+      --mono: Consolas, "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 14% -12%, rgba(197, 168, 74, .12), transparent 36rem),
+        var(--page);
+      color: var(--text);
+      font-family: var(--body);
+      line-height: 1.55;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    }
+
+    button, input, select { font: inherit; }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* ---------- shell ---------- */
+
+    .shell {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      gap: 44px;
+      width: min(1320px, calc(100% - 44px));
+      margin: 0 auto;
+      padding: 56px 0 96px;
+      align-items: start;
+    }
+
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .rail { position: static; margin-bottom: 40px; }
+    }
+
+    .rail {
+      position: sticky;
+      top: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 18px 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: rgba(24, 24, 24, .84);
+      backdrop-filter: blur(10px);
+    }
+
+    .rail-title {
+      margin: 0 0 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .rail a {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 13.5px;
+      text-decoration: none;
+      transition: background .15s, color .15s;
+    }
+
+    .rail a:hover { background: var(--surface-2); color: var(--text); }
+    .rail a .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+    .rail a.is-lab { color: var(--gold); }
+    .rail a.is-lab .n { color: var(--gold); }
+
+    .rail-gate {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line-soft);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    .rail-gate strong { display: block; color: var(--text); font-size: 13px; }
+
+    .gate-meter {
+      height: 5px;
+      margin-top: 8px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .gate-meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--gold);
+      transition: width .3s ease;
+    }
+
+    /* ---------- type ---------- */
+
+    main { max-width: 100%; }
+
+    .eyebrow {
+      margin: 0;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    h1 {
+      max-width: 18ch;
+      margin: 12px 0 18px;
+      font-size: clamp(38px, 5.6vw, 70px);
+      font-weight: 800;
+      line-height: 1.0;
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+
+    .lede {
+      max-width: 62ch;
+      margin: 0 0 14px;
+      font-size: 19px;
+      color: #c2c2c2;
+    }
+
+    h2 {
+      margin: 0 0 6px;
+      font-size: clamp(24px, 3vw, 33px);
+      font-weight: 800;
+      letter-spacing: -.03em;
+      line-height: 1.12;
+      text-wrap: balance;
+    }
+
+    h3 {
+      margin: 30px 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    p, li { max-width: 68ch; }
+    p { margin: 0 0 14px; }
+    ul, ol { margin: 0 0 14px; padding-left: 22px; }
+    li { margin-bottom: 7px; }
+
+    strong { color: #f0f0f0; }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: #ddc98a;
+      font-family: var(--mono);
+      font-size: .88em;
+    }
+
+    a { color: var(--gold); }
+
+    section { margin-bottom: 68px; scroll-margin-top: 24px; }
+
+    .chapter-head {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 16px;
+      align-items: baseline;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .chapter-num {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      color: var(--gold);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kicker {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 62ch;
+    }
+
+    /* ---------- callouts ---------- */
+
+    .note {
+      margin: 22px 0;
+      padding: 16px 18px;
+      border-left: 3px solid var(--gold);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: linear-gradient(100deg, rgba(197, 168, 74, .1), rgba(197, 168, 74, .02));
+    }
+
+    .note p:last-child { margin-bottom: 0; }
+
+    .note-label {
+      margin: 0 0 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .note.is-wrong { border-left-color: var(--wrong); background: linear-gradient(100deg, rgba(239, 83, 80, .1), transparent); }
+    .note.is-wrong .note-label { color: var(--wrong); }
+
+    /* ---------- code and logs ---------- */
+
+    .code {
+      margin: 18px 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #141414;
+      overflow: hidden;
+    }
+
+    .code-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .code pre {
+      margin: 0;
+      padding: 14px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.62;
+      tab-size: 2;
+    }
+
+    .code .del { display: block; background: rgba(239, 83, 80, .12); color: #f0b3b1; }
+    .code .add { display: block; background: rgba(76, 175, 80, .12); color: #b3e0b5; }
+    .code .cmt { color: var(--dim); }
+
+    /* ---------- labs ---------- */
+
+    .lab {
+      margin: 34px 0 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .lab-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      align-items: baseline;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line-soft);
+      background: linear-gradient(180deg, rgba(197, 168, 74, .07), transparent);
+    }
+
+    .lab-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .lab-head h3 { margin: 0; font-size: 19px; }
+    .lab-head .sub { width: 100%; margin: 2px 0 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
+
+    .lab-body { padding: 20px; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    .ctl-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .seg {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      background: var(--surface-2);
+      gap: 3px;
+    }
+
+    .seg button {
+      padding: 6px 14px;
+      border: 0;
+      border-radius: 99px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+
+    .seg button:hover { color: var(--text); }
+    .seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); }
+    .seg button[aria-pressed="true"][data-tone="bad"] { background: rgba(239, 83, 80, .2); color: var(--wrong); }
+    .seg button[aria-pressed="true"][data-tone="good"] { background: rgba(76, 175, 80, .2); color: var(--right); }
+
+    .btn {
+      padding: 8px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+
+    .btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--gold); }
+    .btn:disabled { opacity: .42; cursor: not-allowed; }
+    .btn.is-primary { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+    .btn.is-primary:hover:not(:disabled) { background: var(--gold-hover); }
+
+    /* Lab B: the pending map */
+
+    .tables {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .tbl {
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      overflow: hidden;
+      min-height: 118px;
+    }
+
+    .tbl-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      background: var(--surface);
+    }
+
+    .tbl-head .count { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; }
+
+    .tbl-rows { padding: 8px 10px; display: flex; flex-direction: column; gap: 5px; }
+
+    .trow {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: 6px;
+      background: var(--surface-3);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      animation: drop .28s ease both;
+    }
+
+    @keyframes drop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+    .trow .owner { font-weight: 700; }
+    .trow[data-p="pvp"] .owner { color: var(--pvp); }
+    .trow[data-p="pve"] .owner { color: var(--pve); }
+    .trow[data-p="season"] .owner { color: var(--season); }
+    .trow.is-wrong { background: rgba(239, 83, 80, .18); color: #f5b7b5; }
+
+    .tbl-empty { padding: 10px; color: var(--dim); font-size: 12px; font-style: italic; }
+
+    .verdict {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: var(--surface-2);
+      font-size: 14.5px;
+    }
+
+    .verdict[data-tone="bad"] { border-color: rgba(239, 83, 80, .5); background: rgba(239, 83, 80, .08); }
+    .verdict[data-tone="good"] { border-color: rgba(76, 175, 80, .45); background: rgba(76, 175, 80, .07); }
+    .verdict b { display: block; margin-bottom: 3px; }
+
+    /* Steppers (all three labs) */
+
+    .lanes { display: grid; gap: 10px; margin-bottom: 18px; }
+
+    .lane {
+      display: grid;
+      grid-template-columns: 132px minmax(0, 1fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    @media (max-width: 720px) { .lane { grid-template-columns: minmax(0, 1fr); } }
+
+    .lane-name {
+      display: flex;
+      align-items: center;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      font-size: 11.5px;
+      font-weight: 700;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .lane-track { display: flex; gap: 6px; }
+
+    .beat {
+      flex: 1;
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px dashed var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--dim);
+      font-size: 12px;
+      line-height: 1.35;
+      transition: background .2s, border-color .2s, color .2s;
+    }
+
+    .beat.is-on {
+      border-style: solid;
+      border-color: var(--gold);
+      background: rgba(197, 168, 74, .12);
+      color: var(--text);
+    }
+
+    .beat.is-done { border-style: solid; border-color: var(--line); color: var(--muted); }
+    .beat.is-bad { border-style: solid; border-color: var(--wrong); background: rgba(239, 83, 80, .1); color: #f5b7b5; }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-top: 6px;
+    }
+
+    .stat {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .stat .k {
+      margin: 0 0 4px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .stat .v {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat.is-alert { border-color: rgba(239, 83, 80, .55); background: rgba(239, 83, 80, .08); }
+    .v[data-p="season"] { color: var(--season); }
+    .v[data-tone="bad"] { color: var(--wrong); }
+    .v[data-tone="good"] { color: var(--right); }
+
+    /* ---------- quiz ---------- */
+
+    .quiz-intro {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 26px;
+      padding: 18px 20px;
+      border: 1px solid rgba(197, 168, 74, .35);
+      border-radius: var(--radius);
+      background: linear-gradient(110deg, rgba(197, 168, 74, .12), rgba(197, 168, 74, .02));
+    }
+
+    .quiz-score {
+      display: grid;
+      place-items: center;
+      min-width: 62px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      color: var(--gold);
+    }
+
+    .q {
+      margin-bottom: 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .q[data-state="right"] { border-color: rgba(76, 175, 80, .55); }
+    .q[data-state="wrong"] { border-color: rgba(239, 83, 80, .5); }
+
+    .q-head { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 16px 18px 10px; }
+
+    .q-num {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--gold);
+      padding-top: 3px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .q-text { margin: 0; font-size: 15.5px; font-weight: 600; max-width: 72ch; }
+
+    .q-opts { display: grid; gap: 7px; padding: 4px 18px 16px 44px; }
+
+    .opt {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      cursor: pointer;
+      font-size: 14px;
+      transition: border-color .15s, background .15s;
+    }
+
+    .opt:hover { border-color: var(--line); background: var(--surface-3); }
+    .opt input { margin: 3px 0 0; accent-color: var(--gold); }
+    .opt.is-right { border-color: rgba(76, 175, 80, .6); background: rgba(76, 175, 80, .1); }
+    .opt.is-wrong { border-color: rgba(239, 83, 80, .55); background: rgba(239, 83, 80, .1); }
+
+    .q-why {
+      display: none;
+      margin: 0 18px 16px 44px;
+      padding: 12px 14px;
+      border-left: 3px solid var(--line);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: var(--surface-2);
+      font-size: 13.5px;
+      color: #c4c4c4;
+    }
+
+    .q-why p { margin: 0; max-width: 74ch; }
+    .q[data-state] .q-why { display: block; }
+    .q[data-state="right"] .q-why { border-left-color: var(--right); }
+    .q[data-state="wrong"] .q-why { border-left-color: var(--wrong); }
+
+    .q-why .verdict-word { font-weight: 700; }
+    .q[data-state="right"] .verdict-word { color: var(--right); }
+    .q[data-state="wrong"] .verdict-word { color: var(--wrong); }
+
+    /* gate */
+
+    .gate {
+      margin-top: 30px;
+      padding: 22px 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .gate.is-locked { border-style: dashed; color: var(--muted); }
+    .gate.is-open { border-color: rgba(76, 175, 80, .55); background: linear-gradient(150deg, rgba(76, 175, 80, .1), transparent); }
+
+    .gate h3 { margin: 0 0 8px; }
+    .gate ul { margin-top: 10px; }
+
+    .approval {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: #141414;
+      border: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: #b9d8bb;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    footer {
+      margin-top: 22px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--dim);
+      font-size: 13px;
+    }
+
+    footer a { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="rail" aria-label="Guide contents">
+      <p class="rail-title">Curriculum</p>
+      <a href="#ch1"><span class="n">01</span><span>The review, in numbers</span></a>
+      <a href="#ch2"><span class="n">02</span><span>The offload that vanished</span></a>
+      <a href="#ch3"><span class="n">03</span><span>Nothing bounded the wait</span></a>
+      <a href="#lab-a" class="is-lab"><span class="n">LAB</span><span>The wedged write</span></a>
+      <a href="#ch4"><span class="n">04</span><span>Writes the discard could not see</span></a>
+      <a href="#lab-b" class="is-lab"><span class="n">LAB</span><span>The claim</span></a>
+      <a href="#ch5"><span class="n">05</span><span>First launch, twice</span></a>
+      <a href="#lab-c" class="is-lab"><span class="n">LAB</span><span>The migration race</span></a>
+      <a href="#ch6"><span class="n">06</span><span>Failure, told truthfully</span></a>
+      <a href="#ch7"><span class="n">07</span><span>One rule, one seam</span></a>
+      <a href="#ch8"><span class="n">08</span><span>What survived the review</span></a>
+      <a href="#quiz"><span class="n">09</span><span>Comprehension gate</span></a>
+      <div class="rail-gate">
+        <strong id="railGateLabel">Gate locked</strong>
+        <span id="railGateHint">0 of 8 correct</span>
+        <div class="gate-meter"><i id="railGateBar"></i></div>
+      </div>
+    </nav>
+
+    <main>
+      <p class="eyebrow">PR #42 &middot; Code guide, part 4</p>
+      <h1>The gaps in an airtight reset</h1>
+      <p class="lede">
+        PR #41 shipped a reset built on structural guarantees: a transaction that cannot
+        half-run, a barrier no write can bypass, a fence no sync can cross. The deep review
+        asked one question of every guarantee: what happens at its edge? This guide walks
+        the defects that question found, and the fixes, with three labs where you drive the
+        failure and then the repair.
+      </p>
+      <p class="lede" style="color:var(--muted);font-size:16px;">
+        Part 4 of the profile series. Part 1 covered attribution, part 2 its deep review,
+        part 3 the complete reset this review targets. The fixes land in PR #42, stacked on
+        the PR #41 branch. Companion to
+        <code>docs/decisions/feature-complete-profile-reset.spec.md</code>.
+      </p>
+
+      <div class="note">
+        <p class="note-label">The whole change in one sentence</p>
+        <p>
+          Every guarantee PR #41 made was real, but its mechanisms had unexamined edges: the
+          barrier helper ran SQLite on the very threads it existed to protect, its drain
+          could wait forever behind a dialog that refuses to close, the debounced flush hid
+          pending writes from the reset that must discard them, and the first-run migration
+          could race itself into a blank screen; PR #42 bounds, orders and serializes those
+          edges, makes the failure states honest, and pins all of it with 63 new tests.
+        </p>
+      </div>
+
+      <!-- ===================== CHAPTER 1 ===================== -->
+      <section id="ch1">
+        <div class="chapter-head">
+          <span class="chapter-num">01</span>
+          <div>
+            <h2>The review, in numbers</h2>
+            <p class="kicker">
+              The diff under review was already green: 537 tests, clean build, spec and PRD
+              merged alongside. A deep review of green code hunts what tests do not see:
+              edges, waits, races, and sentences that are not quite true.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The review ran nine finder angles over the PR #41 diff (line-by-line triage,
+          removals, design, altitude, ripple, language footguns, efficiency, duplication,
+          conventions), deduplicated their candidates, and then <strong>verified every
+          survivor against the code</strong>: no finding was fixed on plausibility alone,
+          and no finding was dropped without a written reason. Everything first deferred was
+          re-audited adversarially; three questions only the author could answer were asked
+          and answered, and the answers are recorded in chapter 08.
+        </p>
+
+        <div class="state-grid" style="margin-bottom:18px;">
+          <div class="stat"><p class="k">Candidates raised</p><p class="v">57</p></div>
+          <div class="stat"><p class="k">Fixed</p><p class="v" data-tone="good">25</p></div>
+          <div class="stat"><p class="k">Refuted, with proof</p><p class="v">13</p></div>
+          <div class="stat"><p class="k">Author decisions</p><p class="v">3</p></div>
+          <div class="stat"><p class="k">Suite</p><p class="v">537 -&gt; 600</p></div>
+        </div>
+
+        <p>
+          Every candidate ends in exactly one of three states: <strong>confirmed and
+          fixed</strong> (with a test that failed before the fix where one was
+          expressible), <strong>refuted with a concrete proof</strong> (a call chain, a
+          probe, a disproved premise), or <strong>escalated as a decision</strong> with
+          options and a recommendation. "Probably fine" is not a state.
+        </p>
+
+        <div class="note">
+          <p class="note-label">The angle that was skipped, wrongly</p>
+          <p>
+            The triage skipped the WRAPPERS angle because the diff adds no classic
+            wrapper type. The skip was literally correct and still wrong: the angle's
+            <em>question</em> is "does the wrapper forward everything its callers rely
+            on?", and <code>TrackedUserDataWrites</code> is exactly such a claim. Its doc
+            said the ordering guarantee was structural with "no call-site discipline to
+            erode"; in fact <code>SettingsService.SaveProfileSetting</code> writes a
+            profile-owned table without ever passing through it. A later sweep recovered
+            the finding, and the doc now names the exception instead of denying it.
+            Nothing resurrects through that path today, but a comment that overstates a
+            guarantee is a defect in its own right: the next engineer builds on what the
+            comment promises, not on what the code does.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 2 ===================== -->
+      <section id="ch2">
+        <div class="chapter-head">
+          <span class="chapter-num">02</span>
+          <div>
+            <h2>The offload that vanished</h2>
+            <p class="kicker">
+              The severest finding was created by the barrier itself. Wrapping four writes
+              in the new helper deleted the <code>Task.Run</code> they used to live in, and
+              nothing said that offload was an invariant.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Before PR #41, the fire-and-forget saves in <code>QuestProgressService</code> and
+          <code>EftRaidEventService</code> ran inside <code>Task.Run</code>. PR #41 replaced
+          those call sites with <code>TrackedUserDataWrites.Run(...)</code> to gain the
+          reset barrier, and the offload went with the deleted lines:
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>three eras of one call site</span><span>where the offload lives</span></div>
+<pre><span class="cmt">// Before PR #41: the offload is the only thing keeping SQLite off this</span>
+<span class="cmt">// thread. Nothing names it as an invariant.</span>
+<span class="del">_ = Task.Run(() =&gt; SaveProgressBatchAsync(changes));</span>
+
+<span class="cmt">// PR #41 as merged: barrier gained, offload silently lost. RegisterAsync</span>
+<span class="cmt">// returns WITHOUT YIELDING when no reset is running, and Microsoft.Data.Sqlite's</span>
+<span class="cmt">// *Async methods run synchronously, so the whole open-and-write executes on the</span>
+<span class="cmt">// caller: the WPF dispatcher for ResetQuest's click handler, and the log-poll</span>
+<span class="cmt">// thread inside lock (_readLock) for raid saves.</span>
+<span class="del">_ = TrackedUserDataWrites.Run(profileId, () =&gt; SaveProgressBatchAsync(changes));</span>
+
+<span class="cmt">// PR #42: the offload is restored INSIDE the helper, once, for every caller.</span>
+<span class="add">public static async Task RunLoggingFailures(string profileId, string description, Func&lt;Task&gt; op)
+{
+    try
+    {
+        await RunTracked&lt;object?&gt;(profileId, async () =&gt;
+        {
+            await Task.Run(op).ConfigureAwait(false);  <span class="cmt">// op runs on the pool, never the caller</span>
+            return null;
+        }).ConfigureAwait(false);
+    }
+    catch (Exception ex)
+    {
+        _log.Error($"Tracked user-data write for {profileId} failed: {description}", ex);
+    }
+}</span></pre>
+        </div>
+
+        <p>
+          "Async" does not mean "on another thread": an async method runs synchronously on
+          its caller until its first genuine yield, and neither the no-barrier fast path
+          nor Sqlite's I/O ever yields. The suite stayed green throughout because tests
+          assert what is written, not where the writing thread came from. The fix puts the
+          offload where the barrier already is, inside the helper, so every current and
+          future call site inherits both; the propagating twin
+          (<code>RunPropagatingFailures</code>) deliberately does <em>not</em> offload,
+          because its callers are already async and awaiting the result, and an extra hop
+          would only reorder their continuations.
+          <code>A_fire_and_forget_write_does_not_run_on_the_callers_thread</code> now pins
+          the property the deleted lines used to provide for free.
+        </p>
+
+        <div class="note">
+          <p class="note-label">The removals lesson</p>
+          <p>
+            For every line a diff deletes or replaces, name the invariant it enforced and
+            point at where the new code re-establishes it. Here the invariant was unnamed,
+            so the substitution looked like pure win: same write, plus a barrier. The
+            review's REMOVALS angle exists precisely because the most dangerous deletion
+            is the one that looks like a refactor.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 3 ===================== -->
+      <section id="ch3">
+        <div class="chapter-head">
+          <span class="chapter-num">03</span>
+          <div>
+            <h2>Nothing bounded the wait</h2>
+            <p class="kicker">
+              The reset drained in-flight writes with an unbounded await, behind a modal
+              dialog whose whole job is to refuse dismissal while the reset runs. Two
+              correct designs, composed into a trap.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Each piece was defensible alone. The drain awaits every registered write, because
+          proceeding past one is how rows get resurrected. The dialog refuses to close
+          mid-run (its <code>OnClosing</code> cancels the close), because closing would
+          take the outcome message with it, and the Close button, Alt+F4 and
+          <code>Application.Current.Shutdown()</code> all route through
+          <code>OnClosing</code>. Compose them with one write that never completes, a
+          wedged connection, an antivirus hold, and the result is a modal that nothing on
+          the machine can dismiss, over a MainWindow that <code>ShowDialog()</code> has
+          disabled. Task Manager becomes the only exit.
+        </p>
+
+        <p>The fix bounds every wait in the chain, and the <em>order</em> of the timeout
+        handling is the part worth reading twice:</p>
+
+        <div class="code">
+          <div class="code-head"><span>TrackedUserDataWrites.BeginResetAsync</span><span>the drain, bounded</span></div>
+<pre><span class="add">try
+{
+    await Task.WhenAll(inFlight).WaitAsync(Remaining()).ConfigureAwait(false);
+}
+catch (TimeoutException)
+{
+    <span class="cmt">// The barrier is already up at this point. Lower it before reporting the</span>
+    <span class="cmt">// failure, or every later write for this profile would wait on a barrier</span>
+    <span class="cmt">// nobody will release.</span>
+    await new ResetHandle(state, barrier).DisposeAsync().ConfigureAwait(false);
+    throw new TimeoutException(
+        $"Timed out after {timeout} draining {inFlight.Count} in-flight write(s) for {profileId}. " +
+        "Nothing was removed.");
+}</span></pre>
+        </div>
+
+        <ul>
+          <li>
+            <strong>The drain gets 30 seconds</strong>
+            (<code>DefaultDrainTimeout</code>). A tracked write is a handful of short
+            SQLite statements; a wait anywhere near the bound means wedged, not slow.
+          </li>
+          <li>
+            <strong>The store transaction gets its own 30 seconds</strong>
+            (<code>ProfileResetService.StoreTimeout</code>), and
+            <code>MaxDuration</code> publishes the sum so the UI can size its own bound
+            against it.
+          </li>
+          <li>
+            <strong>The dialog keeps a backstop:</strong>
+            <code>CloseRefusalLimit = MaxDuration + 15 s</code>. If even the bounded path
+            wedges, the window starts accepting close again; losing one outcome message
+            beats a modal nothing can dismiss. If the reset then finishes after the
+            force-close, the outcome goes to the log rather than a dead window.
+          </li>
+        </ul>
+      </section>
+
+      <!-- ===================== LAB A ===================== -->
+      <section id="lab-a">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab A</span>
+            <h3>The wedged write</h3>
+            <p class="sub">
+              One raid save wedges its connection and never returns while a reset starts.
+              Step both worlds. The shipped mechanics are pinned by
+              <code>TrackedUserDataWritesTests.The_drain_gives_up_on_a_wedged_write_instead_of_hanging_forever</code>
+              (a later write proceeds afterwards) and
+              <code>ProfileResetOrchestrationTests.The_reset_bound_covers_both_waits_and_the_dialogs_backstop_outlives_it</code>.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="controls">
+              <span class="ctl-label">World</span>
+              <div class="seg" id="aMode" role="group" aria-label="Drain mode">
+                <button type="button" data-mode="before" data-tone="bad" aria-pressed="true">Unbounded (as merged)</button>
+                <button type="button" data-mode="after" data-tone="good" aria-pressed="false">Bounded (PR #42)</button>
+              </div>
+              <button type="button" class="btn is-primary" id="aStep">Step</button>
+              <button type="button" class="btn" id="aRestart">Restart</button>
+            </div>
+
+            <div class="lanes">
+              <div class="lane">
+                <div class="lane-name">Wedged write</div>
+                <div class="lane-track" id="aLaneWrite"></div>
+              </div>
+              <div class="lane">
+                <div class="lane-name">Reset path</div>
+                <div class="lane-track" id="aLaneReset"></div>
+              </div>
+            </div>
+
+            <div class="state-grid">
+              <div class="stat">
+                <p class="k">Barrier</p>
+                <p class="v" id="aBarrier">down</p>
+              </div>
+              <div class="stat" id="aStatDialog">
+                <p class="k">Dialog</p>
+                <p class="v" id="aDialog">closable</p>
+              </div>
+              <div class="stat">
+                <p class="k">Outcome reported</p>
+                <p class="v" id="aOutcome">none</p>
+              </div>
+            </div>
+
+            <div class="verdict" id="aVerdict" data-tone="good">
+              <b>Ready.</b>
+              <span>Press Step to advance both lanes one beat at a time.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 4 ===================== -->
+      <section id="ch4">
+        <div class="chapter-head">
+          <span class="chapter-num">04</span>
+          <div>
+            <h2>Writes the discard could not see</h2>
+            <p class="kicker">
+              The reset discards the target's pending debounced saves before deleting.
+              The flush that persists those saves began by making them invisible to
+              everything, including the reset.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          <code>ItemInventoryService</code> debounces edits through a 500 ms timer into
+          <code>_pendingSaves</code>, a map of item name to the profile that owned the
+          edit. As merged, the flush's first move was to snapshot the map and
+          <strong>clear it</strong>, then walk the snapshot and register each entry's
+          tracked write one by one. Between the clear and an entry's own registration,
+          that entry existed only in a local list inside the flush: not in the map, where
+          <code>DiscardPendingSaves</code> could sweep it, and not registered, where the
+          barrier's drain could wait for it. A reset arriving in that window deleted the
+          rows, then watched the invisible entries write them back.
+        </p>
+
+        <p>The fix inverts the bookkeeping: nothing is cleared up front, and each entry is
+        claimed from <em>inside</em> its own tracked write, after that write has passed
+        the barrier:</p>
+
+        <div class="code">
+          <div class="code-head"><span>ItemInventoryService.SavePendingItemsAsync</span><span>the claim, abbreviated</span></div>
+<pre><span class="add">await TrackedUserDataWrites.RunLoggingFailures(profileId, $"item inventory {itemName}",
+    async () =&gt;
+    {
+        lock (_lock)
+        {
+            <span class="cmt">// The claim, made only now that the barrier has been passed and this</span>
+            <span class="cmt">// write is registered against it. A reset that got in first removed the</span>
+            <span class="cmt">// entry: writing it back would be the resurrection the barrier exists</span>
+            <span class="cmt">// to stop. A re-dirty under a different profile belongs to that</span>
+            <span class="cmt">// profile's own pending write.</span>
+            if (!_pendingSaves.TryGetValue(itemName, out var pending)
+                || !string.Equals(pending, profileId, StringComparison.Ordinal))
+            {
+                return;
+            }
+            _pendingSaves.Remove(itemName);
+            <span class="cmt">// ... snapshot the quantities under the same lock ...</span>
+        }
+        await _userDataDb.SaveItemInventoryAsync(itemName, firQty, nonFirQty, profileId);
+    });</span></pre>
+        </div>
+
+        <div class="note">
+          <p class="note-label">The invariant, stated once</p>
+          <p>
+            At every instant, a pending entry is visible to exactly one authority: the map
+            (where a reset's discard can sweep it) or the barrier (where the drain waits it
+            out). There is no third place. The old flush created a third place and kept
+            entries there across whole SQLite round-trips.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== LAB B ===================== -->
+      <section id="lab-b">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab B</span>
+            <h3>The claim</h3>
+            <p class="sub">
+              Three debounced season edits are pending when the flush timer fires, and a
+              reset arrives one beat later. The shipped claim is the lock-guarded
+              TryGetValue + Remove above;
+              <code>ProfileResetHooksTests.A_pending_save_staged_before_a_reset_cannot_land_after_it</code>
+              drives a reset into the middle of a staged save and asserts the row stays
+              gone.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="controls">
+              <span class="ctl-label">World</span>
+              <div class="seg" id="bMode" role="group" aria-label="Flush bookkeeping">
+                <button type="button" data-mode="before" data-tone="bad" aria-pressed="true">Clear up front (as merged)</button>
+                <button type="button" data-mode="after" data-tone="good" aria-pressed="false">Claim inside the write (PR #42)</button>
+              </div>
+              <button type="button" class="btn is-primary" id="bStep">Step</button>
+              <button type="button" class="btn" id="bRestart">Restart</button>
+            </div>
+
+            <div class="lanes">
+              <div class="lane">
+                <div class="lane-name">Flush (500 ms timer)</div>
+                <div class="lane-track" id="bLaneFlush"></div>
+              </div>
+              <div class="lane">
+                <div class="lane-name">Reset path</div>
+                <div class="lane-track" id="bLaneReset"></div>
+              </div>
+            </div>
+
+            <div class="tables">
+              <div class="tbl">
+                <div class="tbl-head"><span>_pendingSaves</span><span class="count" id="bMapCount">3 entries</span></div>
+                <div class="tbl-rows" id="bMapRows"></div>
+              </div>
+            </div>
+
+            <div class="state-grid">
+              <div class="stat">
+                <p class="k">In flight (registered)</p>
+                <p class="v" id="bInflight">0</p>
+              </div>
+              <div class="stat" id="bStatRes">
+                <p class="k">Season rows resurrected</p>
+                <p class="v" id="bRes">0</p>
+              </div>
+            </div>
+
+            <div class="verdict" id="bVerdict" data-tone="good">
+              <b>Ready.</b>
+              <span>Press Step to advance both lanes one beat at a time.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 5 ===================== -->
+      <section id="ch5">
+        <div class="chapter-head">
+          <span class="chapter-num">05</span>
+          <div>
+            <h2>First launch, twice</h2>
+            <p class="kicker">
+              The RaidHistory owner column arrives by migration, and the migration ran
+              behind a guard that was neither volatile nor synchronized. The first launch
+              after upgrading is exactly when several threads race init.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          <code>UserDataDbService.InitializeAsync</code> guarded its work with a plain
+          <code>if (_isInitialized) return;</code>. Five entry points can trigger init
+          concurrently on startup, and PR #41 made the ALTER TABLE for
+          <code>RaidHistory.AppProfileId</code> the first <em>non-idempotent</em> DDL in
+          the sequence: <code>CREATE TABLE IF NOT EXISTS</code> shrugs at a second run, but
+          a second <code>ALTER TABLE ADD COLUMN</code> is an error by design. The loser of
+          the race threw <code>duplicate column name</code>, and the exception surfaced in
+          the worst imaginable disguise: <code>QuestProgressService.ReloadForProfileAsync</code>
+          catches init failures, logs them, and publishes an <strong>empty quest map</strong>.
+          On the first launch after upgrading, the player's every quest showed un-completed
+          while the database sat intact underneath.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>UserDataDbService (PR #42)</span><span>serialized init, idempotent migration</span></div>
+<pre><span class="add">public async Task InitializeAsync()
+{
+    if (Volatile.Read(ref _isInitialized)) return;   <span class="cmt">// fast path only</span>
+    await _initLock.WaitAsync().ConfigureAwait(false);
+    try
+    {
+        if (Volatile.Read(ref _isInitialized)) return;   <span class="cmt">// the decision, under the lock</span>
+        <span class="cmt">// ... open, CreateTablesAsync (includes the migration) ...</span>
+        Volatile.Write(ref _isInitialized, true);
+    }
+    finally { _initLock.Release(); }
+}
+
+<span class="cmt">// The migration: pragma check first, and the race window that remains (another</span>
+<span class="cmt">// PROCESS can add the column between check and ALTER) is re-checked rather than</span>
+<span class="cmt">// pattern-matched on the message:</span>
+catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteGenericError)
+{
+    if (!await HasRaidHistoryOwnerColumnAsync(connection).ConfigureAwait(false)) throw;
+    _log.Info($"RaidHistory.AppProfileId was added concurrently: {ex.Message}");
+}</span></pre>
+        </div>
+
+        <p>
+          Two details carry the design. The semaphore serializes threads inside one
+          process, but SQLite files are shared with other processes too, so the ALTER must
+          additionally treat "someone else already added it" as arrival rather than
+          failure; the shared error code forces a re-check instead of a message match, and
+          anything else with the same code (no such table) still throws. And every await
+          in the init chain gained <code>ConfigureAwait(false)</code>, because the
+          synchronous entry points block on this task, and resuming on a captured UI
+          context while that thread waits is a deadlock.
+        </p>
+      </section>
+
+      <!-- ===================== LAB C ===================== -->
+      <section id="lab-c">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab C</span>
+            <h3>The migration race</h3>
+            <p class="sub">
+              Two threads initialize a pre-upgrade database on the first launch after the
+              update. Step both worlds.
+              <code>ProfileResetStoreTests.Concurrent_initialization_of_a_pre_upgrade_database_migrates_once_without_error</code>
+              races three initializers against a real pre-upgrade SQLite file; it failed
+              3 runs out of 3 against the unsynchronized shape.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="controls">
+              <span class="ctl-label">World</span>
+              <div class="seg" id="cMode" role="group" aria-label="Init guard">
+                <button type="button" data-mode="before" data-tone="bad" aria-pressed="true">Unsynchronized flag (as merged)</button>
+                <button type="button" data-mode="after" data-tone="good" aria-pressed="false">Semaphore + re-check (PR #42)</button>
+              </div>
+              <button type="button" class="btn is-primary" id="cStep">Step</button>
+              <button type="button" class="btn" id="cRestart">Restart</button>
+            </div>
+
+            <div class="lanes">
+              <div class="lane">
+                <div class="lane-name">UI thread</div>
+                <div class="lane-track" id="cLaneUi"></div>
+              </div>
+              <div class="lane">
+                <div class="lane-name">Log sync thread</div>
+                <div class="lane-track" id="cLaneSync"></div>
+              </div>
+            </div>
+
+            <div class="state-grid">
+              <div class="stat">
+                <p class="k">Migrations run</p>
+                <p class="v" id="cMigrations">0</p>
+              </div>
+              <div class="stat">
+                <p class="k">Loser's outcome</p>
+                <p class="v" id="cLoser">-</p>
+              </div>
+              <div class="stat" id="cStatMap">
+                <p class="k">Quest map published</p>
+                <p class="v" id="cMap">-</p>
+              </div>
+            </div>
+
+            <div class="verdict" id="cVerdict" data-tone="good">
+              <b>Ready.</b>
+              <span>Press Step to advance both lanes one beat at a time.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 6 ===================== -->
+      <section id="ch6">
+        <div class="chapter-head">
+          <span class="chapter-num">06</span>
+          <div>
+            <h2>Failure, told truthfully</h2>
+            <p class="kicker">
+              Part 3's dialog earned its keep by saying something true on failure: nothing
+              was removed. The review found the paths where that sentence, or the
+              diagnostics behind it, went wrong.
+            </p>
+          </div>
+        </div>
+
+        <h3>The rollback that ate the cause</h3>
+        <p>
+          <code>ResetProfileAsync</code> caught, called <code>RollbackAsync()</code>, and
+          re-threw with a bare <code>throw;</code>. Correct, except that a rollback on a
+          broken connection usually throws too, and an exception thrown <em>inside</em> a
+          catch replaces the one being re-thrown. The dialog then reported the rollback's
+          complaint instead of the actual cause, the disk-full or locked-database that a
+          player could act on. <code>RollbackSafelyAsync</code> now swallows and logs the
+          rollback's own failure so the original survives (the data is equally safe either
+          way: a transaction never committed rolls back when the connection dies). The
+          same fix went to the three pre-existing rollback sites in the file, and
+          <code>A_rollback_that_cannot_run_is_swallowed_so_the_original_failure_survives</code>
+          proves it against a real file.
+        </p>
+
+        <h3>Failed and Abandoned are different sentences</h3>
+        <p>
+          Bounding the store wait (chapter 03) created a third outcome, and the review
+          caught it rendering under the wrong headline. A <strong>drain</strong> timeout
+          happens before the transaction ever starts: "nothing was removed" is provably
+          true, and the outcome is <code>Failed</code>. A <strong>store</strong> timeout
+          abandons the <em>wait</em>, not the work: the transaction may still commit or
+          roll back on its own, so the one claim the dialog must not make is the one it
+          cannot prove. That outcome is <code>Abandoned</code>, with its own localized
+          text in all three languages.
+        </p>
+        <p>
+          <code>ProfileResetOutcome</code> is now a record with a private constructor and
+          three factories: <code>Succeeded()</code>, <code>Failed(message)</code> (the
+          detail is required, because a blank line under a failure headline explains
+          nothing), and <code>Abandoned()</code>. A success carrying an error, a failure
+          carrying none, or a timeout claiming nothing was removed are not bugs to catch
+          in review anymore; they are states that cannot be constructed.
+          <code>The_abandoned_headline_does_not_claim_that_nothing_was_removed</code> pins
+          the text itself.
+        </p>
+
+        <h3>One hook's failure is one hook's failure</h3>
+        <p>
+          After the commit, four <code>HandleProfileReset</code> hooks bring memory in line
+          with the store. As merged, all four ran inside one try/catch, and each hook
+          raises its change event synchronously into UI subscribers the reset does not
+          own. One throwing subscriber therefore skipped every later hook: three pages
+          kept showing pre-reset data over a wiped database, while the dialog reported
+          success. The success report was <em>correct</em>, and stays: the transaction
+          committed, and a stale page (repaired by the next profile switch or restart) is
+          not a failed reset. The fix is blast radius, not verdict: each hook runs in its
+          own catch, and <code>Every_hook_runs_even_when_every_hook_throws</code> is
+          exactly what it sounds like.
+        </p>
+
+        <h3>Smaller truths</h3>
+        <ul>
+          <li>
+            <strong>The mid-raid warning could cry wolf.</strong> It read
+            <code>CurrentRaid?.State</code> raw, and <code>StopMonitoring</code> never
+            clears the last raid, so a leftover from a stopped watcher warned about a raid
+            that ended hours ago. Now gated on <code>IsMonitoring</code>, the same rule the
+            header status bar already applied.
+          </li>
+          <li>
+            <strong>Escape now cancels.</strong> The borderless dialog had no
+            <code>IsCancel</code> anywhere, so Escape did nothing on a destructive
+            confirmation. Cancel and Close carry <code>IsCancel="True"</code>; Confirm
+            deliberately has no <code>IsDefault</code>, so Enter cannot wipe a profile.
+          </li>
+          <li>
+            <strong>Failure logs name the row again.</strong> Six context-carrying
+            messages had collapsed into one that named only the profile. The helpers now
+            take a description ("item inventory salewa", "batch of 3 rows"), because a
+            failed write reverts silently on the next load, and the profile id alone does
+            not say what reverted.
+          </li>
+        </ul>
+      </section>
+
+      <!-- ===================== CHAPTER 7 ===================== -->
+      <section id="ch7">
+        <div class="chapter-head">
+          <span class="chapter-num">07</span>
+          <div>
+            <h2>One rule, one seam</h2>
+            <p class="kicker">
+              The design findings: a boundary rule spelled three ways, an orchestration
+              sequence with no unit coverage, and a migration that logged only in the
+              build where nobody would ever read it.
+            </p>
+          </div>
+        </div>
+
+        <h3>The fence gets one spelling</h3>
+        <p>
+          Part 3's watermark rule ("not after the reset moment") appeared as
+          <code>e.Timestamp &lt;= resetAt.Value</code> and its complement on adjacent lines
+          of <code>LogSyncService</code>, which must stay exact inverses or the sync
+          summary's count and the kept events stop partitioning the input, and as a third
+          spelling in <code>QuestProgressService</code>'s live fence. All three now call
+          one predicate:
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>ResetFence.cs</span><span>PRD R6, in one place</span></div>
+<pre><span class="add">internal static class ResetFence
+{
+    public static bool IsFencedOut(DateTime eventTimestamp, DateTime? resetAt)
+        =&gt; resetAt.HasValue &amp;&amp; eventTimestamp &lt;= resetAt.Value;
+}</span></pre>
+        </div>
+
+        <p>
+          The count and the filter are now literally one expression and its negation.
+          <code>ResetFenceTests</code> pins the boundary from both sides (exactly at the
+          watermark: fenced; one tick later: applies) and the partition property itself;
+          flipping <code>&lt;=</code> to <code>&lt;</code> fails two of its four facts.
+          This was one of the three escalated decisions: the fuller option, threading the
+          timestamp into the batch write path, was declined because that path was proven
+          unreachable and the extension forces an unresolved question about which
+          timestamp cascade-derived rows would inherit.
+        </p>
+
+        <h3>The sequence becomes testable</h3>
+        <p>
+          The barrier-discard-store-hooks-release order is the load-bearing guarantee of
+          the whole feature, and as merged it had zero unit coverage: only
+          <code>[E2EFact]</code>s, which need an interactive desktop, exercised it. The
+          re-audit rejected a DI rewrite (the repo's architecture is <code>Instance</code>
+          singletons; swapping "remember to add a hook" for "remember to register a
+          service" forecloses nothing) in favour of the idiom the repo already uses twice:
+          an internal <code>ResetCollaborators</code> record of four delegates, with
+          <code>ProductionCollaborators</code> as its only production value. Thirty-odd
+          tests in <code>ProfileResetOrchestrationTests</code> now drive the sequence
+          against recorders, and a source-fitness test,
+          <code>Every_service_that_declares_a_reset_hook_is_called_by_the_reset_service</code>,
+          scans the source so a fifth <code>HandleProfileReset</code> added without wiring
+          fails the build. The transaction body was likewise split into four named steps,
+          so "the watermark is written after the settings delete" is visible at the call
+          site instead of 37 lines into a 65-line method, and moving it fails three store
+          tests.
+        </p>
+
+        <h3>Conventions with consequences</h3>
+        <ul>
+          <li>
+            <strong><code>Debug.WriteLine</code> is <code>[Conditional("DEBUG")]</code>:</strong>
+            all twenty calls in <code>UserDataDbService</code> compiled to nothing in
+            Release, so the migration ran silently in the one build where a support thread
+            would need its trace. All converted to the repo's <code>Log.For&lt;T&gt;()</code>.
+          </li>
+          <li>
+            <strong>The e2e harness stopped hand-copying DDL.</strong> Its seeded database
+            duplicated the production schema by hand and relied on
+            <code>CREATE TABLE IF NOT EXISTS</code> silently adopting whatever it made.
+            It now builds the file through the real store, with
+            <code>RaidHistory.AppProfileId</code> as the drift canary; the six new
+            harness tests all failed against the hand-copied schema.
+          </li>
+          <li>
+            <strong>A test hook left the production singleton</strong>
+            (<code>BeforeResetCommitAsync</code> moved to an internal overload
+            parameter), and the throw-vs-null drift between two settings readers ended in
+            one <code>ReadSingleValue</code> helper.
+          </li>
+        </ul>
+      </section>
+
+      <!-- ===================== CHAPTER 8 ===================== -->
+      <section id="ch8">
+        <div class="chapter-head">
+          <span class="chapter-num">08</span>
+          <div>
+            <h2>What survived the review</h2>
+            <p class="kicker">
+              Thirteen findings were refuted rather than fixed, and three questions went
+              to the author. Both lists teach as much as the fixes do.
+            </p>
+          </div>
+        </div>
+
+        <h3>Refutation is a proof, not a shrug</h3>
+        <p>Three examples of the standard the review held itself to:</p>
+        <ul>
+          <li>
+            <strong>Disproved by probe.</strong> A plausible DST bug in the watermark's
+            round-trip (local <code>DateTime.Now</code> serialized with offset, read back
+            with <code>RoundtripKind</code>) was tested directly: a January and a July
+            value both round-tripped bit-identical in one process, because the parse uses
+            the embedded offset and the UTC-to-local step is instant-aware. The finding
+            died on evidence, not on argument.
+          </li>
+          <li>
+            <strong>Disproved by call chain.</strong> "A stale confirmation dialog could
+            write through after a sync" assumed apply-after-confirm; the chain is
+            inverted, <code>MainWindow</code> applies before reporting, so there is no
+            confirm gate to write through.
+          </li>
+          <li>
+            <strong>Disproved by reachability.</strong> A real deadlock shape in
+            <code>HideoutProgressService</code> (blocking write meets raised barrier)
+            requires a UI path to fire during the barrier's lifetime; its only two
+            callers live on a page inside MainWindow, which <code>ShowDialog()</code>
+            disables for the whole window, and no overlay or hotkey path reaches them.
+          </li>
+        </ul>
+
+        <h3>The three author decisions</h3>
+        <ul>
+          <li>
+            <strong>SaveSingleModule stays blocking.</strong> The dispatcher-blocking
+            hideout write is a documented defect (THR-4 in the code-health assessment),
+            and the review still recommended considering leave-as-is, because the block is
+            currently what <em>serializes</em> rapid writes to the same module: every
+            non-blocking variant lets two quick clicks race their upserts, and the
+            persisted level can land one below what the UI shows. Decision: leave it; the
+            ordered-and-non-blocking answer is the pending-map pattern, as its own
+            change.
+          </li>
+          <li>
+            <strong>The refresh hooks keep hard-coding "post-reset state is empty".</strong>
+            Three hooks blank their caches, which duplicates the transaction's delete
+            list in memory. No defect today, the transaction provably deletes every row
+            of those tables for the profile; the reload alternative needs an inverse
+            profile map and a revision-semantics decision the reset path otherwise never
+            touches. Decision: leave it, documented at each site.
+          </li>
+          <li>
+            <strong>The fence consolidation stops at the predicate.</strong> Chapter 07's
+            <code>ResetFence</code> extraction was chosen over threading the timestamp
+            through the batch write path, defense-in-depth on a proven-unreachable path.
+          </li>
+        </ul>
+
+        <div class="note">
+          <p class="note-label">Why record declined options at all</p>
+          <p>
+            The eventual THR-4 effort inherits the ordering argument instead of
+            rediscovering it in production; the next reader of the hooks knows the
+            coupling is chosen, not overlooked. A decision that is not recorded is
+            indistinguishable from an accident.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== QUIZ ===================== -->
+      <section id="quiz">
+        <div class="chapter-head">
+          <span class="chapter-num">09</span>
+          <div>
+            <h2>Comprehension gate</h2>
+            <p class="kicker">
+              Reading is not understanding. Eight questions, all of which need the
+              reasoning rather than the vocabulary. The approval checklist below unlocks
+              when all eight are right; wrong answers explain themselves so you can go
+              back and re-read.
+            </p>
+          </div>
+        </div>
+
+        <div class="quiz-intro">
+          <div class="quiz-score" id="quizScore">0/8</div>
+          <div>
+            <strong>This gate is a speed regulator, not a formality.</strong>
+            <p style="margin:4px 0 0;color:#c2c2c2;">
+              A reviewer who approves this diff without being able to answer question 2 or
+              3 has not reviewed it. Answer, read the explanation either way, and revise
+              as you go.
+            </p>
+          </div>
+        </div>
+
+        <div id="quizList"></div>
+
+        <div class="gate is-locked" id="gate">
+          <h3 id="gateTitle">Approval checklist: locked</h3>
+          <p id="gateBody">Answer all eight questions correctly to unlock the reviewer checklist.</p>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          Sources: the PR #42 review report (in the PR body),
+          <code>docs/decisions/feature-complete-profile-reset.md</code> and
+          <code>.spec.md</code>, and part 3
+          (<code>docs/2026-08-complete-profile-reset-code-guide.html</code>) for the design
+          under review. The labs reimplement the decision logic faithfully but are
+          illustrations, not the shipped code; the shipped behaviour is pinned by
+          <code>TrackedUserDataWritesTests</code>, <code>ProfileResetOrchestrationTests</code>,
+          <code>ProfileResetStoreTests</code>, <code>ProfileResetHooksTests</code>,
+          <code>ResetFenceTests</code> and <code>E2EHarnessIsolationTests</code>.
+        </p>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+
+    function bindSegment(root, attr, onPick) {
+      var buttons = Array.prototype.slice.call(root.querySelectorAll("[" + attr + "]"));
+      buttons.forEach(function (b) {
+        b.addEventListener("click", function () {
+          buttons.forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+          onPick(b.getAttribute(attr));
+        });
+      });
+    }
+
+    function paintLane(laneEl, beats, active, bad) {
+      laneEl.innerHTML = "";
+      beats.forEach(function (text, i) {
+        var b = el("div", "beat", text);
+        if (i < active) b.classList.add("is-done");
+        if (i === active) b.classList.add(bad ? "is-bad" : "is-on");
+        laneEl.appendChild(b);
+      });
+    }
+
+    // Shared two-lane stepper. Each script: { lanes: {key: [beats]}, ready: verdict,
+    // steps: [{ on: {key: beatIndex or -1}, bad: {key: true}, stats: {...}, v: verdict }] }.
+    function makeStepper(opts) {
+      var mode = opts.initialMode;
+      var step = -1;
+      var laneEls = opts.lanes.map(function (l) {
+        return { el: document.getElementById(l.elId), key: l.key };
+      });
+      var verdictEl = document.getElementById(opts.verdictId);
+      var stepBtn = document.getElementById(opts.stepId);
+
+      function paint() {
+        var script = opts.scripts[mode];
+        var st = step >= 0 ? script.steps[step] : null;
+
+        laneEls.forEach(function (l) {
+          var active = st && Object.prototype.hasOwnProperty.call(st.on, l.key) ? st.on[l.key] : -1;
+          var bad = !!(st && st.bad && st.bad[l.key]);
+          paintLane(l.el, script.lanes[l.key], active, bad);
+        });
+
+        opts.paintStats(st ? st.stats : null, mode);
+
+        var v = st ? st.v : script.ready;
+        verdictEl.setAttribute("data-tone", v.tone);
+        verdictEl.innerHTML = "";
+        verdictEl.appendChild(el("b", null, v.head));
+        verdictEl.appendChild(el("span", null, v.body));
+
+        stepBtn.disabled = step >= script.steps.length - 1;
+      }
+
+      bindSegment(document.getElementById(opts.segId), "data-mode", function (v) {
+        mode = v; step = -1; paint();
+      });
+      stepBtn.addEventListener("click", function () {
+        if (step < opts.scripts[mode].steps.length - 1) { step++; paint(); }
+      });
+      document.getElementById(opts.restartId).addEventListener("click", function () {
+        step = -1; paint();
+      });
+      paint();
+    }
+
+    /* ================= Lab A: the wedged write ================= */
+
+    var READY = { tone: "good", head: "Ready.", body: "Press Step to advance both lanes one beat at a time." };
+
+    var A_SCRIPTS = {
+      before: {
+        lanes: {
+          write: ["Raid save starts; its connection wedges", "Still holding its registration", "Still holding its registration"],
+          reset: ["Barrier up; drain awaits the write", "Drain still awaiting: no budget exists", "Close refused: button, Alt+F4, Shutdown"]
+        },
+        ready: READY,
+        steps: [
+          { on: { write: 0, reset: 0 },
+            stats: { barrier: "UP (draining)", dialog: "open", outcome: "none yet", alert: false },
+            v: { tone: "good", head: "The drain begins.",
+                 body: "BeginResetAsync raised the barrier and awaits every registered write. One of them will never complete." } },
+          { on: { write: 1, reset: 1 },
+            stats: { barrier: "UP", dialog: "refusing close", outcome: "none", alert: false },
+            v: { tone: "bad", head: "Thirty seconds. Sixty. Nothing changes.",
+                 body: "The await has no timeout, so nothing distinguishes a slow write from a wedged one. The modal is still up, and MainWindow is disabled behind it." } },
+          { on: { write: 2, reset: 2 }, bad: { write: true, reset: true },
+            stats: { barrier: "UP, forever", dialog: "unclosable", outcome: "never reported", alert: true },
+            v: { tone: "bad", head: "Task Manager is the only exit.",
+                 body: "OnClosing cancels unconditionally while the reset runs, and the Close button, Alt+F4 and Application.Current.Shutdown all route through OnClosing. A wedged write has wedged the whole app." } }
+        ]
+      },
+      after: {
+        lanes: {
+          write: ["Raid save starts; its connection wedges", "Still holding its registration", "Still wedged; the NEXT write proceeds"],
+          reset: ["Barrier up; drain awaits (30 s budget)", "Timeout: lower the barrier, THEN throw", "Failed reported; dialog closable again"]
+        },
+        ready: READY,
+        steps: [
+          { on: { write: 0, reset: 0 },
+            stats: { barrier: "UP (draining)", dialog: "open", outcome: "none yet", alert: false },
+            v: { tone: "good", head: "The drain begins, on a clock.",
+                 body: "Same barrier, same await, but WaitAsync bounds the whole wait. DefaultDrainTimeout is 30 seconds, far beyond any healthy write's handful of SQLite statements: near the bound means wedged, not slow." } },
+          { on: { write: 1, reset: 1 },
+            stats: { barrier: "lowered on the way out", dialog: "open", outcome: "TimeoutException", alert: false },
+            v: { tone: "good", head: "The timeout fires, and order matters.",
+                 body: "The barrier is already up, so BeginResetAsync disposes the handle FIRST and throws second. Thrown with the barrier up, every later write for this profile would park on a barrier nobody will ever release." } },
+          { on: { write: 2, reset: 2 },
+            stats: { barrier: "down", dialog: "closable", outcome: "Failed: nothing was removed", alert: false },
+            v: { tone: "good", head: "A failed reset, reported truthfully.",
+                 body: "ResetAsync catches the TimeoutException and returns Failed; no delete ran, so the sentence is provably true. A later tracked write registers and proceeds. The dialog additionally keeps its own backstop: CloseRefusalLimit outlives MaxDuration by 15 seconds." } }
+        ]
+      }
+    };
+
+    var aBarrier = document.getElementById("aBarrier");
+    var aDialog = document.getElementById("aDialog");
+    var aOutcome = document.getElementById("aOutcome");
+    var aStatDialog = document.getElementById("aStatDialog");
+
+    makeStepper({
+      segId: "aMode", stepId: "aStep", restartId: "aRestart", verdictId: "aVerdict",
+      initialMode: "before",
+      lanes: [{ elId: "aLaneWrite", key: "write" }, { elId: "aLaneReset", key: "reset" }],
+      scripts: A_SCRIPTS,
+      paintStats: function (stats) {
+        aBarrier.textContent = stats ? stats.barrier : "down";
+        aDialog.textContent = stats ? stats.dialog : "closable";
+        aOutcome.textContent = stats ? stats.outcome : "none";
+        aStatDialog.classList.toggle("is-alert", !!(stats && stats.alert));
+        if (stats && stats.alert) aDialog.setAttribute("data-tone", "bad");
+        else aDialog.removeAttribute("data-tone");
+      }
+    });
+
+    /* ================= Lab B: the claim ================= */
+
+    // The three pending season edits. Per step, `map` lists which are still in
+    // _pendingSaves; resurrected rows go red in the stat.
+    var B_ENTRIES = [
+      { key: "salewa", label: "salewa -> x3" },
+      { key: "bandage", label: "bandage -> x2" },
+      { key: "battery", label: "car-battery -> x1" }
+    ];
+
+    var B_SCRIPTS = {
+      before: {
+        lanes: {
+          flush: ["Snapshot, then CLEAR all 3 entries", "Entry 1 registers and writes", "Entries 2..3 wait out the barrier, then write"],
+          reset: ["Barrier up; drain sees only entry 1", "Discard finds the map already empty", "Commit; the deleted rows come back"]
+        },
+        ready: READY,
+        steps: [
+          { on: { flush: 0 },
+            stats: { map: [], inflight: 0, res: 0 },
+            v: { tone: "bad", head: "The flush's first move is the defect.",
+                 body: "All three quantities now live only in a local list inside the flush. The map DiscardPendingSaves sweeps and the registration list the drain snapshots both say: nothing pending." } },
+          { on: { flush: 1, reset: 0 },
+            stats: { map: [], inflight: 1, res: 0 },
+            v: { tone: "bad", head: "The reset drains what it can see.",
+                 body: "Entry 1 registered before the barrier rose, so the drain waits it out and its row is deleted with the rest. Entries 2 and 3 are in neither the map nor the drain list; the discard sweeps an empty dictionary." } },
+          { on: { flush: 2, reset: 2 }, bad: { flush: true },
+            stats: { map: [], inflight: 0, res: 2 },
+            v: { tone: "bad", head: "Two rows are back.",
+                 body: "Entries 2 and 3 registered while the barrier was up, waited politely for the reset to finish, then upserted quantities the transaction had just deleted. The barrier worked exactly as designed; the flush had hidden the writes from it." } }
+        ]
+      },
+      after: {
+        lanes: {
+          flush: ["List the KEYS; the map keeps all 3", "Entry 1's write claims it, inside the barrier", "Entries 2..3: claim finds nothing; no write"],
+          reset: ["Barrier up; drain waits entry 1's write", "Discard sweeps entries 2..3 from the map", "Commit; nothing comes back"]
+        },
+        ready: READY,
+        steps: [
+          { on: { flush: 0 },
+            stats: { map: ["salewa", "bandage", "battery"], inflight: 0, res: 0 },
+            v: { tone: "good", head: "Nothing is cleared up front.",
+                 body: "The flush snapshots only the key list. Every entry stays in _pendingSaves until its own tracked write claims it." } },
+          { on: { flush: 1 },
+            stats: { map: ["bandage", "battery"], inflight: 1, res: 0 },
+            v: { tone: "good", head: "The claim happens inside the write.",
+                 body: "Entry 1's tracked write passes the (still lowered) barrier, registers, and only then removes its entry under the lock, re-checking it still belongs to the same profile. Claimed and registered are one atomic story." } },
+          { on: { flush: 1, reset: 0 },
+            stats: { map: ["bandage", "battery"], inflight: 1, res: 0 },
+            v: { tone: "good", head: "The reset arrives mid-flush.",
+                 body: "The barrier rises. The drain list holds entry 1's write; the map still holds entries 2 and 3, in plain sight." } },
+          { on: { flush: 1, reset: 1 },
+            stats: { map: [], inflight: 0, res: 0 },
+            v: { tone: "good", head: "The discard sweeps what the drain cannot.",
+                 body: "DiscardPendingSaves removes entries 2 and 3; entry 1 has drained. Every entry was visible to exactly one authority, which is the invariant." } },
+          { on: { flush: 2, reset: 2 },
+            stats: { map: [], inflight: 0, res: 0 },
+            v: { tone: "good", head: "The flush finds nothing to resurrect.",
+                 body: "When the flush reaches entries 2 and 3, their tracked writes pass the lowered barrier, try to claim, find nothing, and return without touching the database. Zero rows resurrected." } }
+        ]
+      }
+    };
+
+    var bMapRows = document.getElementById("bMapRows");
+    var bMapCount = document.getElementById("bMapCount");
+    var bInflight = document.getElementById("bInflight");
+    var bRes = document.getElementById("bRes");
+    var bStatRes = document.getElementById("bStatRes");
+
+    makeStepper({
+      segId: "bMode", stepId: "bStep", restartId: "bRestart", verdictId: "bVerdict",
+      initialMode: "before",
+      lanes: [{ elId: "bLaneFlush", key: "flush" }, { elId: "bLaneReset", key: "reset" }],
+      scripts: B_SCRIPTS,
+      paintStats: function (stats) {
+        var inMap = stats ? stats.map : B_ENTRIES.map(function (e) { return e.key; });
+        bMapRows.innerHTML = "";
+        if (inMap.length === 0) {
+          bMapRows.appendChild(el("div", "tbl-empty", "empty"));
+        } else {
+          B_ENTRIES.forEach(function (e) {
+            if (inMap.indexOf(e.key) === -1) return;
+            var row = el("div", "trow");
+            row.setAttribute("data-p", "season");
+            row.appendChild(el("span", null, e.label));
+            row.appendChild(el("span", "owner", "season"));
+            bMapRows.appendChild(row);
+          });
+        }
+        bMapCount.textContent = inMap.length + (inMap.length === 1 ? " entry" : " entries");
+        bInflight.textContent = stats ? String(stats.inflight) : "0";
+        var res = stats ? stats.res : 0;
+        bRes.textContent = String(res);
+        bStatRes.classList.toggle("is-alert", res > 0);
+        if (res > 0) bRes.setAttribute("data-tone", "bad");
+        else bRes.removeAttribute("data-tone");
+      }
+    });
+
+    /* ================= Lab C: the migration race ================= */
+
+    var C_SCRIPTS = {
+      before: {
+        lanes: {
+          ui: ["Reads _isInitialized: false; proceeds", "Runs CREATE TABLEs, then the ALTER", "Wins: AppProfileId added"],
+          sync: ["Reads _isInitialized: false; proceeds", "Runs the SAME ALTER on its own connection", "duplicate column name: swallowed upstream"]
+        },
+        ready: READY,
+        steps: [
+          { on: { ui: 0, sync: 0 },
+            stats: { migrations: "0", loser: "-", map: "-", alert: false },
+            v: { tone: "bad", head: "Both callers pass the guard.",
+                 body: "The guard is one non-volatile bool with no lock around the work. On the first launch after an upgrade nothing has set it yet, and five entry points race init on startup." } },
+          { on: { ui: 1, sync: 1 },
+            stats: { migrations: "2 attempted", loser: "-", map: "-", alert: false },
+            v: { tone: "bad", head: "Both run the DDL.",
+                 body: "CREATE TABLE IF NOT EXISTS shrugs at a second run. ALTER TABLE ADD COLUMN does not: the second attempt is an error by design." } },
+          { on: { ui: 2, sync: 2 }, bad: { sync: true },
+            stats: { migrations: "1 (+1 failed)", loser: "SqliteException", map: "EMPTY", alert: true },
+            v: { tone: "bad", head: "The player sees a wiped profile.",
+                 body: "The loser's exception rides up into ReloadForProfileAsync, whose catch logs it and publishes an empty quest map: every quest un-completed on the upgrade launch. The database is intact; the screen is lying." } }
+        ]
+      },
+      after: {
+        lanes: {
+          ui: ["Volatile fast path: false; awaits _initLock", "Winner: pragma check, then the ALTER", "Sets the flag inside the lock; releases"],
+          sync: ["Queued on _initLock", "Re-checks the flag under the lock", "Returns: observes the winner's schema"]
+        },
+        ready: READY,
+        steps: [
+          { on: { ui: 0, sync: 0 },
+            stats: { migrations: "0", loser: "queued", map: "-", alert: false },
+            v: { tone: "good", head: "One at a time.",
+                 body: "The volatile read outside is only a fast path; the truth is decided inside the SemaphoreSlim, where a second check runs before any work." } },
+          { on: { ui: 1, sync: 1 },
+            stats: { migrations: "1", loser: "waiting", map: "-", alert: false },
+            v: { tone: "good", head: "The ALTER is idempotent twice over.",
+                 body: "pragma_table_info is checked first. And if another PROCESS adds the column between the check and the ALTER, the shared error code triggers a re-check and is treated as arrival, not failure; anything else with that code still throws." } },
+          { on: { ui: 2, sync: 2 },
+            stats: { migrations: "1", loser: "returned clean", map: "intact", alert: false },
+            v: { tone: "good", head: "One migration, whoever wins.",
+                 body: "The loser wakes inside the lock, sees the flag set, and returns having run nothing. ConfigureAwait(false) throughout keeps the synchronous entry points that block on init from deadlocking against a captured context." } }
+        ]
+      }
+    };
+
+    var cMigrations = document.getElementById("cMigrations");
+    var cLoser = document.getElementById("cLoser");
+    var cMap = document.getElementById("cMap");
+    var cStatMap = document.getElementById("cStatMap");
+
+    makeStepper({
+      segId: "cMode", stepId: "cStep", restartId: "cRestart", verdictId: "cVerdict",
+      initialMode: "before",
+      lanes: [{ elId: "cLaneUi", key: "ui" }, { elId: "cLaneSync", key: "sync" }],
+      scripts: C_SCRIPTS,
+      paintStats: function (stats) {
+        cMigrations.textContent = stats ? stats.migrations : "0";
+        cLoser.textContent = stats ? stats.loser : "-";
+        cMap.textContent = stats ? stats.map : "-";
+        cStatMap.classList.toggle("is-alert", !!(stats && stats.alert));
+        if (stats && stats.alert) cMap.setAttribute("data-tone", "bad");
+        else cMap.removeAttribute("data-tone");
+      }
+    });
+
+    /* ================= Quiz gate ================= */
+
+    var QUESTIONS = [
+      {
+        q: "PR #41 replaced `_ = Task.Run(() => SaveProgressBatchAsync(...))` with `_ = TrackedUserDataWrites.Run(...)` at four sites. The suite stayed green, yet quest hand-entry could now freeze the UI on a slow disk. Why?",
+        options: [
+          "The barrier's lock is held for the duration of the SQLite write, serializing the dispatcher behind it",
+          "RegisterAsync completes synchronously when no barrier is up, and Microsoft.Data.Sqlite's *Async methods never actually yield, so without the deleted Task.Run the whole open-and-write ran inline on the caller",
+          "The helper awaits the write so the click handler cannot return until the row is durable",
+          "WPF marshals every tracked write back to the dispatcher to keep change events ordered"
+        ],
+        answer: 1,
+        why: "An async method runs synchronously on its caller until its first genuine yield, and neither the no-barrier fast path nor Sqlite's I/O ever yields. The deleted Task.Run WAS the invariant; it just was never named as one. The fix restores the offload inside RunLoggingFailures itself, so every current and future call site inherits it, and A_fire_and_forget_write_does_not_run_on_the_callers_thread pins it."
+      },
+      {
+        q: "The drain times out on a wedged write. BeginResetAsync disposes the barrier handle BEFORE throwing TimeoutException. What does that ordering prevent?",
+        options: [
+          "The wedged write from leaking its registration entry",
+          "The reset from being reported as failed twice",
+          "Every later write for that profile parking forever on a barrier no reset would ever release",
+          "The dialog from closing before the outcome is rendered"
+        ],
+        answer: 2,
+        why: "The barrier is already up when the drain begins. Throwing with it up would leave the profile's Barrier set with no handle anywhere that could ever dispose it: RegisterAsync loops awaiting a release that never comes, so every future save for that profile wedges. A permanently wedged profile is strictly worse than the failed reset being reported, and The_drain_gives_up_on_a_wedged_write_instead_of_hanging_forever asserts a later write proceeds."
+      },
+      {
+        q: "A drain timeout reports Failed with 'nothing was removed'; a store timeout reports Abandoned, whose dialog text deliberately does not say that. Why the asymmetry?",
+        options: [
+          "The store timeout is longer, so more work may have happened by then",
+          "Failed is reserved for exceptions, and a timeout is not an exception",
+          "A drain timeout fires before the transaction ever started, so the claim is provably true; abandoning the store wait does not cancel the transaction, which may still commit or roll back on its own, so that claim cannot be proven",
+          "Abandoned exists only for tests; production maps it to Failed before rendering"
+        ],
+        answer: 2,
+        why: "WaitAsync abandons the WAIT, not the WORK. The review caught this as a live bug: the store timeout was rendering under the 'Nothing was removed' headline it contradicts. ProfileResetOutcome's factories now make that state unconstructible, and The_abandoned_headline_does_not_claim_that_nothing_was_removed pins the localized text in all three languages."
+      },
+      {
+        q: "Before the fix, the inventory flush's first move was to snapshot and clear _pendingSaves, then register each entry's tracked write as it walked the snapshot. Why did that break the reset?",
+        options: [
+          "Clearing the dictionary raced the debounce timer and dropped fresh player edits",
+          "From the clear until each entry's own registration, entries 2..N existed only in the flush's local list: invisible to DiscardPendingSaves and absent from the drain snapshot, so they could write their rows back after the transaction deleted them",
+          "The flush held the lock across every SQLite round-trip, starving the reset",
+          "The snapshot captured the wrong profile id for entries re-dirtied during the flush"
+        ],
+        answer: 1,
+        why: "The invariant the fix restores: at every instant an entry is visible to exactly one authority, the map (where the discard can sweep it) or the barrier (where the drain waits it out). Claiming from inside the tracked write, after passing the barrier, leaves no third place. A_pending_save_staged_before_a_reset_cannot_land_after_it drives a reset into the middle of a staged save and asserts the row stays gone."
+      },
+      {
+        q: "On the first launch after upgrading, two threads race UserDataDbService init and the loser throws 'duplicate column name'. The visible symptom was every quest showing un-completed. Connect the two.",
+        options: [
+          "The failed ALTER rolled back the quest tables along with the column",
+          "SQLite locks the file after an error, so all quest reads returned empty",
+          "The loser's exception rode up into ReloadForProfileAsync, which catches init failures, logs them, and publishes an EMPTY quest map; the data was intact, the screen said it was gone",
+          "The migration renumbered ProfileIds, orphaning the progress rows"
+        ],
+        answer: 2,
+        why: "A swallowed exception does not disappear; it resurfaces as whatever the catch does next, here an empty published snapshot. The fix serializes init behind a SemaphoreSlim with a volatile double-check and makes the ALTER idempotent under a race by re-checking pragma_table_info before treating the shared error code as failure. The concurrent-init test failed 3 runs out of 3 against the old shape."
+      },
+      {
+        q: "ResetProfileAsync used to call transaction.RollbackAsync() inside its catch, before a bare throw. What did the review find wrong with that?",
+        options: [
+          "The rollback is redundant, because disposing the transaction rolls back anyway",
+          "It rolled back the watermark insert but not the deletes",
+          "It could deadlock against the init semaphore",
+          "When the rollback itself throws (the same dead connection usually guarantees it), that exception replaces the one being re-thrown, so the dialog reports the rollback's complaint instead of the disk-full or locked-database cause"
+        ],
+        answer: 3,
+        why: "A bare throw preserves the original exception only if nothing in the catch throws first. RollbackSafelyAsync swallows and logs the rollback's own failure, so the cause the player can actually relay survives; the data is equally safe either way, because a transaction that never committed rolls back when its connection dies. The fix was applied to the three pre-existing rollback sites too."
+      },
+      {
+        q: "The four HandleProfileReset hooks used to run inside one shared try/catch. When a hook threw, the reset still reported success, and the review says that report was CORRECT. So what was the defect?",
+        options: [
+          "Success should have been downgraded to Failed whenever any hook threw",
+          "Each hook raises its change event synchronously into UI subscribers the reset does not own; under a shared catch, one throwing subscriber skipped every later hook, leaving three pages showing pre-reset data over a wiped database",
+          "The shared catch swallowed the exception without logging it",
+          "The hooks ran before the commit instead of after it"
+        ],
+        answer: 1,
+        why: "The transaction had committed, so 'the reset succeeded' was true and must stay true: a stale page is repaired by the next profile switch or restart, and reporting 'nothing was removed' for it would be false. The defect was blast radius, one subscriber costing three unrelated services their refresh. Each hook now fails alone, and Every_hook_runs_even_when_every_hook_throws pins it."
+      },
+      {
+        q: "The review documented HideoutProgressService.SaveSingleModule blocking the dispatcher per click as a known defect (THR-4), then left it unchanged as a recorded author decision. What tipped the call?",
+        options: [
+          "The fix needed changes in HideoutPage.xaml.cs, outside this PR's files",
+          "Blocking is required for the reset barrier to see the write at all",
+          "The freeze is too short to measure, so the defect is theoretical",
+          "The block is currently what serializes rapid writes to the same module: every non-blocking variant lets two quick clicks race their upserts, so the persisted level can land one below what the UI shows, and no test can rule that out"
+        ],
+        answer: 3,
+        why: "A fix must not trade a visible annoyance for a silent data race. The ordered-and-non-blocking answer exists, the pending-map pattern the inventory flush uses, but it is real scope: it needs its own discard hook wired into the reset. Recording the declined options in the PR means the eventual THR-4 effort inherits the ordering argument instead of rediscovering it in production."
+      }
+    ];
+
+    var quizList = document.getElementById("quizList");
+    var answered = new Array(QUESTIONS.length).fill(null);
+
+    QUESTIONS.forEach(function (item, qi) {
+      var card = el("div", "q");
+      card.id = "q" + (qi + 1);
+
+      var head = el("div", "q-head");
+      head.appendChild(el("span", "q-num", String(qi + 1).padStart(2, "0")));
+      head.appendChild(el("p", "q-text", item.q));
+      card.appendChild(head);
+
+      var why = el("div", "q-why");
+
+      var opts = el("div", "q-opts");
+      item.options.forEach(function (text, oi) {
+        var label = el("label", "opt");
+        var input = document.createElement("input");
+        input.type = "radio";
+        input.name = "q" + qi;
+        input.value = String(oi);
+        label.appendChild(input);
+        label.appendChild(el("span", null, text));
+        opts.appendChild(label);
+
+        input.addEventListener("change", function () {
+          answered[qi] = oi;
+          var correct = oi === item.answer;
+          card.setAttribute("data-state", correct ? "right" : "wrong");
+
+          Array.prototype.forEach.call(opts.children, function (child, ci) {
+            child.classList.remove("is-right", "is-wrong");
+            if (ci === item.answer && (correct || ci === oi)) child.classList.add("is-right");
+            if (ci === oi && !correct) child.classList.add("is-wrong");
+          });
+
+          why.innerHTML = "";
+          var p = el("p");
+          var word = el("span", "verdict-word", correct ? "Correct. " : "Not quite. ");
+          p.appendChild(word);
+          p.appendChild(document.createTextNode(item.why));
+          why.appendChild(p);
+
+          updateGate();
+        });
+      });
+      card.appendChild(opts);
+      card.appendChild(why);
+
+      quizList.appendChild(card);
+    });
+
+    var gate = document.getElementById("gate");
+    var gateTitle = document.getElementById("gateTitle");
+    var gateBody = document.getElementById("gateBody");
+    var quizScore = document.getElementById("quizScore");
+    var railLabel = document.getElementById("railGateLabel");
+    var railHint = document.getElementById("railGateHint");
+    var railBar = document.getElementById("railGateBar");
+
+    var CHECKLIST = [
+      "Every fire-and-forget write offloads inside RunLoggingFailures; no call site supplies its own Task.Run, and none runs SQLite on its caller.",
+      "Both reset waits are bounded, and a drain timeout lowers the barrier it raised before throwing.",
+      "The dialog's close refusal is bounded by CloseRefusalLimit, which outlives MaxDuration (drain budget plus store budget).",
+      "A pending inventory entry is always visible to the discard or the drain; the claim happens inside its own tracked write.",
+      "Init is semaphore-serialized, and the migration treats a concurrently added column as arrival, not failure.",
+      "Failed always carries a detail message; Abandoned never claims nothing was removed; neither is constructible any other way.",
+      "Each refresh hook fails alone; a stale page never becomes a false 'nothing was removed'.",
+      "The fence rule has exactly one spelling, ResetFence.IsFencedOut, and both fences use it."
+    ];
+
+    function updateGate() {
+      var correct = 0;
+      QUESTIONS.forEach(function (item, i) { if (answered[i] === item.answer) correct++; });
+
+      quizScore.textContent = correct + "/" + QUESTIONS.length;
+      railHint.textContent = correct + " of " + QUESTIONS.length + " correct";
+      railBar.style.width = (100 * correct / QUESTIONS.length) + "%";
+
+      if (correct === QUESTIONS.length) {
+        railLabel.textContent = "Gate open";
+        gate.className = "gate is-open";
+        gateTitle.textContent = "Approval checklist: unlocked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Eight of eight. You have the model; now check the diff against it. Walk these before approving:"));
+        var ul = el("ul");
+        CHECKLIST.forEach(function (line) { ul.appendChild(el("li", null, line)); });
+        gateBody.appendChild(ul);
+        var pre = el("pre", "approval",
+          "Reviewed PR #42 against docs/2026-08-complete-profile-reset-deep-review-guide.html\n" +
+          "Comprehension gate: 8/8\n" +
+          "Checklist walked: offload placement, bounded waits, dialog backstop, claim-inside-write, " +
+          "init race, outcome honesty, hook isolation, fence predicate");
+        gateBody.appendChild(pre);
+      } else {
+        railLabel.textContent = "Gate locked";
+        gate.className = "gate is-locked";
+        gateTitle.textContent = "Approval checklist: locked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Answer all eight questions correctly to unlock the reviewer checklist. " +
+          correct + " of " + QUESTIONS.length + " so far; wrong answers explain themselves, so re-read and revise."));
+      }
+    }
+
+    updateGate();
+  })();
+  </script>
+</body>
+</html>
