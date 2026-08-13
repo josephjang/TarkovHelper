@@ -1,8 +1,10 @@
+using System.Data.Common;
 using System.IO;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Debug;
 using TarkovHelper.Models;
+using TarkovHelper.Services.Logging;
 
 namespace TarkovHelper.Services;
 
@@ -12,13 +14,28 @@ namespace TarkovHelper.Services;
 /// </summary>
 public sealed class UserDataDbService : IQuestProgressStore
 {
+    private static readonly ILogger _log = Log.For<UserDataDbService>();
+
     private static readonly Lazy<UserDataDbService> _instance = new(() => new UserDataDbService());
     public static UserDataDbService Instance => _instance.Value;
 
     private readonly string _databasePath;
+
+    /// <summary>
+    /// Serializes <see cref="InitializeAsync"/>. Table creation and the schema migrations are
+    /// not safe to run twice at once (two callers would both see a column as missing and both
+    /// try to add it), and roughly every method here starts by awaiting initialization from
+    /// whatever thread it happens to run on.
+    /// </summary>
+    private readonly SemaphoreSlim _initLock = new(1, 1);
+
+    /// <summary>
+    /// Read and written through <see cref="Volatile"/> so the fast path outside
+    /// <see cref="_initLock"/> cannot observe a stale or half-published value.
+    /// </summary>
     private bool _isInitialized;
 
-    public bool IsInitialized => _isInitialized;
+    public bool IsInitialized => Volatile.Read(ref _isInitialized);
     public string DatabasePath => _databasePath;
 
     /// <summary>
@@ -28,13 +45,6 @@ public sealed class UserDataDbService : IQuestProgressStore
     /// <see cref="GetProgressResetAtAsync"/> and drop log events that are not after it.
     /// </summary>
     public const string ProgressResetAtKey = "app.progressResetAt";
-
-    /// <summary>
-    /// Test seam: invoked between the reset's deletes and its commit, so the rollback
-    /// guarantee (PRD R5) is provable against a real SQLite file rather than asserted.
-    /// Never set in production.
-    /// </summary>
-    internal Func<Task>? BeforeResetCommitAsync { get; set; }
 
     /// <summary>
     /// 마이그레이션 진행 상황 이벤트
@@ -59,7 +69,7 @@ public sealed class UserDataDbService : IQuestProgressStore
     private void ReportProgress(string message)
     {
         MigrationProgress?.Invoke(message);
-        System.Diagnostics.Debug.WriteLine($"[UserDataDbService] {message}");
+        _log.Info(message);
     }
 
     private UserDataDbService()
@@ -79,35 +89,47 @@ public sealed class UserDataDbService : IQuestProgressStore
     }
 
     /// <summary>
-    /// DB 초기화 (테이블 생성)
+    /// DB 초기화 (테이블 생성). Runs at most once: concurrent callers queue on
+    /// <see cref="_initLock"/> and the winner's work is what every one of them observes.
+    /// A failed attempt leaves the flag clear, so the next caller retries.
+    /// Every await inside uses ConfigureAwait(false): the synchronous entry points
+    /// (<see cref="GetSetting"/> and friends) block on this task, and resuming on a captured
+    /// UI context while that thread waits would deadlock.
     /// </summary>
     public async Task InitializeAsync()
     {
-        if (_isInitialized) return;
+        if (Volatile.Read(ref _isInitialized)) return;
 
+        await _initLock.WaitAsync().ConfigureAwait(false);
         try
         {
+            if (Volatile.Read(ref _isInitialized)) return;
+
             Directory.CreateDirectory(Path.GetDirectoryName(_databasePath)!);
 
             var connectionString = $"Data Source={_databasePath}";
             await using var connection = new SqliteConnection(connectionString);
-            await connection.OpenAsync();
+            await connection.OpenAsync().ConfigureAwait(false);
 
-            await CreateTablesAsync(connection);
+            await CreateTablesAsync(connection).ConfigureAwait(false);
 
-            _isInitialized = true;
-            System.Diagnostics.Debug.WriteLine($"[UserDataDbService] Initialized: {_databasePath}");
+            Volatile.Write(ref _isInitialized, true);
+            _log.Info($"Initialized: {_databasePath}");
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[UserDataDbService] Initialization failed: {ex.Message}");
+            _log.Error($"Initialization failed: {ex.Message}", ex);
             throw;
+        }
+        finally
+        {
+            _initLock.Release();
         }
     }
 
     private async Task CreateTablesAsync(SqliteConnection connection)
     {
-        await MigrateToProfileSchemaAsync(connection);
+        await MigrateToProfileSchemaAsync(connection).ConfigureAwait(false);
 
         var createTablesSql = @"
             -- 퀘스트 진행 상태
@@ -205,29 +227,55 @@ public sealed class UserDataDbService : IQuestProgressStore
         ";
 
         await using var cmd = new SqliteCommand(createTablesSql, connection);
-        await cmd.ExecuteNonQueryAsync();
+        await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
-        await MigrateRaidHistoryOwnerColumnAsync(connection);
+        await MigrateRaidHistoryOwnerColumnAsync(connection).ConfigureAwait(false);
     }
 
     /// <summary>
+    /// SQLITE_ERROR, the generic code SQLite returns for a statement it could not prepare or
+    /// run: a duplicate column name in an ALTER, a missing table, a syntax error.
+    /// </summary>
+    private const int SqliteGenericError = 1;
+
+    /// <summary>
     /// Adds the nullable RaidHistory.AppProfileId column to databases created before raid
-    /// ownership existed. Idempotent (pragma check first, same pattern as
-    /// <see cref="MigrateToProfileSchemaAsync"/>); a fresh database gets the column from the
-    /// CREATE TABLE statement and the check finds it already present. Existing rows keep NULL,
-    /// which is the "no evidence" value a profile reset never deletes.
+    /// ownership existed. Idempotent in both the ordinary sense (pragma check first, same
+    /// pattern as <see cref="MigrateToProfileSchemaAsync"/>) and under a race: a second process
+    /// or connection can add the column between our check and our ALTER, and the resulting
+    /// "duplicate column name" is the outcome we wanted, not a failure. Getting that wrong
+    /// would throw out of the first launch after an upgrade, which callers such as
+    /// <c>QuestProgressService.ReloadForProfileAsync</c> surface as an empty profile.
+    /// A fresh database gets the column from the CREATE TABLE statement and the check finds it
+    /// already present. Existing rows keep NULL, which is the "no evidence" value a profile
+    /// reset never deletes.
     /// </summary>
     private static async Task MigrateRaidHistoryOwnerColumnAsync(SqliteConnection connection)
     {
-        var checkColSql = "SELECT COUNT(*) FROM pragma_table_info('RaidHistory') WHERE name='AppProfileId'";
-        await using var checkColCmd = new SqliteCommand(checkColSql, connection);
-        var hasColumn = Convert.ToInt32(await checkColCmd.ExecuteScalarAsync()) > 0;
-        if (hasColumn) return;
+        if (await HasRaidHistoryOwnerColumnAsync(connection).ConfigureAwait(false)) return;
 
-        await using var alterCmd = new SqliteCommand(
-            "ALTER TABLE RaidHistory ADD COLUMN AppProfileId TEXT NULL", connection);
-        await alterCmd.ExecuteNonQueryAsync();
-        System.Diagnostics.Debug.WriteLine("[UserDataDbService] Added RaidHistory.AppProfileId column");
+        try
+        {
+            await using var alterCmd = new SqliteCommand(
+                "ALTER TABLE RaidHistory ADD COLUMN AppProfileId TEXT NULL", connection);
+            await alterCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            _log.Info("Added RaidHistory.AppProfileId column");
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteGenericError)
+        {
+            // Re-check instead of matching the message text: if the column is there now,
+            // someone else added it and the migration has arrived where it wanted to be.
+            // Anything else (no such table, ...) shares the error code and must still throw.
+            if (!await HasRaidHistoryOwnerColumnAsync(connection).ConfigureAwait(false)) throw;
+            _log.Info($"RaidHistory.AppProfileId was added concurrently: {ex.Message}");
+        }
+    }
+
+    private static async Task<bool> HasRaidHistoryOwnerColumnAsync(SqliteConnection connection)
+    {
+        const string sql = "SELECT COUNT(*) FROM pragma_table_info('RaidHistory') WHERE name='AppProfileId'";
+        await using var cmd = new SqliteCommand(sql, connection);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync().ConfigureAwait(false)) > 0;
     }
 
     /// <summary>
@@ -240,20 +288,20 @@ public sealed class UserDataDbService : IQuestProgressStore
             // QuestProgress 테이블이 존재하는지 확인
             var checkTableSql = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='QuestProgress'";
             await using var checkTableCmd = new SqliteCommand(checkTableSql, connection);
-            var tableExists = Convert.ToInt32(await checkTableCmd.ExecuteScalarAsync()) > 0;
+            var tableExists = Convert.ToInt32(await checkTableCmd.ExecuteScalarAsync().ConfigureAwait(false)) > 0;
 
             if (!tableExists) return; // 신규 설치: 마이그레이션 불필요
 
             // ProfileId 컬럼이 이미 있으면 마이그레이션 완료된 상태
             var checkColSql = "SELECT COUNT(*) FROM pragma_table_info('QuestProgress') WHERE name='ProfileId'";
             await using var checkColCmd = new SqliteCommand(checkColSql, connection);
-            var hasProfileId = Convert.ToInt32(await checkColCmd.ExecuteScalarAsync()) > 0;
+            var hasProfileId = Convert.ToInt32(await checkColCmd.ExecuteScalarAsync().ConfigureAwait(false)) > 0;
 
             if (hasProfileId) return; // 이미 마이그레이션됨
 
-            System.Diagnostics.Debug.WriteLine("[UserDataDbService] Migrating to profile schema...");
+            _log.Info("Migrating to profile schema...");
 
-            await using var transaction = await connection.BeginTransactionAsync();
+            await using var transaction = await connection.BeginTransactionAsync().ConfigureAwait(false);
             try
             {
                 var migrateSql = @"
@@ -315,21 +363,43 @@ public sealed class UserDataDbService : IQuestProgressStore
                 ";
 
                 await using var migrateCmd = new SqliteCommand(migrateSql, connection, (SqliteTransaction)transaction);
-                await migrateCmd.ExecuteNonQueryAsync();
+                await migrateCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
-                await transaction.CommitAsync();
-                System.Diagnostics.Debug.WriteLine("[UserDataDbService] Profile schema migration completed");
+                await transaction.CommitAsync().ConfigureAwait(false);
+                _log.Info("Profile schema migration completed");
             }
             catch (Exception ex)
             {
-                await transaction.RollbackAsync();
-                System.Diagnostics.Debug.WriteLine($"[UserDataDbService] Profile schema migration failed: {ex.Message}");
+                await RollbackSafelyAsync(transaction, nameof(MigrateToProfileSchemaAsync)).ConfigureAwait(false);
+                _log.Error($"Profile schema migration failed: {ex.Message}", ex);
                 throw;
             }
         }
-        catch (Exception ex) when (ex is not SqliteException { SqliteErrorCode: 1 })
+        catch (Exception ex) when (ex is not SqliteException { SqliteErrorCode: SqliteGenericError })
         {
-            System.Diagnostics.Debug.WriteLine($"[UserDataDbService] MigrateToProfileSchemaAsync error: {ex.Message}");
+            _log.Error($"MigrateToProfileSchemaAsync error: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Rolls a transaction back from a catch block without letting the rollback's own failure
+    /// replace the exception that caused it. A rollback can legitimately fail - the transaction
+    /// may already have been rolled back by SQLite (a full disk, a lost lock) or its connection
+    /// may be gone - and an unguarded <c>RollbackAsync</c> in a <c>catch { ...; throw; }</c>
+    /// never reaches its <c>throw</c>, so the caller (and the player, since these messages reach
+    /// the reset dialog) is told about the rollback instead of the real fault. The caller keeps
+    /// its bare <c>throw;</c>, which is now unconditional; the rollback failure is logged.
+    /// Internal rather than private so the guard itself is testable.
+    /// </summary>
+    internal static async Task RollbackSafelyAsync(DbTransaction transaction, string context)
+    {
+        try
+        {
+            await transaction.RollbackAsync().ConfigureAwait(false);
+        }
+        catch (Exception rollbackEx)
+        {
+            _log.Error($"{context}: rollback failed after an earlier failure: {rollbackEx.Message}", rollbackEx);
         }
     }
 
@@ -437,7 +507,7 @@ public sealed class UserDataDbService : IQuestProgressStore
         }
         catch
         {
-            await transaction.RollbackAsync();
+            await RollbackSafelyAsync(transaction, nameof(SaveQuestProgressBatchAsync));
             throw;
         }
     }
@@ -723,8 +793,23 @@ public sealed class UserDataDbService : IQuestProgressStore
     /// ProfileSettings keys that survive the reset (the edition facts). Every key NOT listed is
     /// deleted: wiped-by-default is the safe direction for progress-shaped data.
     /// </param>
-    public async Task ResetProfileAsync(
+    public Task ResetProfileAsync(
         string profileId, DateTime resetAt, IReadOnlyCollection<string> preservedSettingKeys)
+        => ResetProfileAsync(profileId, resetAt, preservedSettingKeys, beforeCommit: null);
+
+    /// <inheritdoc cref="ResetProfileAsync(string, DateTime, IReadOnlyCollection{string})"/>
+    /// <param name="profileId">The storage partition to reset. Never resolved ambiently.</param>
+    /// <param name="resetAt">The reset moment, local time. See the public overload.</param>
+    /// <param name="preservedSettingKeys">The keys that survive. See the public overload.</param>
+    /// <param name="beforeCommit">
+    /// Test seam: awaited between the deletes and the commit, so the rollback guarantee (PRD R5)
+    /// is provable against a real SQLite file rather than asserted. It is a parameter rather
+    /// than settable state on the service so no production caller can reach it and no test can
+    /// leave it armed on the singleton.
+    /// </param>
+    internal async Task ResetProfileAsync(
+        string profileId, DateTime resetAt, IReadOnlyCollection<string> preservedSettingKeys,
+        Func<Task>? beforeCommit)
     {
         await InitializeAsync();
 
@@ -735,66 +820,103 @@ public sealed class UserDataDbService : IQuestProgressStore
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
         try
         {
-            foreach (var table in new[] { "QuestProgress", "ObjectiveProgress", "HideoutProgress", "ItemInventory" })
-            {
-                await using var cmd = new SqliteCommand(
-                    $"DELETE FROM {table} WHERE ProfileId = @profileId", connection, transaction);
-                cmd.Parameters.AddWithValue("@profileId", profileId);
-                await cmd.ExecuteNonQueryAsync();
-            }
-
-            // Profile values (level, scav rep, faction, prestige, DSP, ...) go back to their
-            // defaults by deleting the rows; only the named survivors stay (PRD R3, R4).
-            var preserved = preservedSettingKeys.ToList();
-            var placeholders = string.Join(", ", preserved.Select((_, i) => $"@keep{i}"));
-            var settingsSql = preserved.Count == 0
-                ? "DELETE FROM ProfileSettings WHERE ProfileId = @profileId"
-                : $"DELETE FROM ProfileSettings WHERE ProfileId = @profileId AND Key NOT IN ({placeholders})";
-            await using (var cmd = new SqliteCommand(settingsSql, connection, transaction))
-            {
-                cmd.Parameters.AddWithValue("@profileId", profileId);
-                for (var i = 0; i < preserved.Count; i++)
-                {
-                    cmd.Parameters.AddWithValue($"@keep{i}", preserved[i]);
-                }
-                await cmd.ExecuteNonQueryAsync();
-            }
-
-            // NULL AppProfileId never matches the equality, so legacy rows and rows with no
-            // session evidence survive by construction (PRD R9).
-            await using (var cmd = new SqliteCommand(
-                             "DELETE FROM RaidHistory WHERE AppProfileId = @profileId", connection, transaction))
-            {
-                cmd.Parameters.AddWithValue("@profileId", profileId);
-                await cmd.ExecuteNonQueryAsync();
-            }
+            await DeleteOwnedRowsAsync(connection, transaction, profileId);
+            await DeleteProfileSettingsExceptAsync(connection, transaction, profileId, preservedSettingKeys);
+            await DeleteOwnedRaidHistoryAsync(connection, transaction, profileId);
 
             // The watermark is written after the settings delete, inside the same transaction:
             // fence and removal commit atomically, and the insert is not swept by its own
             // delete. A second reset simply overwrites the previous watermark.
-            await using (var cmd = new SqliteCommand(@"
-                INSERT INTO ProfileSettings (ProfileId, Key, Value)
-                VALUES (@profileId, @key, @value)
-                ON CONFLICT(ProfileId, Key) DO UPDATE SET Value = @value", connection, transaction))
-            {
-                cmd.Parameters.AddWithValue("@profileId", profileId);
-                cmd.Parameters.AddWithValue("@key", ProgressResetAtKey);
-                cmd.Parameters.AddWithValue("@value", resetAt.ToString("o"));
-                await cmd.ExecuteNonQueryAsync();
-            }
+            await WriteResetWatermarkAsync(connection, transaction, profileId, resetAt);
 
-            if (BeforeResetCommitAsync != null)
+            if (beforeCommit != null)
             {
-                await BeforeResetCommitAsync();
+                await beforeCommit();
             }
 
             await transaction.CommitAsync();
         }
         catch
         {
-            await transaction.RollbackAsync();
+            // The rollback must not become the failure the caller reports: ProfileResetService
+            // shows this exception's message to the player, and "the transaction is completed"
+            // would hide the disk-full or locked-database condition that actually stopped us.
+            await RollbackSafelyAsync(transaction, nameof(ResetProfileAsync));
             throw;
         }
+    }
+
+    /// <summary>
+    /// Deletes every row the profile owns in the plainly profile-keyed progress tables. Each
+    /// table is keyed by a ProfileId column, so one parameterized DELETE per table is the whole
+    /// step; the table names are literals in this method, never caller input.
+    /// </summary>
+    private static async Task DeleteOwnedRowsAsync(
+        SqliteConnection connection, SqliteTransaction transaction, string profileId)
+    {
+        foreach (var table in new[] { "QuestProgress", "ObjectiveProgress", "HideoutProgress", "ItemInventory" })
+        {
+            await using var cmd = new SqliteCommand(
+                $"DELETE FROM {table} WHERE ProfileId = @profileId", connection, transaction);
+            cmd.Parameters.AddWithValue("@profileId", profileId);
+            await cmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    /// <summary>
+    /// Profile values (level, scav rep, faction, prestige, DSP, ...) go back to their
+    /// defaults by deleting the rows; only the named survivors stay (PRD R3, R4).
+    /// An empty survivor collection deletes every one of the profile's settings, so the
+    /// NOT IN clause is built only when there is something to keep: an empty IN list is not
+    /// valid SQLite.
+    /// </summary>
+    private static async Task DeleteProfileSettingsExceptAsync(
+        SqliteConnection connection, SqliteTransaction transaction, string profileId,
+        IReadOnlyCollection<string> preservedSettingKeys)
+    {
+        var preserved = preservedSettingKeys.ToList();
+        var placeholders = string.Join(", ", preserved.Select((_, i) => $"@keep{i}"));
+        var settingsSql = preserved.Count == 0
+            ? "DELETE FROM ProfileSettings WHERE ProfileId = @profileId"
+            : $"DELETE FROM ProfileSettings WHERE ProfileId = @profileId AND Key NOT IN ({placeholders})";
+        await using var cmd = new SqliteCommand(settingsSql, connection, transaction);
+        cmd.Parameters.AddWithValue("@profileId", profileId);
+        for (var i = 0; i < preserved.Count; i++)
+        {
+            cmd.Parameters.AddWithValue($"@keep{i}", preserved[i]);
+        }
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// NULL AppProfileId never matches the equality, so legacy rows and rows with no
+    /// session evidence survive by construction (PRD R9).
+    /// </summary>
+    private static async Task DeleteOwnedRaidHistoryAsync(
+        SqliteConnection connection, SqliteTransaction transaction, string profileId)
+    {
+        await using var cmd = new SqliteCommand(
+            "DELETE FROM RaidHistory WHERE AppProfileId = @profileId", connection, transaction);
+        cmd.Parameters.AddWithValue("@profileId", profileId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Raises the reset fence (PRD R6) by upserting <see cref="ProgressResetAtKey"/> for the
+    /// profile. The caller decides where in the transaction this runs; see the ordering comment
+    /// at the call site in <see cref="ResetProfileAsync(string, DateTime, IReadOnlyCollection{string}, Func{Task})"/>.
+    /// </summary>
+    private static async Task WriteResetWatermarkAsync(
+        SqliteConnection connection, SqliteTransaction transaction, string profileId, DateTime resetAt)
+    {
+        await using var cmd = new SqliteCommand(@"
+            INSERT INTO ProfileSettings (ProfileId, Key, Value)
+            VALUES (@profileId, @key, @value)
+            ON CONFLICT(ProfileId, Key) DO UPDATE SET Value = @value", connection, transaction);
+        cmd.Parameters.AddWithValue("@profileId", profileId);
+        cmd.Parameters.AddWithValue("@key", ProgressResetAtKey);
+        cmd.Parameters.AddWithValue("@value", resetAt.ToString("o"));
+        await cmd.ExecuteNonQueryAsync();
     }
 
     /// <summary>
@@ -877,12 +999,12 @@ public sealed class UserDataDbService : IQuestProgressStore
                     }
 
                     File.Delete(v2Path);
-                    System.Diagnostics.Debug.WriteLine($"[UserDataDbService] Migrated and deleted: {v2Path}");
+                    _log.Info($"Migrated and deleted: {v2Path}");
 
                     if (File.Exists(v1Path))
                     {
                         File.Delete(v1Path);
-                        System.Diagnostics.Debug.WriteLine($"[UserDataDbService] Deleted legacy: {v1Path}");
+                        _log.Info($"Deleted legacy: {v1Path}");
                     }
 
                     return true;
@@ -890,7 +1012,7 @@ public sealed class UserDataDbService : IQuestProgressStore
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[UserDataDbService] V2 migration failed: {ex.Message}");
+                _log.Error($"V2 migration failed: {ex.Message}", ex);
             }
         }
         else if (File.Exists(v1Path))
@@ -911,14 +1033,14 @@ public sealed class UserDataDbService : IQuestProgressStore
                     }
 
                     File.Delete(v1Path);
-                    System.Diagnostics.Debug.WriteLine($"[UserDataDbService] Migrated and deleted: {v1Path}");
+                    _log.Info($"Migrated and deleted: {v1Path}");
 
                     return true;
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[UserDataDbService] V1 migration failed: {ex.Message}");
+                _log.Error($"V1 migration failed: {ex.Message}", ex);
             }
         }
 
@@ -955,14 +1077,14 @@ public sealed class UserDataDbService : IQuestProgressStore
                 }
 
                 File.Delete(filePath);
-                System.Diagnostics.Debug.WriteLine($"[UserDataDbService] Migrated and deleted: {filePath}");
+                _log.Info($"Migrated and deleted: {filePath}");
 
                 return true;
             }
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[UserDataDbService] Objective migration failed: {ex.Message}");
+            _log.Error($"Objective migration failed: {ex.Message}", ex);
         }
 
         return false;
@@ -1006,14 +1128,14 @@ public sealed class UserDataDbService : IQuestProgressStore
                     await SaveHideoutProgressAsync(kvp.Key, kvp.Value, ProfileService.PvpProfileId);
 
                 File.Delete(filePath);
-                System.Diagnostics.Debug.WriteLine($"[UserDataDbService] Migrated and deleted: {filePath}");
+                _log.Info($"Migrated and deleted: {filePath}");
 
                 return true;
             }
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[UserDataDbService] Hideout migration failed: {ex.Message}");
+            _log.Error($"Hideout migration failed: {ex.Message}", ex);
         }
 
         return false;
@@ -1043,14 +1165,14 @@ public sealed class UserDataDbService : IQuestProgressStore
                 }
 
                 File.Delete(filePath);
-                System.Diagnostics.Debug.WriteLine($"[UserDataDbService] Migrated and deleted: {filePath}");
+                _log.Info($"Migrated and deleted: {filePath}");
 
                 return true;
             }
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[UserDataDbService] ItemInventory migration failed: {ex.Message}");
+            _log.Error($"ItemInventory migration failed: {ex.Message}", ex);
         }
 
         return false;
@@ -1150,8 +1272,9 @@ public sealed class UserDataDbService : IQuestProgressStore
     /// </summary>
     public string? GetSetting(string key)
     {
-        if (!_isInitialized)
-            InitializeAsync().GetAwaiter().GetResult();
+        // InitializeAsync is idempotent and has its own synchronized fast path, so there is no
+        // unsynchronized flag read out here.
+        InitializeAsync().GetAwaiter().GetResult();
 
         var connectionString = $"Data Source={_databasePath};Mode=ReadOnly";
         using var connection = new SqliteConnection(connectionString);
@@ -1169,8 +1292,9 @@ public sealed class UserDataDbService : IQuestProgressStore
     /// </summary>
     public void SetSetting(string key, string value)
     {
-        if (!_isInitialized)
-            InitializeAsync().GetAwaiter().GetResult();
+        // InitializeAsync is idempotent and has its own synchronized fast path, so there is no
+        // unsynchronized flag read out here.
+        InitializeAsync().GetAwaiter().GetResult();
 
         var connectionString = $"Data Source={_databasePath}";
         using var connection = new SqliteConnection(connectionString);
@@ -1195,8 +1319,9 @@ public sealed class UserDataDbService : IQuestProgressStore
     /// </summary>
     public void SetSettings(IEnumerable<KeyValuePair<string, string>> settings)
     {
-        if (!_isInitialized)
-            InitializeAsync().GetAwaiter().GetResult();
+        // InitializeAsync is idempotent and has its own synchronized fast path, so there is no
+        // unsynchronized flag read out here.
+        InitializeAsync().GetAwaiter().GetResult();
 
         var connectionString = $"Data Source={_databasePath}";
         using var connection = new SqliteConnection(connectionString);
@@ -1316,8 +1441,9 @@ public sealed class UserDataDbService : IQuestProgressStore
     /// </summary>
     public string? GetProfileSetting(string profileId, string key)
     {
-        if (!_isInitialized)
-            InitializeAsync().GetAwaiter().GetResult();
+        // InitializeAsync is idempotent and has its own synchronized fast path, so there is no
+        // unsynchronized flag read out here.
+        InitializeAsync().GetAwaiter().GetResult();
 
         var connectionString = $"Data Source={_databasePath};Mode=ReadOnly";
         using var connection = new SqliteConnection(connectionString);
@@ -1336,8 +1462,9 @@ public sealed class UserDataDbService : IQuestProgressStore
     /// </summary>
     public void SetProfileSetting(string profileId, string key, string value)
     {
-        if (!_isInitialized)
-            InitializeAsync().GetAwaiter().GetResult();
+        // InitializeAsync is idempotent and has its own synchronized fast path, so there is no
+        // unsynchronized flag read out here.
+        InitializeAsync().GetAwaiter().GetResult();
 
         var connectionString = $"Data Source={_databasePath}";
         using var connection = new SqliteConnection(connectionString);
@@ -1402,7 +1529,7 @@ public sealed class UserDataDbService : IQuestProgressStore
         }
         catch
         {
-            await transaction.RollbackAsync();
+            await RollbackSafelyAsync(transaction, nameof(SaveQuestProgressBatchAsync));
             throw;
         }
     }
@@ -1587,7 +1714,7 @@ public sealed class UserDataDbService : IQuestProgressStore
         cmd.Parameters.AddWithValue("@cutoff", cutoffDate);
 
         var deleted = await cmd.ExecuteNonQueryAsync();
-        System.Diagnostics.Debug.WriteLine($"[UserDataDbService] Cleaned up {deleted} old raid history entries");
+        _log.Info($"Cleaned up {deleted} old raid history entries");
     }
 
     #endregion

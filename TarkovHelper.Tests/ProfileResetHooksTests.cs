@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.IO;
+using Microsoft.Data.Sqlite;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
 
@@ -6,15 +9,37 @@ namespace TarkovHelper.Tests;
 /// <summary>
 /// Guards for the per-service reset hooks and the log-event fence
 /// (feature-complete-profile-reset.spec.md): each cache clears only when it holds the reset
-/// profile's data, the fence drops log events that are not after the watermark, hand entry is
-/// never fenced, pending debounced saves are discarded per profile, and the survivor list stays
-/// a subset of the profile-scoped keys.
+/// profile's data, the settings cache reloads only when the reset target is the selected
+/// profile, the fence drops log events that are not after the watermark, hand entry is never
+/// fenced, pending debounced saves are discarded per profile, and the survivor list stays a
+/// subset of the profile-scoped keys.
 /// </summary>
-public sealed class ProfileResetHooksTests
+public sealed class ProfileResetHooksTests : IDisposable
 {
     private static readonly TarkovTask Quest = TestTasks.Quest("q-1", "a-quest");
 
     private static string IdOf(AppProfile profile) => ProfileService.GetProfileId(profile);
+
+    /// <summary>
+    /// Temp home for the real-SQLite stores the settings hook needs (it reloads through the
+    /// store, so a fake would prove nothing about the reload). The store creates the directory
+    /// on its first write, so a test that never builds one leaves nothing behind.
+    /// </summary>
+    private readonly string _storeRoot = Path.Combine(
+        Path.GetTempPath(), "tarkovhelper-hooks-" + Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        if (!Directory.Exists(_storeRoot)) return;
+
+        SqliteConnection.ClearAllPools();
+        try { Directory.Delete(_storeRoot, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private UserDataDbService NewStore()
+        => new(Path.Combine(_storeRoot, Guid.NewGuid().ToString("N") + ".db"));
 
     private static async Task WaitUntil(Func<bool> condition, string what)
     {
@@ -172,14 +197,150 @@ public sealed class ProfileResetHooksTests
     private static ItemInventoryService NewInventoryService(
         string loadedProfileId,
         Dictionary<string, string> pendingSaves,
-        ItemInventoryData inventory)
+        ItemInventoryData inventory,
+        UserDataDbService? store = null)
     {
         var service = TestReflection.Uninitialized<ItemInventoryService>();
         TestReflection.SetPrivateField(service, "_lock", new object());
         TestReflection.SetPrivateField(service, "_pendingSaves", pendingSaves);
         TestReflection.SetPrivateField(service, "_inventoryData", inventory);
         TestReflection.SetPrivateField(service, "_loadedProfileId", loadedProfileId);
+        if (store != null) TestReflection.SetPrivateField(service, "_userDataDb", store);
         return service;
+    }
+
+    /// <summary>
+    /// Runs the debounce flush the way the timer does. Reached by reflection because driving it
+    /// through the real 500ms timer would make this a timing exercise, and the flush's ordering
+    /// against a reset is exactly what is under test.
+    /// </summary>
+    private static Task FlushPendingSaves(ItemInventoryService service)
+    {
+        var method = typeof(ItemInventoryService).GetMethod(
+            "SavePendingItemsAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        Assert.True(method != null, "ItemInventoryService has no SavePendingItemsAsync");
+        return (Task)method!.Invoke(service, Array.Empty<object>())!;
+    }
+
+    // A debounced save staged before a reset must not survive it. The flush used to empty
+    // _pendingSaves up front and only then walk the entries one round-trip at a time, so an
+    // entry could sit in a local list - invisible to the barrier's drain AND to
+    // DiscardPendingSaves - until after the reset committed, and then write its row back.
+    // Claiming each entry from inside its own tracked write closes that gap.
+    [Fact]
+    public async Task A_pending_save_staged_before_a_reset_cannot_land_after_it()
+    {
+        var store = NewStore();
+        var target = "reset-" + Guid.NewGuid().ToString("N");
+        var bystander = "keep-" + Guid.NewGuid().ToString("N");
+
+        // Three entries, so the target's second one is the entry the old flush stranded behind
+        // the first one's round-trip.
+        var inventory = new ItemInventoryData();
+        inventory.Items["salewa"] = new ItemInventory { ItemNormalizedName = "salewa", FirQuantity = 3 };
+        inventory.Items["bandage"] = new ItemInventory { ItemNormalizedName = "bandage", NonFirQuantity = 5 };
+        inventory.Items["car-battery"] = new ItemInventory { ItemNormalizedName = "car-battery", NonFirQuantity = 1 };
+        var pending = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["salewa"] = target,
+            ["bandage"] = target,
+            ["car-battery"] = bystander,
+        };
+
+        var service = NewInventoryService(target, pending, inventory, store);
+
+        // The reset raises its barrier first, exactly as ProfileResetService does.
+        var guard = await TrackedUserDataWrites.BeginResetAsync(target);
+
+        // The debounce timer fires now, mid-reset.
+        var flush = FlushPendingSaves(service);
+        // ...and the reset drops the target's pending entries, still under the barrier.
+        service.DiscardPendingSaves(target);
+
+        await guard.DisposeAsync();
+        await flush;
+
+        // Nothing the reset was about to delete was written back.
+        Assert.Empty(await store.LoadItemInventoryAsync(target));
+        // The control that keeps the assertion above honest: the same flush did persist the
+        // entry captured for an unrelated profile, so "no rows" cannot mean "the flush did
+        // nothing".
+        Assert.Equal(1, (await store.LoadItemInventoryAsync(bystander))["car-battery"].NonFirQuantity);
+        // Every entry is accounted for: claimed and written, or discarded by the reset.
+        Assert.Empty(pending);
+    }
+
+    // The other half of the claim rule: with no reset in the way, every pending entry is
+    // written under its own captured profile and leaves the pending map clean.
+    [Fact]
+    public async Task A_flush_persists_every_pending_entry_under_its_captured_profile()
+    {
+        var store = NewStore();
+        var first = "one-" + Guid.NewGuid().ToString("N");
+        var second = "two-" + Guid.NewGuid().ToString("N");
+
+        var inventory = new ItemInventoryData();
+        inventory.Items["salewa"] = new ItemInventory { ItemNormalizedName = "salewa", FirQuantity = 3 };
+        inventory.Items["bandage"] = new ItemInventory { ItemNormalizedName = "bandage", NonFirQuantity = 5 };
+        var pending = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["salewa"] = first,
+            ["bandage"] = second,
+        };
+
+        var service = NewInventoryService(first, pending, inventory, store);
+
+        await FlushPendingSaves(service);
+
+        Assert.Equal(3, (await store.LoadItemInventoryAsync(first))["salewa"].FirQuantity);
+        Assert.Equal(5, (await store.LoadItemInventoryAsync(second))["bandage"].NonFirQuantity);
+        Assert.Empty(pending);
+    }
+
+    // ProfileService raises ActiveProfileChanged synchronously, so whatever this handler does
+    // before its first suspension runs on the raising thread and holds up every subscriber
+    // behind it. Flushing with a blocking wait parked that thread for the whole of a reset it
+    // had a pending entry for, and deadlocked outright when the raising thread was the
+    // dispatcher the reset needs to finish on.
+    [Fact]
+    public async Task A_profile_switch_does_not_block_its_caller_while_a_reset_holds_a_pending_save()
+    {
+        var store = NewStore();
+        var target = "held-" + Guid.NewGuid().ToString("N");
+
+        var inventory = new ItemInventoryData();
+        inventory.Items["salewa"] = new ItemInventory { ItemNormalizedName = "salewa", FirQuantity = 3 };
+        var pending = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["salewa"] = target,
+        };
+        var service = NewInventoryService(target, pending, inventory, store);
+
+        var guard = await TrackedUserDataWrites.BeginResetAsync(target);
+        var release = Task.Run(async () =>
+        {
+            await Task.Delay(500);
+            await guard.DisposeAsync();
+        });
+
+        var elapsed = Stopwatch.StartNew();
+        var reload = service.ReloadForProfileAsync(AppProfile.PveZone, revision: 1);
+        elapsed.Stop();
+
+        // The handler handed control back at its first suspension, long before the reset
+        // released; a blocking flush would only have returned after the release.
+        Assert.True(
+            elapsed.ElapsedMilliseconds < 250,
+            $"the profile switch blocked its caller for {elapsed.ElapsedMilliseconds}ms");
+        Assert.False(reload.IsCompleted, "the flush slipped past a raised reset barrier");
+
+        await release;
+        await reload;
+
+        // ...and it still finished the work: flush first, then the new profile's load.
+        Assert.Equal(3, (await store.LoadItemInventoryAsync(target))["salewa"].FirQuantity);
+        Assert.Empty(pending);
     }
 
     [Fact]
@@ -226,14 +387,46 @@ public sealed class ProfileResetHooksTests
 
     #region Hideout: the loaded-profile guard
 
-    [Fact]
-    public void The_hideout_hook_clears_only_the_loaded_profile()
+    private static HideoutProgressService NewHideoutService(string loadedProfileId, string module, int level)
     {
         var service = TestReflection.Uninitialized<HideoutProgressService>();
         var progress = new HideoutProgress();
-        progress.Modules["workbench"] = 2;
+        progress.Modules[module] = level;
         TestReflection.SetPrivateField(service, "_progress", progress);
-        TestReflection.SetPrivateField(service, "_loadedProfileId", IdOf(AppProfile.PvpSeason));
+        TestReflection.SetPrivateField(service, "_loadedProfileId", loadedProfileId);
+        return service;
+    }
+
+    /// <summary>The profile id the hideout cache currently claims to hold.</summary>
+    private static string? LoadedHideoutProfileId(HideoutProgressService service)
+    {
+        var field = typeof(HideoutProgressService).GetField(
+            "_loadedProfileId",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        Assert.True(field != null, "HideoutProgressService has no private field '_loadedProfileId'");
+        return (string?)field!.GetValue(service);
+    }
+
+    /// <summary>
+    /// The gate the hideout cache publishes and checks under. Held directly by the two tests
+    /// below: it is the only way to suspend a publish or a reset hook exactly where the
+    /// unguarded version used to be interruptible.
+    /// </summary>
+    private static object HideoutStateGate()
+    {
+        var field = typeof(HideoutProgressService).GetField(
+            "_stateGate",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.True(field != null, "HideoutProgressService has no private static field '_stateGate'");
+        var gate = field!.GetValue(null);
+        Assert.NotNull(gate);
+        return gate!;
+    }
+
+    [Fact]
+    public void The_hideout_hook_clears_only_the_loaded_profile()
+    {
+        var service = NewHideoutService(IdOf(AppProfile.PvpSeason), "workbench", 2);
         var changed = 0;
         service.ProgressChanged += (_, _) => changed++;
 
@@ -244,6 +437,192 @@ public sealed class ProfileResetHooksTests
         service.HandleProfileReset(IdOf(AppProfile.PvpSeason));
         Assert.Equal(0, service.GetCurrentLevel("workbench"));
         Assert.Equal(1, changed);
+    }
+
+    // ProfileService raises ActiveProfileChanged from a pool thread, so a load can publish while
+    // a reset hook is deciding on the dispatcher. The load used to publish its rows and its
+    // profile id as two bare assignments: a reset of the OUTGOING profile landing between them
+    // passed its guard and emptied the profile that had just finished loading, leaving the
+    // hideout page at level 0 for rows that are still in the database. These two tests pin the
+    // halves of the fix - the publish and the hook share one critical section, so neither can
+    // observe the other mid-step.
+    [Fact]
+    public async Task A_hideout_load_publishes_its_rows_and_its_profile_id_in_one_gated_step()
+    {
+        var service = NewHideoutService(IdOf(AppProfile.PvpSeason), "workbench", 2);
+        var gate = HideoutStateGate();
+
+        Task reload;
+        Monitor.Enter(gate);
+        try
+        {
+            // This instance has no store, so the read throws and the service's own catch takes
+            // the load straight to the publish. Off the test thread, because the gate is
+            // reentrant and would not stop a load running on this one.
+            reload = Task.Run(() => service.ReloadForProfileAsync(AppProfile.PveZone, revision: 1));
+            Thread.Sleep(200);
+
+            Assert.False(reload.IsCompleted, "the hideout load published outside the state gate");
+            // Read from the gate-holding thread, so this sees the state as an interrupted reset
+            // hook would: neither half of the pair has moved.
+            Assert.Equal(2, service.GetCurrentLevel("workbench"));
+            Assert.Equal(IdOf(AppProfile.PvpSeason), LoadedHideoutProfileId(service));
+        }
+        finally
+        {
+            Monitor.Exit(gate);
+        }
+
+        await reload;
+
+        // Both halves moved together.
+        Assert.Equal(0, service.GetCurrentLevel("workbench"));
+        Assert.Equal(IdOf(AppProfile.PveZone), LoadedHideoutProfileId(service));
+    }
+
+    [Fact]
+    public async Task The_hideout_reset_hook_decides_under_the_state_gate()
+    {
+        var service = NewHideoutService(IdOf(AppProfile.PvpSeason), "workbench", 2);
+        var gate = HideoutStateGate();
+
+        Task reset;
+        Monitor.Enter(gate);
+        try
+        {
+            reset = Task.Run(() => service.HandleProfileReset(IdOf(AppProfile.PvpSeason)));
+            Thread.Sleep(200);
+
+            // An unguarded hook would have read the profile id and wiped the rows by now, which
+            // is precisely what it must not be able to do while a load holds the gate.
+            Assert.False(reset.IsCompleted, "the hideout reset hook decided outside the state gate");
+            Assert.Equal(2, service.GetCurrentLevel("workbench"));
+        }
+        finally
+        {
+            Monitor.Exit(gate);
+        }
+
+        await reset;
+        Assert.Equal(0, service.GetCurrentLevel("workbench"));
+    }
+
+    #endregion
+
+    #region Settings: the ambient-selection hook
+
+    /// <summary>
+    /// The profile SettingsService.HandleProfileReset treats as active. It is the only reset
+    /// hook that compares against the ambient selection rather than a captured
+    /// <c>_loadedProfileId</c>, so the test asks the same service the hook asks: nothing in
+    /// this suite switches the singleton (ProfileSwitchingTests builds its own instances), but
+    /// a hard-coded id would silently stop exercising both branches if anything ever did.
+    /// </summary>
+    private static string SelectedProfileId => ProfileService.Instance.ActiveProfileId;
+
+    /// <summary>Any profile that is not the selected one.</summary>
+    private static string UnselectedProfileId =>
+        SelectedProfileId == ProfileService.SeasonProfileId
+            ? ProfileService.PveProfileId
+            : ProfileService.SeasonProfileId;
+
+    /// <summary>
+    /// A SettingsService with no constructor run: the real one loads every setting and
+    /// subscribes to ProfileService. Only the store and the "already loaded" flag are seeded,
+    /// so the property getters answer from the cache this test controls rather than re-entering
+    /// LoadSettings and its migrations.
+    /// </summary>
+    private static SettingsService NewSettingsService(UserDataDbService store)
+    {
+        var service = TestReflection.Uninitialized<SettingsService>();
+        TestReflection.SetPrivateField(service, "_userDataDb", store);
+        TestReflection.SetPrivateField(service, "_settingsLoaded", true);
+        return service;
+    }
+
+    /// <summary>Fills the cache with the values a completed reset has just made stale.</summary>
+    private static void SeedStaleCache(SettingsService service)
+    {
+        TestReflection.SetPrivateField(service, "_playerLevel", 42);
+        TestReflection.SetPrivateField(service, "_scavRep", 5.5);
+        TestReflection.SetPrivateField(service, "_dspDecodeCount", 3);
+        TestReflection.SetPrivateField(service, "_playerFaction", "bear");
+        TestReflection.SetPrivateField(service, "_hasEodEdition", true);
+        TestReflection.SetPrivateField(service, "_hasUnheardEdition", true);
+        TestReflection.SetPrivateField(service, "_prestigeLevel", 4);
+    }
+
+    /// <summary>Records every profile-scoped changed event in the order it is raised.</summary>
+    private static List<(string Name, object? Value)> RecordSettingEvents(SettingsService service)
+    {
+        var events = new List<(string Name, object? Value)>();
+        service.PlayerLevelChanged += (_, v) => events.Add(("PlayerLevel", v));
+        service.ScavRepChanged += (_, v) => events.Add(("ScavRep", v));
+        service.DspDecodeCountChanged += (_, v) => events.Add(("DspDecodeCount", v));
+        service.PlayerFactionChanged += (_, v) => events.Add(("PlayerFaction", v));
+        service.HasEodEditionChanged += (_, v) => events.Add(("HasEodEdition", v));
+        service.HasUnheardEditionChanged += (_, v) => events.Add(("HasUnheardEdition", v));
+        service.PrestigeLevelChanged += (_, v) => events.Add(("PrestigeLevel", v));
+        return events;
+    }
+
+    [Fact]
+    public async Task The_settings_hook_reloads_the_cache_when_the_reset_target_is_selected()
+    {
+        var store = NewStore();
+        // What the reset transaction leaves behind for the target: every profile row deleted
+        // except the editions, which survive by design (ProfileKeysSurvivingReset).
+        await store.SetProfileSettingAsync(SelectedProfileId, "app.hasEodEdition", "True");
+
+        var service = NewSettingsService(store);
+        SeedStaleCache(service);
+        var events = RecordSettingEvents(service);
+
+        service.HandleProfileReset(SelectedProfileId);
+
+        // The cache now answers from the post-reset rows: the deleted keys fall back to their
+        // defaults, and the surviving edition row is read back as it stands.
+        Assert.Equal(SettingsService.DefaultPlayerLevel, service.PlayerLevel);
+        Assert.Equal(SettingsService.DefaultScavRep, service.ScavRep);
+        Assert.Equal(SettingsService.DefaultDspDecodeCount, service.DspDecodeCount);
+        Assert.Null(service.PlayerFaction);
+        Assert.Equal(SettingsService.DefaultPrestigeLevel, service.PrestigeLevel);
+        Assert.True(service.HasEodEdition);
+        Assert.False(service.HasUnheardEdition);
+
+        // Every profile-scoped changed event is re-raised once, carrying the reloaded value:
+        // the UI redraws from these, exactly as it does on a profile switch.
+        Assert.Equal(new (string, object?)[]
+        {
+            ("PlayerLevel", SettingsService.DefaultPlayerLevel),
+            ("ScavRep", SettingsService.DefaultScavRep),
+            ("DspDecodeCount", SettingsService.DefaultDspDecodeCount),
+            ("PlayerFaction", null),
+            ("HasEodEdition", true),
+            ("HasUnheardEdition", false),
+            ("PrestigeLevel", SettingsService.DefaultPrestigeLevel),
+        }, events);
+    }
+
+    [Fact]
+    public async Task The_settings_hook_ignores_a_reset_of_a_profile_that_is_not_selected()
+    {
+        var store = NewStore();
+        // A row for the SELECTED profile that differs from the cache below, so any reload
+        // would be visible in the assertions. Another profile's reset must not trigger one:
+        // this cache holds the selection's values and none of them went stale.
+        await store.SetProfileSettingAsync(SelectedProfileId, "app.playerLevel", "7");
+
+        var service = NewSettingsService(store);
+        SeedStaleCache(service);
+        var events = RecordSettingEvents(service);
+
+        service.HandleProfileReset(UnselectedProfileId);
+
+        Assert.Equal(42, service.PlayerLevel);
+        Assert.Equal("bear", service.PlayerFaction);
+        Assert.True(service.HasUnheardEdition);
+        Assert.Empty(events);
     }
 
     #endregion

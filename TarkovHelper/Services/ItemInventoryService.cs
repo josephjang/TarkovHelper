@@ -56,53 +56,95 @@ namespace TarkovHelper.Services
         {
             _saveTimer = new System.Timers.Timer(500); // 500ms debounce
             _saveTimer.AutoReset = false;
-            _saveTimer.Elapsed += (s, e) =>
-            {
-                SavePendingItems();
-            };
+            // Started, not waited on: the flush is async so the timer's thread is released
+            // immediately, and it logs its own failures rather than surfacing them as an
+            // unobserved task exception.
+            _saveTimer.Elapsed += (s, e) => _ = SavePendingItemsAsync();
         }
 
-        private void SavePendingItems()
+        /// <summary>
+        /// Writes every debounced quantity out, one tracked write per item, each under ITS OWN
+        /// captured profile id: a reset of one profile drains only that profile's pending writes
+        /// and holds new ones while its deletes run, and entries captured for other profiles are
+        /// unaffected. Failures are logged against the item name by
+        /// <c>TrackedUserDataWrites.RunLoggingFailures</c> (which never throws), replacing the
+        /// old per-entry catch.
+        /// <para>
+        /// Each entry stays in <see cref="_pendingSaves"/> until its own tracked write has
+        /// passed the reset barrier, and is claimed from INSIDE that write. Clearing the whole
+        /// dictionary up front made entries 2..N invisible to both
+        /// <see cref="DiscardPendingSaves"/> and the barrier's drain while the earlier entries'
+        /// round-trips ran, so such an entry could be written back after the reset transaction
+        /// had already deleted the row. Claiming inside the tracked write leaves only two
+        /// possibilities: the claim happened before the barrier rose (the drain waits it out and
+        /// the transaction then deletes the row), or the reset discarded the entry first and the
+        /// write finds nothing to do.
+        /// </para>
+        /// </summary>
+        private async Task SavePendingItemsAsync()
         {
-            List<KeyValuePair<string, string>> itemsToSave;
-            lock (_lock)
+            try
             {
-                if (_pendingSaves.Count == 0) return;
-                itemsToSave = _pendingSaves.ToList();
-                _pendingSaves.Clear();
-            }
-
-            // Each entry is tracked under ITS OWN captured profile id, so a reset of one
-            // profile drains only that profile's pending writes and holds new ones while its
-            // deletes run; entries captured for other profiles are unaffected. Failures are
-            // logged by TrackedUserDataWrites.Run (which never throws), replacing the old
-            // per-entry catch.
-            Task.Run(async () =>
-            {
-                foreach (var entry in itemsToSave)
+                List<string> itemNames;
+                lock (_lock)
                 {
-                    var itemName = entry.Key;
-                    var profileId = entry.Value;
-                    await TrackedUserDataWrites.Run(profileId, async () =>
-                    {
-                        int firQty, nonFirQty;
-                        lock (_lock)
-                        {
-                            if (_inventoryData.Items.TryGetValue(itemName, out var inv))
-                            {
-                                firQty = inv.FirQuantity;
-                                nonFirQty = inv.NonFirQuantity;
-                            }
-                            else
-                            {
-                                firQty = 0;
-                                nonFirQty = 0;
-                            }
-                        }
-                        await _userDataDb.SaveItemInventoryAsync(itemName, firQty, nonFirQty, profileId);
-                    });
+                    if (_pendingSaves.Count == 0) return;
+                    itemNames = _pendingSaves.Keys.ToList();
                 }
-            }).GetAwaiter().GetResult();
+
+                foreach (var itemName in itemNames)
+                {
+                    string profileId;
+                    lock (_lock)
+                    {
+                        // Already claimed by a concurrent flush, or discarded by a reset.
+                        if (!_pendingSaves.TryGetValue(itemName, out var pending)) continue;
+                        profileId = pending;
+                    }
+
+                    await TrackedUserDataWrites.RunLoggingFailures(
+                        profileId,
+                        $"item inventory {itemName}",
+                        async () =>
+                        {
+                            int firQty, nonFirQty;
+                            lock (_lock)
+                            {
+                                // The claim, made only now that the barrier has been passed and
+                                // this write is registered against it. A reset that got in first
+                                // removed the entry, and the quantity it described is gone from
+                                // the store: writing it back is the resurrection the barrier
+                                // exists to stop. A re-dirty under a different profile belongs
+                                // to that profile's own pending write.
+                                if (!_pendingSaves.TryGetValue(itemName, out var pending)
+                                    || !string.Equals(pending, profileId, StringComparison.Ordinal))
+                                {
+                                    return;
+                                }
+                                _pendingSaves.Remove(itemName);
+
+                                if (_inventoryData.Items.TryGetValue(itemName, out var inv))
+                                {
+                                    firQty = inv.FirQuantity;
+                                    nonFirQty = inv.NonFirQuantity;
+                                }
+                                else
+                                {
+                                    firQty = 0;
+                                    nonFirQty = 0;
+                                }
+                            }
+                            await _userDataDb.SaveItemInventoryAsync(itemName, firQty, nonFirQty, profileId);
+                        });
+                }
+            }
+            catch (Exception ex)
+            {
+                // RunLoggingFailures already swallows and logs each write's own failure, so
+                // reaching here means the flush itself broke. Log it rather than leave an
+                // unobserved task exception behind the fire-and-forget timer call.
+                _log.Error("Flushing pending item inventory saves failed", ex);
+            }
         }
 
         /// <summary>
@@ -271,9 +313,15 @@ namespace TarkovHelper.Services
         /// <summary>
         /// Drops every pending debounced save captured for <paramref name="profileId"/>,
         /// leaving other profiles' entries in place. Called by <see cref="ProfileResetService"/>
-        /// under the reset barrier (so no flush is mid-flight): these entries describe
-        /// quantities the reset transaction is about to delete, and flushing them first would
-        /// write rows only to remove them.
+        /// under the reset barrier: these entries describe quantities the reset transaction is
+        /// about to delete, and flushing them first would write rows only to remove them.
+        /// <para>
+        /// A flush CAN be running concurrently. It claims each entry from inside its own tracked
+        /// write, which cannot start while the barrier is up, so an entry still here has not
+        /// been claimed and removing it makes that write a no-op; an entry already claimed
+        /// belongs to a write the barrier's drain waited out, and its row is deleted by the
+        /// transaction that follows.
+        /// </para>
         /// </summary>
         public void DiscardPendingSaves(string profileId)
         {
@@ -352,13 +400,21 @@ namespace TarkovHelper.Services
         /// transition this load serves, so a load that loses a race discards itself instead of
         /// publishing over the newer one.
         /// </para>
+        /// <para>
+        /// The flush is awaited, not blocked on. ProfileService raises ActiveProfileChanged
+        /// synchronously, so a blocking flush froze the whole raise (every later subscriber
+        /// included) for as long as a pending entry's profile was held by a reset barrier, and
+        /// deadlocked outright when the raising thread was the dispatcher the reset needs to
+        /// finish. Awaiting returns the raising thread at the first suspension and keeps the
+        /// flush-before-load ordering the swap depends on.
+        /// </para>
         /// </summary>
         public async Task ReloadForProfileAsync(AppProfile profile, long revision)
         {
             var profileId = ProfileService.GetProfileId(profile);
 
             _saveTimer?.Stop();
-            SavePendingItems();
+            await SavePendingItemsAsync();
 
             if (!await LoadInventoryFromDbAsync(profileId, revision)) return;
 

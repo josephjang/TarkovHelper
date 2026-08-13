@@ -117,6 +117,17 @@ public class SettingsService
     /// the changed events exactly as a profile switch would. A reset of a profile that is not
     /// active touches no cached value here, so nothing needs reloading. Called by
     /// <see cref="ProfileResetService"/> strictly AFTER the store transaction commits.
+    /// <para>
+    /// This is the only reset hook that compares the target against the SELECTED profile instead
+    /// of against a captured loaded-profile field, and that is deliberate: every profile-scoped
+    /// read in this service goes through <see cref="GetProfileSetting"/>, which resolves the
+    /// selection at call time, so the selection IS the identity of the cached values and there is
+    /// no other identity to guard against. The read below is synchronous, on the thread that calls
+    /// the hook, before any reload. Giving the cache an identity of its own would mean carrying an
+    /// explicit profile id through the whole get/save pair, which is SPA-1 work; see the
+    /// "SettingsService profile ownership" note under Non-Goals in
+    /// docs/decisions/feature-complete-profile-reset.spec.md.
+    /// </para>
     /// </summary>
     public void HandleProfileReset(string profileId)
     {

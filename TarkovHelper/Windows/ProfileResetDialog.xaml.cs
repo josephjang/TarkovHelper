@@ -1,7 +1,9 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Windows;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
+using TarkovHelper.Services.Logging;
 
 namespace TarkovHelper.Windows;
 
@@ -17,10 +19,28 @@ namespace TarkovHelper.Windows;
 /// </summary>
 public partial class ProfileResetDialog : Window
 {
+    private static readonly ILogger _log = Log.For<ProfileResetDialog>();
+
+    /// <summary>
+    /// How long the dialog refuses to close while a reset runs, before it hands the window back
+    /// to the player. Sized off the service's own bound plus a margin, so the refusal always
+    /// outlives a reset that reports an outcome by itself; a run that outlives THIS has wedged
+    /// somewhere no timeout reached, and a destructive modal must not be unclosable forever.
+    /// ShowDialog disables the main window behind it and a cancelled close defeats the Close
+    /// button, Alt+F4 and Application.Current.Shutdown alike, which would leave Task Manager as
+    /// the only way out.
+    /// </summary>
+    internal static readonly TimeSpan CloseRefusalLimit =
+        ProfileResetService.MaxDuration + TimeSpan.FromSeconds(15);
+
     private readonly LocalizationService _loc = LocalizationService.Instance;
     private readonly AppProfile _target;
     private readonly Func<Task<ProfileResetOutcome>> _runReset;
+
+    /// <summary>Monotonic age of the current run; drives <see cref="CloseRefusalLimit"/>.</summary>
+    private readonly Stopwatch _runElapsed = new();
     private bool _isRunning;
+    private bool _isClosed;
 
     /// <summary>True once a reset ran and succeeded; the caller refreshes its pages on it.</summary>
     public bool ResetSucceeded { get; private set; }
@@ -50,17 +70,29 @@ public partial class ProfileResetDialog : Window
 
         // Warn, never block (PRD R8): raid detection can be stale or wrong, and the player
         // decides when their season ends, not the raid detector.
-        var raidState = EftRaidEventService.Instance.CurrentRaid?.State;
+        var raidService = EftRaidEventService.Instance;
         RaidWarningBorder.Visibility =
-            raidState is RaidState.Matching or RaidState.Connecting or RaidState.InRaid
+            ShouldWarnAboutRaid(raidService.IsMonitoring, raidService.CurrentRaid?.State)
                 ? Visibility.Visible
                 : Visibility.Collapsed;
     }
+
+    /// <summary>
+    /// Whether the confirmation shows its raid warning. A raid state is only meaningful while the
+    /// watcher is running: StopMonitoring leaves the last CurrentRaid standing, so a session whose
+    /// watcher stopped after a raid (a failed StartMonitoring restart, monitoring turned off)
+    /// still reports InRaid forever. This is the rule HeaderSyncStatus.GetState applies to the
+    /// title-bar chip, and a warning that cries wolf is worse than none: it is the PRD's only
+    /// mitigation for the real mid-raid risk.
+    /// </summary>
+    internal static bool ShouldWarnAboutRaid(bool monitoring, RaidState? raidState)
+        => monitoring && raidState is RaidState.Matching or RaidState.Connecting or RaidState.InRaid;
 
     private async void BtnConfirmReset_Click(object sender, RoutedEventArgs e)
     {
         if (_isRunning) return;
         _isRunning = true;
+        _runElapsed.Restart();
         BtnConfirmReset.IsEnabled = false;
         BtnCancelReset.IsEnabled = false;
         TxtResetWorking.Visibility = Visibility.Visible;
@@ -75,14 +107,27 @@ public partial class ProfileResetDialog : Window
             // ProfileResetService reports failure as an outcome, but the delegate is
             // caller-supplied; an escaping exception from an async void handler would take the
             // process down, so it is folded into the same failure rendering.
-            outcome = new ProfileResetOutcome(false, ex.Message);
+            outcome = ProfileResetOutcome.Failed(ex);
         }
         finally
         {
             _isRunning = false;
+            _runElapsed.Stop();
         }
 
         ResetSucceeded = outcome.Success;
+
+        if (_isClosed)
+        {
+            // The close backstop already handed the window back, so ShowDialog has returned and
+            // the caller has read ResetSucceeded as false. There is no result state left to
+            // render into; the log is where this outcome survives.
+            _log.Warning(
+                $"The profile reset finished after its dialog was force-closed (status={outcome.Status}): " +
+                (outcome.Error ?? "no further detail"));
+            return;
+        }
+
         ShowResult(outcome);
     }
 
@@ -91,40 +136,63 @@ public partial class ProfileResetDialog : Window
         ConfirmPanel.Visibility = Visibility.Collapsed;
         ResultPanel.Visibility = Visibility.Visible;
 
-        if (outcome.Success)
+        TxtResetResult.Text = ResultHeadline(_loc, outcome, _target);
+
+        // Only a failure carries a library-level detail ("database is locked"), and the outcome
+        // factories guarantee that one is never blank, so there is nothing to defend against here
+        // beyond the two statuses that legitimately have no detail to show.
+        if (outcome.Error != null)
         {
-            TxtResetResult.Text = string.Format(
-                _loc.ProfileResetSuccessFormat, _loc.ProfileName(_target));
-        }
-        else
-        {
-            TxtResetResult.Text = _loc.ProfileResetFailedText;
-            if (!string.IsNullOrEmpty(outcome.Error))
-            {
-                TxtResetError.Text = outcome.Error;
-                TxtResetError.Visibility = Visibility.Visible;
-            }
+            TxtResetError.Text = outcome.Error;
+            TxtResetError.Visibility = Visibility.Visible;
         }
     }
 
     /// <summary>
-    /// Declining changes nothing (PRD R2): the dialog closes without invoking the reset.
+    /// The headline for <paramref name="outcome"/>. Each status gets its own sentence because they
+    /// promise different things: only <see cref="ProfileResetStatus.Failed"/> may state PRD R5's
+    /// "nothing was removed", while an abandoned store wait does not know whether the transaction
+    /// committed and has to say so rather than borrow a guarantee it cannot make.
+    /// </summary>
+    internal static string ResultHeadline(
+        LocalizationService loc, ProfileResetOutcome outcome, AppProfile target)
+        => outcome.Status switch
+        {
+            ProfileResetStatus.Succeeded =>
+                string.Format(loc.ProfileResetSuccessFormat, loc.ProfileName(target)),
+            ProfileResetStatus.Abandoned => loc.ProfileResetAbandonedText,
+            _ => loc.ProfileResetFailedText,
+        };
+
+    /// <summary>
+    /// Declining changes nothing (PRD R2): the dialog closes without invoking the reset. Shared
+    /// with Escape, which reaches this button through its IsCancel flag.
     /// </summary>
     private void BtnCancelReset_Click(object sender, RoutedEventArgs e) => Close();
 
+    /// <summary>Dismisses the result state; Escape reaches it through IsCancel too.</summary>
     private void BtnCloseReset_Click(object sender, RoutedEventArgs e) => Close();
 
     /// <summary>
-    /// While the reset transaction runs the dialog cannot be dismissed: closing mid-run would
-    /// leave the player without the outcome the result state exists to deliver.
+    /// While the reset transaction runs the dialog resists dismissal: closing mid-run would leave
+    /// the player without the outcome the result state exists to deliver. The resistance is
+    /// bounded by <see cref="CloseRefusalLimit"/>, because refusing forever is the worse failure:
+    /// losing one outcome message beats a modal that nothing on the machine can dismiss.
     /// </summary>
     protected override void OnClosing(CancelEventArgs e)
     {
-        if (_isRunning)
+        if (_isRunning && _runElapsed.Elapsed < CloseRefusalLimit)
         {
             e.Cancel = true;
             return;
         }
+
         base.OnClosing(e);
+
+        // Only after the base call, which is where a subscriber could still cancel the close.
+        if (!e.Cancel)
+        {
+            _isClosed = true;
+        }
     }
 }
