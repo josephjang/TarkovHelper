@@ -1,0 +1,2748 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Profile Data Attribution - Deep Review Guide</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Ground, structure and accent inherited verbatim from
+         docs/2026-08-profile-data-attribution-code-guide.html, which took them from
+         docs/2026-08-game-mode-selector-ux-review.html. The three documents are one set;
+         a reader moving between them should not notice a change of house. */
+      --page: #101010;
+      --surface: #181818;
+      --surface-2: #222222;
+      --surface-3: #2d2d2d;
+      --line: #3d3d3d;
+      --line-soft: #2a2a2a;
+      --text: #e0e0e0;
+      --muted: #9e9e9e;
+      --dim: #737373;
+
+      /* Accent: the app's own AccentBrush. */
+      --gold: #c5a84a;
+      --gold-hover: #d4b85a;
+      --gold-ink: #19170f;
+
+      /* Profile hues. These are a LAW, not decoration: the same profile is the same
+         colour in every diagram, timeline and partition across all three documents. */
+      --pvp: #5ea9e8;
+      --pve: #4caf50;
+      --season: #ff9800;
+
+      /* Reserved for data that landed in the wrong place. Never used for anything else. */
+      --wrong: #ef5350;
+      --right: #4caf50;
+
+      /* New in part 2, and the only token this document adds. Its subject is what the
+         suite could not see, so it needs a colour for "present in production, absent
+         from every test": the bytes past the read cap, the row spelling the fake never
+         produced. Deliberately desaturated, so it reads as absence rather than as a
+         fourth profile. */
+      --hidden: #566270;
+      --hidden-ink: #8fa0b2;
+
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+
+      --body: "Segoe UI", "Noto Sans", system-ui, sans-serif;
+      --mono: Consolas, "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      /* Painted explicitly: the page commits to one dark world (as its two siblings do),
+         so it must carry its own ground rather than borrow the host's. */
+      background:
+        radial-gradient(circle at 86% -14%, rgba(239, 83, 80, .09), transparent 34rem),
+        radial-gradient(circle at 10% -10%, rgba(197, 168, 74, .1), transparent 36rem),
+        var(--page);
+      color: var(--text);
+      font-family: var(--body);
+      line-height: 1.55;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    }
+
+    button, input, select { font: inherit; }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* ---------- shell ---------- */
+
+    .shell {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      gap: 44px;
+      width: min(1320px, calc(100% - 44px));
+      margin: 0 auto;
+      padding: 56px 0 96px;
+      align-items: start;
+    }
+
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .rail { position: static; margin-bottom: 40px; }
+    }
+
+    .rail {
+      position: sticky;
+      top: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 18px 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: rgba(24, 24, 24, .84);
+      backdrop-filter: blur(10px);
+    }
+
+    .rail-title {
+      margin: 0 0 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .rail a {
+      display: grid;
+      grid-template-columns: 26px 1fr;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 13.5px;
+      text-decoration: none;
+      transition: background .15s, color .15s;
+    }
+
+    .rail a:hover { background: var(--surface-2); color: var(--text); }
+    .rail a .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+    .rail a.is-lab { color: var(--gold); }
+    .rail a.is-lab .n { color: var(--gold); }
+
+    .rail-back {
+      margin: 0 0 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 12.5px;
+      color: var(--dim);
+    }
+
+    .rail-back a { display: block; padding: 0; color: var(--muted); font-size: 12.5px; }
+
+    .rail-gate {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line-soft);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    .rail-gate strong { display: block; color: var(--text); font-size: 13px; }
+
+    .gate-meter {
+      height: 5px;
+      margin-top: 8px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .gate-meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--gold);
+      transition: width .3s ease;
+    }
+
+    /* ---------- type ---------- */
+
+    main { max-width: 100%; }
+
+    .eyebrow {
+      margin: 0;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    h1 {
+      max-width: 17ch;
+      margin: 12px 0 18px;
+      font-size: clamp(38px, 5.6vw, 70px);
+      font-weight: 800;
+      line-height: 1.0;
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+
+    .lede {
+      max-width: 62ch;
+      margin: 0 0 14px;
+      font-size: 19px;
+      color: #c2c2c2;
+    }
+
+    h2 {
+      margin: 0 0 6px;
+      font-size: clamp(24px, 3vw, 33px);
+      font-weight: 800;
+      letter-spacing: -.03em;
+      line-height: 1.12;
+      text-wrap: balance;
+    }
+
+    h3 {
+      margin: 30px 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    p, li { max-width: 68ch; }
+    p { margin: 0 0 14px; }
+    ul, ol { margin: 0 0 14px; padding-left: 22px; }
+    li { margin-bottom: 7px; }
+
+    strong { color: #f0f0f0; }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: #ddc98a;
+      font-family: var(--mono);
+      font-size: .88em;
+    }
+
+    a { color: var(--gold); }
+
+    section { margin-bottom: 68px; scroll-margin-top: 24px; }
+
+    .chapter-head {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 16px;
+      align-items: baseline;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .chapter-num {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      color: var(--gold);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kicker {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 62ch;
+    }
+
+    /* ---------- hero strip ---------- */
+
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 22px 0 8px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 7px;
+      padding: 6px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: 99px;
+      background: var(--surface);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    .chip b { color: var(--text); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .chip.is-alert { border-color: rgba(239, 83, 80, .45); background: rgba(239, 83, 80, .08); }
+    .chip.is-alert b { color: #f5b7b5; }
+
+    /* ---------- callouts ---------- */
+
+    .note {
+      margin: 22px 0;
+      padding: 16px 18px;
+      border-left: 3px solid var(--gold);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: linear-gradient(100deg, rgba(197, 168, 74, .1), rgba(197, 168, 74, .02));
+    }
+
+    .note p:last-child { margin-bottom: 0; }
+
+    .note-label {
+      margin: 0 0 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .note.is-wrong { border-left-color: var(--wrong); background: linear-gradient(100deg, rgba(239, 83, 80, .1), transparent); }
+    .note.is-wrong .note-label { color: var(--wrong); }
+
+    .note.is-hidden { border-left-color: var(--hidden-ink); background: linear-gradient(100deg, rgba(86, 98, 112, .16), transparent); }
+    .note.is-hidden .note-label { color: var(--hidden-ink); }
+
+    /* ---------- code ---------- */
+
+    .code {
+      margin: 18px 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #141414;
+      overflow: hidden;
+    }
+
+    .code-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .code pre {
+      margin: 0;
+      padding: 14px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.62;
+      tab-size: 2;
+    }
+
+    .code .del { display: block; background: rgba(239, 83, 80, .12); color: #f0b3b1; }
+    .code .add { display: block; background: rgba(76, 175, 80, .12); color: #b3e0b5; }
+    .code .cmt { color: var(--dim); }
+
+    /* ---------- defect ledger ---------- */
+
+    .ledger {
+      margin: 22px 0 6px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      overflow-x: auto;
+    }
+
+    .ledger table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 560px; }
+
+    .ledger th {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      text-align: left;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+      white-space: nowrap;
+    }
+
+    .ledger td { padding: 11px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+    .ledger tr:last-child td { border-bottom: 0; }
+    .ledger td:first-child { font-family: var(--mono); font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+    .ledger td p { margin: 0; max-width: 52ch; }
+    .ledger .sev { font-weight: 700; white-space: nowrap; }
+    .ledger .sev[data-s="silent"] { color: var(--wrong); }
+    .ledger .sev[data-s="loud"] { color: var(--season); }
+    .ledger .sev[data-s="hidden"] { color: var(--hidden-ink); }
+
+    /* ---------- labs ---------- */
+
+    .lab {
+      margin: 34px 0 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .lab-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      align-items: baseline;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line-soft);
+      background: linear-gradient(180deg, rgba(197, 168, 74, .07), transparent);
+    }
+
+    .lab-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .lab-head h3 { margin: 0; font-size: 19px; }
+    .lab-head .sub { width: 100%; margin: 2px 0 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
+
+    .lab-body { padding: 20px; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    .ctl-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .seg {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      background: var(--surface-2);
+      gap: 3px;
+      flex-wrap: wrap;
+    }
+
+    .seg button {
+      padding: 6px 14px;
+      border: 0;
+      border-radius: 99px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+
+    .seg button:hover { color: var(--text); }
+    .seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); }
+    .seg button[aria-pressed="true"][data-profile="pvp"] { background: rgba(94, 169, 232, .2); color: var(--pvp); }
+    .seg button[aria-pressed="true"][data-profile="pve"] { background: rgba(76, 175, 80, .2); color: var(--pve); }
+    .seg button[aria-pressed="true"][data-profile="season"] { background: rgba(255, 152, 0, .2); color: var(--season); }
+    .seg.is-mode button[aria-pressed="true"][data-mode="before"] { background: rgba(239, 83, 80, .2); color: var(--wrong); }
+    .seg.is-mode button[aria-pressed="true"][data-mode="after"] { background: rgba(76, 175, 80, .2); color: var(--right); }
+
+    .btn {
+      padding: 8px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+
+    .btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--gold); }
+    .btn:disabled { opacity: .42; cursor: not-allowed; }
+    .btn.is-primary { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+    .btn.is-primary:hover:not(:disabled) { background: var(--gold-hover); }
+
+    .stat {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .stat .k {
+      margin: 0 0 4px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .stat .v {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
+    }
+
+    .stat.is-alert { border-color: rgba(239, 83, 80, .55); background: rgba(239, 83, 80, .08); }
+
+    .v[data-p="pvp"] { color: var(--pvp); }
+    .v[data-p="pve"] { color: var(--pve); }
+    .v[data-p="season"] { color: var(--season); }
+    .v[data-p="none"] { color: var(--wrong); }
+    .v[data-p="hidden"] { color: var(--hidden-ink); }
+
+    .readout {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .verdict {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: var(--surface-2);
+      font-size: 14.5px;
+    }
+
+    .verdict[data-tone="bad"] { border-color: rgba(239, 83, 80, .5); background: rgba(239, 83, 80, .08); }
+    .verdict[data-tone="good"] { border-color: rgba(76, 175, 80, .45); background: rgba(76, 175, 80, .07); }
+    .verdict b { display: block; margin-bottom: 3px; }
+
+    /* Lab A: the read cap. A log drawn as bytes, not as time. */
+
+    .logmap { margin: 6px 0 4px; }
+
+    .logmap-scale {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 6px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--dim);
+    }
+
+    .logbar {
+      position: relative;
+      height: 46px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .logbar .seen {
+      position: absolute;
+      inset: 0 auto 0 0;
+      background: linear-gradient(180deg, rgba(197, 168, 74, .22), rgba(197, 168, 74, .08));
+      border-right: 2px solid var(--gold);
+      transition: width .35s ease;
+    }
+
+    .logbar .unseen {
+      position: absolute;
+      inset: 0 0 0 auto;
+      background: repeating-linear-gradient(45deg, #23272c, #23272c 5px, #1c1f23 5px, #1c1f23 10px);
+      transition: width .35s ease;
+    }
+
+    .tick {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      transform: translateX(-50%);
+      border-radius: 2px;
+      transition: opacity .3s ease, filter .3s ease;
+    }
+
+    .tick[data-p="pvp"] { background: var(--pvp); }
+    .tick[data-p="pve"] { background: var(--pve); }
+    .tick[data-p="season"] { background: var(--season); }
+    .tick.is-unread { opacity: .34; filter: grayscale(1); }
+
+    .tick-labels { position: relative; height: 40px; margin-top: 6px; }
+
+    .tick-label {
+      position: absolute;
+      top: 0;
+      transform: translateX(-50%);
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      line-height: 1.35;
+      white-space: nowrap;
+      color: var(--muted);
+    }
+
+    .tick-label b { display: block; font-weight: 700; }
+    .tick-label[data-p="pvp"] b { color: var(--pvp); }
+    .tick-label[data-p="pve"] b { color: var(--pve); }
+    .tick-label[data-p="season"] b { color: var(--season); }
+    .tick-label.is-unread { color: var(--dim); }
+    .tick-label.is-unread b { color: var(--hidden-ink); }
+
+    .cap-flag {
+      position: absolute;
+      top: -1px;
+      bottom: -1px;
+      width: 2px;
+      background: var(--wrong);
+      transform: translateX(-50%);
+    }
+
+    .cap-flag::after {
+      content: "4 MB cap";
+      position: absolute;
+      top: 4px;
+      left: 6px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: rgba(239, 83, 80, .9);
+      color: #180d0d;
+      font-family: var(--mono);
+      font-size: 9.5px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    /* Lab B: the calendar. */
+
+    .locales { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+
+    .loc {
+      padding: 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .loc .tag {
+      margin: 0 0 8px;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--gold);
+    }
+
+    .loc .cal { margin: 0 0 10px; font-size: 12px; color: var(--dim); }
+    .loc dl { margin: 0; display: grid; gap: 8px; }
+    .loc dt { font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+    .loc dd {
+      margin: 2px 0 0;
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .loc dd.is-bad { color: var(--wrong); }
+    .loc dd.is-good { color: var(--right); }
+    .loc.is-broken { border-color: rgba(239, 83, 80, .45); background: rgba(239, 83, 80, .07); }
+
+    /* Lab C: the snapshot dictionary. */
+
+    .dictwrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+
+    @media (max-width: 860px) { .dictwrap { grid-template-columns: minmax(0, 1fr); } }
+
+    .dict {
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #141414;
+      overflow: hidden;
+    }
+
+    .dict-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+
+    .dict-rows { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-height: 118px; }
+
+    .entry {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 7px 10px;
+      border-radius: 6px;
+      background: var(--surface-3);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      animation: drop .28s ease both;
+    }
+
+    @keyframes drop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+    .entry .key { overflow-wrap: anywhere; color: #cfcfcf; }
+    .entry .val { font-weight: 700; white-space: nowrap; }
+    .entry .val[data-s="Done"] { color: var(--right); }
+    .entry .val[data-s="Failed"] { color: var(--season); }
+    .entry.is-stale { background: rgba(239, 83, 80, .18); }
+    .entry.is-stale .key { color: #f5b7b5; }
+    .entry.is-fresh { background: rgba(76, 175, 80, .16); }
+    .dict-empty { padding: 12px; color: var(--dim); font-size: 12.5px; font-style: italic; }
+
+    .keytag {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 0 5px;
+      border-radius: 3px;
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      vertical-align: 1px;
+    }
+
+    .keytag[data-k="name"] { background: rgba(94, 169, 232, .2); color: var(--pvp); }
+    .keytag[data-k="id"] { background: rgba(197, 168, 74, .2); color: var(--gold); }
+
+    /* Lab D: beats, inherited shape from part 1's race stepper. */
+
+    .lanes { display: grid; gap: 10px; }
+
+    .lane {
+      display: grid;
+      grid-template-columns: 138px minmax(0, 1fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    @media (max-width: 720px) { .lane { grid-template-columns: minmax(0, 1fr); } }
+
+    .lane-name {
+      display: flex;
+      align-items: center;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      font-size: 11.5px;
+      font-weight: 700;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .lane-track { display: flex; gap: 6px; }
+
+    .beat {
+      flex: 1;
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px dashed var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--dim);
+      font-size: 12px;
+      line-height: 1.35;
+      transition: background .2s, border-color .2s, color .2s;
+    }
+
+    .beat.is-on { border-style: solid; border-color: var(--gold); background: rgba(197, 168, 74, .12); color: var(--text); }
+    .beat.is-done { border-style: solid; border-color: var(--line); color: var(--muted); }
+
+    .partitions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+
+    @media (max-width: 620px) { .partitions { grid-template-columns: minmax(0, 1fr); } }
+
+    .part {
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      overflow: hidden;
+      min-height: 120px;
+    }
+
+    .part-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 12.5px;
+      font-weight: 700;
+    }
+
+    .part-head .count { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+    .part[data-p="pvp"] .part-head { color: var(--pvp); background: rgba(94, 169, 232, .1); }
+    .part[data-p="pve"] .part-head { color: var(--pve); background: rgba(76, 175, 80, .1); }
+    .part[data-p="season"] .part-head { color: var(--season); background: rgba(255, 152, 0, .1); }
+
+    .part-rows { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 9px;
+      border-radius: 6px;
+      background: var(--surface-3);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      animation: drop .28s ease both;
+    }
+
+    .row .src { color: var(--dim); }
+    .row.is-lost { background: rgba(239, 83, 80, .18); color: #f5b7b5; }
+    .part-empty { padding: 14px 12px; color: var(--dim); font-size: 12.5px; font-style: italic; }
+
+    /* ---------- quiz ---------- */
+
+    .quiz-intro {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 26px;
+      padding: 18px 20px;
+      border: 1px solid rgba(197, 168, 74, .35);
+      border-radius: var(--radius);
+      background: linear-gradient(110deg, rgba(197, 168, 74, .12), rgba(197, 168, 74, .02));
+    }
+
+    .quiz-score {
+      display: grid;
+      place-items: center;
+      min-width: 62px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      color: var(--gold);
+    }
+
+    .q {
+      margin-bottom: 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .q[data-state="right"] { border-color: rgba(76, 175, 80, .55); }
+    .q[data-state="wrong"] { border-color: rgba(239, 83, 80, .5); }
+
+    .q-head { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 16px 18px 10px; }
+
+    .q-num {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--gold);
+      padding-top: 3px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .q-text { margin: 0; font-size: 15.5px; font-weight: 600; max-width: 72ch; }
+
+    .q-opts { display: grid; gap: 7px; padding: 4px 18px 16px 44px; }
+
+    .opt {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      cursor: pointer;
+      font-size: 14px;
+      transition: border-color .15s, background .15s;
+    }
+
+    .opt:hover { border-color: var(--line); background: var(--surface-3); }
+    .opt input { margin: 3px 0 0; accent-color: var(--gold); }
+    .opt.is-right { border-color: rgba(76, 175, 80, .6); background: rgba(76, 175, 80, .1); }
+    .opt.is-wrong { border-color: rgba(239, 83, 80, .55); background: rgba(239, 83, 80, .1); }
+
+    .q-why {
+      display: none;
+      margin: 0 18px 16px 44px;
+      padding: 12px 14px;
+      border-left: 3px solid var(--line);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: var(--surface-2);
+      font-size: 13.5px;
+      color: #c4c4c4;
+    }
+
+    .q-why p { margin: 0; max-width: 74ch; }
+    .q[data-state] .q-why { display: block; }
+    .q[data-state="right"] .q-why { border-left-color: var(--right); }
+    .q[data-state="wrong"] .q-why { border-left-color: var(--wrong); }
+
+    .q-why .verdict-word { font-weight: 700; }
+    .q[data-state="right"] .verdict-word { color: var(--right); }
+    .q[data-state="wrong"] .verdict-word { color: var(--wrong); }
+
+    .gate {
+      margin-top: 30px;
+      padding: 22px 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .gate.is-locked { border-style: dashed; color: var(--muted); }
+    .gate.is-open { border-color: rgba(76, 175, 80, .55); background: linear-gradient(150deg, rgba(76, 175, 80, .1), transparent); }
+
+    .gate h3 { margin: 0 0 8px; }
+    .gate ul { margin-top: 10px; }
+
+    .approval {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: #141414;
+      border: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: #b9d8bb;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    footer {
+      margin-top: 22px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--dim);
+      font-size: 13px;
+    }
+
+    footer a { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="rail" aria-label="Guide contents">
+      <p class="rail-title">Part 2</p>
+      <p class="rail-back">
+        Assumes part 1:
+        <a href="2026-08-profile-data-attribution-code-guide.html">Progress that knows where it came from</a>
+      </p>
+      <a href="#ch1"><span class="n">01</span><span>Why nothing failed</span></a>
+      <a href="#ch2"><span class="n">02</span><span>The timeline stopped reading</span></a>
+      <a href="#lab-a" class="is-lab"><span class="n">LAB</span><span>Read to exhaustion</span></a>
+      <a href="#ch3"><span class="n">03</span><span>A calendar nobody chose</span></a>
+      <a href="#lab-b" class="is-lab"><span class="n">LAB</span><span>The ambient parse</span></a>
+      <a href="#ch4"><span class="n">04</span><span>One quest, two rows</span></a>
+      <a href="#lab-c" class="is-lab"><span class="n">LAB</span><span>The stale spelling</span></a>
+      <a href="#ch5"><span class="n">05</span><span>The write thrown away</span></a>
+      <a href="#lab-d" class="is-lab"><span class="n">LAB</span><span>The lost swap</span></a>
+      <a href="#ch6"><span class="n">06</span><span>What the player is told</span></a>
+      <a href="#ch7"><span class="n">07</span><span>Ordering and atomicity</span></a>
+      <a href="#ch8"><span class="n">08</span><span>What was deleted</span></a>
+      <a href="#quiz"><span class="n">09</span><span>Comprehension gate</span></a>
+      <div class="rail-gate">
+        <strong id="railGateLabel">Gate locked</strong>
+        <span id="railGateHint">0 of 8 correct</span>
+        <div class="gate-meter"><i id="railGateBar"></i></div>
+      </div>
+    </nav>
+
+    <main>
+      <p class="eyebrow">PR #38 &middot; Code guide, part 2</p>
+      <h1>A green suite that proved nothing</h1>
+      <p class="lede">
+        Part 1 explained why attribution has to travel with the data. This is what happened when
+        that design met a real log file, a real store, and a real thread pool. The design held.
+        The implementation shipped a dozen defects that defeated the attribution it exists to
+        provide, and one of them explains why none of the others failed a test.
+      </p>
+      <p class="lede">
+        Everything here is commit <code>c31ee51</code>, which landed after part 1 was written.
+        If you read the code guide and stopped, you have reviewed roughly half of this PR.
+      </p>
+
+      <div class="hero-meta">
+        <span class="chip">Non-test files <b>16</b></span>
+        <span class="chip">Lines <b>+1354 / -716</b></span>
+        <span class="chip">Tests added or tightened <b>37</b></span>
+        <span class="chip">Suite <b>539 passed, 1 skipped</b></span>
+        <span class="chip is-alert">Defects that were silent <b>most of them</b></span>
+      </div>
+
+      <!-- ===================== CHAPTER 1 ===================== -->
+      <section id="ch1">
+        <div class="chapter-head">
+          <span class="chapter-num">01</span>
+          <div>
+            <h2>Why nothing failed</h2>
+            <p class="kicker">
+              Start here, because it is the reason the rest exists. One test double disagreed with
+              production about a single question, and that disagreement made most of this chapter
+              list invisible.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The store has a key policy. When <code>UserDataDbService.LoadQuestProgressAsync</code>
+          reads a partition back, it keys each row by <code>normalizedName ?? id</code>, taken from
+          the row. So a quest that carries a name comes back <strong>name-keyed</strong>, and only a
+          legacy row with no name comes back id-keyed.
+        </p>
+
+        <p>
+          <code>ProgressStoreFake</code>, the double every unit test writes through, keyed rows by
+          the raw <code>Id</code> it was handed. Both are internally consistent. Neither is wrong on
+          its own terms. But they answer differently, so a test that saved a row and read it back
+          got a dictionary shaped in a way production never produces, and every assertion written
+          against that shape held for the wrong reason.
+        </p>
+
+        <div class="note is-hidden">
+          <p class="note-label">The class of bug, not the instance</p>
+          <p>
+            A test double is a claim about the collaborator it replaces. When the claim is wrong,
+            the suite does not get weaker in a way you can see: it stays green, gets faster, and
+            keeps agreeing with itself. Every defect in chapter 4 lived in the gap between those two
+            key policies, and no amount of additional testing <em>through the fake</em> would have
+            found them.
+          </p>
+        </div>
+
+        <p>
+          The fix is on both sides, and the durable half is the second one. The fake now keys the way
+          the store does, and a new test pins the production policy directly so the two cannot drift
+          apart again:
+          <code>ProgressStoreFakeTests.The_real_store_still_reads_by_name_first_and_deletes_by_either_spelling</code>.
+          That test asserts nothing about the fake. Its whole job is to fail when
+          <code>UserDataDbService</code> changes and the double does not.
+        </p>
+
+        <h3>The four bands, and how loud each one was</h3>
+        <p>
+          What follows is the full ledger. The severity column is not about how hard a defect was to
+          fix; it is about whether a player would ever find out. That is the property that matters
+          for a change whose entire purpose is writing data to the right place.
+        </p>
+
+        <div class="ledger">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Where</th>
+                <th scope="col">What went wrong</th>
+                <th scope="col">Symptom</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>SessionModeTimeline</td>
+                <td><p>Built the timeline from a single capped read, so transitions past 4 MB were never seen.</p></td>
+                <td class="sev" data-s="silent">Silent, and confident</td>
+              </tr>
+              <tr>
+                <td>EftLogPatterns</td>
+                <td><p>Parsed timestamps with the ambient culture, so a non-Gregorian calendar moved every entry centuries away.</p></td>
+                <td class="sev" data-s="loud">Loud: nothing syncs</td>
+              </tr>
+              <tr>
+                <td>QuestProgressService</td>
+                <td><p>One quest could hold two snapshot entries, and the dual-key read answered from the stale one.</p></td>
+                <td class="sev" data-s="silent">Silent: a click does nothing</td>
+              </tr>
+              <tr>
+                <td>QuestProgressService</td>
+                <td><p>A lost compare-and-swap discarded the write instead of filing it off screen.</p></td>
+                <td class="sev" data-s="silent">Silent, unrecoverable</td>
+              </tr>
+              <tr>
+                <td>LogSyncService</td>
+                <td><p>Reported rows queued rather than rows written, and a thrown partition was indistinguishable from an untouched one.</p></td>
+                <td class="sev" data-s="loud">A number that lies</td>
+              </tr>
+              <tr>
+                <td>LogSyncService</td>
+                <td><p>A bare <code>catch</code> around the live path swallowed the exception and the whole batch of events with it.</p></td>
+                <td class="sev" data-s="silent">Silent: a raid never registers</td>
+              </tr>
+              <tr>
+                <td>MainWindow</td>
+                <td><p>An <code>async void</code> handler lost the serialization the old blocking code had by accident.</p></td>
+                <td class="sev" data-s="silent">Silent: last writer wins</td>
+              </tr>
+              <tr>
+                <td>ProfileService</td>
+                <td><p>Selection and revision were assigned and read as two separate fields.</p></td>
+                <td class="sev" data-s="hidden">Rare, and undetectable</td>
+              </tr>
+              <tr>
+                <td>Hideout, Inventory</td>
+                <td><p>Still carried the exact defect this PR had just removed from quests.</p></td>
+                <td class="sev" data-s="hidden">Never looked at</td>
+              </tr>
+              <tr>
+                <td>Diagnostics</td>
+                <td><p>14 <code>Debug.WriteLine</code> calls, which <code>[Conditional("DEBUG")]</code> compiles out of Release entirely.</p></td>
+                <td class="sev" data-s="hidden">No record at all</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          Six of the ten are silent. That is the reading worth carrying into the diff: this is not a
+          change where a mistake shows up as an exception. It shows up as a number in a dialog that
+          is quietly wrong, or as a quest that does not tick when you click it.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 2 ===================== -->
+      <section id="ch2">
+        <div class="chapter-head">
+          <span class="chapter-num">02</span>
+          <div>
+            <h2>The timeline stopped reading</h2>
+            <p class="kicker">
+              A bound that was correct for the live path was inherited by the sync path, where it
+              means something completely different.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          <code>EftLogPatterns.FrameCompletedLines</code> caps one read at
+          <code>MaxReadChunkBytes</code>, which is 4 MB. That bound is right and part 1 explained
+          why: the live watcher must not allocate a whole multi-megabyte log because a file changed.
+          Whatever is left over is picked up on the next poll.
+        </p>
+
+        <p>
+          <code>SessionModeTimeline.ReadNewEntries</code> called it <strong>once</strong>. For the
+          live path that is fine, because there is always a next Refresh. For the sync path there is
+          not: a sync builds one timeline per session folder, reads it, and throws it away. Anything
+          past the first 4 MB was never in the timeline at all.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">What that produces</p>
+          <p>
+            Not a crash, and not an empty answer. <code>Resolve</code> still finds the last
+            transition at or before the event, so it answers with whichever mode was current 4 MB
+            into the file. A seasonal wipe's completions file into PvE, and the summary reports a
+            confident PvE count. The mechanism built to stop guessing produces a guess and labels it
+            as evidence.
+          </p>
+        </div>
+
+        <div class="code">
+          <div class="code-head"><span>Services/Eft/SessionModeTimeline.cs</span><span>ReadNewEntries</span></div>
+<pre><span class="del">- if (stream.Length &lt;= position) return false;
+- var (lines, nextPosition) = EftLogPatterns.FrameCompletedLines(stream, position);
+- _positions[file] = nextPosition;</span>
+<span class="add">+ while (position &lt; stream.Length)
++ {
++     var (lines, nextPosition) = EftLogPatterns.FrameCompletedLines(stream, position);
++
++     // No forward progress means the remainder is an incomplete final line (or an
++     // unreadable one). Leave it for the next Refresh instead of spinning on it.
++     if (nextPosition &lt;= position) break;
++
++     position = nextPosition;
++
++     // Persisted per chunk rather than once at the end: whatever this chunk appends is
++     // already in _entries, so an exception on a later chunk must not leave a resume
++     // offset that re-reads and duplicates it.
++     _positions[file] = position;
++     ...
++ }</span></pre>
+        </div>
+
+        <p>
+          Three things in that loop are load-bearing and each one is worth a moment in review. The
+          <code>nextPosition &lt;= position</code> break is the termination proof: without it, a
+          trailing partial line makes the loop spin forever on the same offset. The per-chunk offset
+          write is a crash-consistency argument, not an optimisation: entries are appended as they
+          are parsed, so an <code>IOException</code> on chunk seven must not leave an offset that
+          re-reads chunks one through six. And <code>appended</code> is declared outside the
+          <code>try</code>, so a read that dies part way through still reports what it managed, and
+          <code>Refresh</code> still re-sorts for it.
+        </p>
+
+        <h3>Truncation, which the same change had to fix</h3>
+        <p>
+          A rotated file was already re-read from the start, because holding an offset past the new
+          end would lose every transition. But its old entries stayed in the list, so the re-read
+          duplicated them. Entries now carry the file they came from, and a truncation drops that
+          file's entries along with its offset:
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>Services/Eft/SessionModeTimeline.cs</span><span>the Source tag earns itself</span></div>
+<pre><span class="add">private readonly record struct Entry(DateTime At, SessionProfileHint Hint, string Source);
+
+if (stream.Length &lt; position)
+{
+    position = 0;
+    _positions[file] = 0;
+    _entries.RemoveAll(e =&gt; string.Equals(e.Source, file, StringComparison.OrdinalIgnoreCase));
+}</span></pre>
+        </div>
+
+        <p>
+          <code>RemoveAll</code> is scoped to one file on purpose. A session folder can hold several
+          application logs, and clearing the whole list would discard transitions that were read
+          correctly from a file nothing happened to. Pinned by
+          <code>SessionModeTimelineTests.A_truncated_log_does_not_discard_another_logs_transitions</code>.
+        </p>
+      </section>
+
+      <!-- ===================== LAB A ===================== -->
+      <section id="lab-a">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab A</span>
+            <h3>Read to exhaustion</h3>
+            <p class="sub">
+              A session log drawn by byte offset rather than by time. Grow it past the cap and watch
+              which transitions reach the timeline, and what an event late in the session then
+              resolves to.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="controls">
+              <span class="ctl-label">Code</span>
+              <div class="seg is-mode" role="group" aria-label="Code version">
+                <button type="button" data-cap="before" data-mode="before" aria-pressed="true">Single read</button>
+                <button type="button" data-cap="after" data-mode="after" aria-pressed="false">Read to exhaustion</button>
+              </div>
+            </div>
+
+            <label class="ctl-label" for="logSize">Session log size</label>
+            <div class="logmap">
+              <div class="logmap-scale"><span>0 MB</span><span id="logSizeLabel">11 MB</span></div>
+              <div class="logbar" id="logBar">
+                <div class="seen" id="logSeen"></div>
+                <div class="unseen" id="logUnseen"></div>
+                <div class="cap-flag" id="capFlag"></div>
+              </div>
+              <div class="tick-labels" id="tickLabels"></div>
+            </div>
+            <input type="range" id="logSize" min="2" max="16" step="1" value="11"
+                   style="width:100%; accent-color: var(--gold);"
+                   aria-label="Session log size in megabytes">
+
+            <div class="readout" id="capReadout"></div>
+            <div class="verdict" id="capVerdict" data-tone="bad"></div>
+          </div>
+        </div>
+
+        <p>
+          Drag the log to 3 MB: below the cap the two versions agree exactly, which is why a fixture
+          log never caught this. Push past 4 MB and the single read freezes at the last transition it
+          managed to see, while continuing to answer every query with full confidence. The guard is
+          <code>SessionModeTimelineTests.A_transition_past_the_first_read_chunk_is_still_found</code>,
+          which writes a log deliberately larger than one chunk.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 3 ===================== -->
+      <section id="ch3">
+        <div class="chapter-head">
+          <span class="chapter-num">03</span>
+          <div>
+            <h2>A calendar nobody chose</h2>
+            <p class="kicker">
+              The regex had already pinned the timestamp's exact shape. The parse then reinterpreted
+              that shape through the user's Windows locale.
+            </p>
+          </div>
+        </div>
+
+        <div class="code">
+          <div class="code-head"><span>Services/Eft/EftLogPatterns.cs</span><span>TryExtractTimestamp</span></div>
+<pre><span class="del">- if (match.Success &amp;&amp; DateTime.TryParse(match.Groups[1].Value, out timestamp))</span>
+<span class="add">+ if (match.Success &amp;&amp; DateTime.TryParseExact(
++         match.Groups[1].Value, TimestampFormat,
++         CultureInfo.InvariantCulture, DateTimeStyles.None, out timestamp))</span></pre>
+        </div>
+
+        <p>
+          <code>DateTime.TryParse</code> with no culture uses
+          <code>CultureInfo.CurrentCulture</code>, and a culture carries a calendar, not just a
+          format. The input string is unambiguous, so nothing here is a formatting mismatch. The
+          parse reads <code>2026</code> as a year <em>in the ambient calendar</em> and converts it to
+          Gregorian.
+        </p>
+
+        <p>
+          Under Thai (Buddhist) that means 2026 BE, which is Gregorian 1483. Under Persian it means
+          1405 SH counted the other way, landing on 2647. The arithmetic is the giveaway: those are
+          the calendar offsets, 543 subtracted and 621 added, applied to a number that was never a
+          calendar year in the first place. Under <code>ar-SA</code> (Umm al-Qura) the parse fails
+          outright.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">Downstream, this is total</p>
+          <p>
+            Every timeline entry sorts centuries away from the quest events it is supposed to
+            attribute, so <code>Resolve</code> finds no transition at or before any event and
+            correctly answers <code>null</code> for all of them. Null means "no evidence", and no
+            evidence means the event is dropped. A Thai, Persian, or Arabic Windows install runs the
+            sync, is told nothing was attributable, and records nothing. It is the one defect on this
+            list a user would report, because it fails completely rather than quietly.
+          </p>
+        </div>
+
+        <p>
+          The same reasoning applies a second time in <code>LogSyncService.IsWithinCutoff</code>,
+          which parses the session folder's own <code>log_2026.08.12_21-03-11</code> stamp. That one
+          decides whether a folder is inside the sync window, so an ambient calendar would read every
+          folder as a different century and discard the lot. It parses invariant for the same reason,
+          and its whole design is deliberately generous: an unreadable time, an unfamiliar folder
+          name, or a session that started before the cutoff and ran past it all keep the file, because
+          the function exists to prune work and not to make decisions.
+        </p>
+      </section>
+
+      <!-- ===================== LAB B ===================== -->
+      <section id="lab-b">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab B</span>
+            <h3>The ambient parse</h3>
+            <p class="sub">
+              One log line, four Windows locales. The values are the ones measured on .NET 8 and
+              pinned by <code>EftLogPatternsTests</code>; the consequence column is what the sync
+              then does.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="code" style="margin-top:0">
+              <div class="code-head"><span>a real line, unchanged in every column below</span><span>EFT application.log</span></div>
+<pre>2026-08-12 21:03:11.482 |Info| Session mode: PvpSeason</pre>
+            </div>
+
+            <div class="locales" id="localeGrid"></div>
+
+            <div class="verdict" data-tone="good">
+              <b>Why TryParseExact and not just a culture argument</b>
+              The format string is the second half of the fix. Passing
+              <code>InvariantCulture</code> to <code>TryParse</code> would fix the calendar and still
+              accept shapes EFT never writes, which is how a corrupted line becomes a plausible
+              timestamp instead of a rejected one. EFT writes exactly one shape, the regex has
+              already required it, and <code>TryParseExact</code> is what makes the parser agree with
+              the pattern that fed it.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 4 ===================== -->
+      <section id="ch4">
+        <div class="chapter-head">
+          <span class="chapter-num">04</span>
+          <div>
+            <h2>One quest, two rows</h2>
+            <p class="kicker">
+              The subtlest defect here, and the one the store fake hid. Two key policies that cannot
+              be reconciled met an OR that assumed they never coexist.
+            </p>
+          </div>
+        </div>
+
+        <p>Two facts, both true, both established in part 1:</p>
+
+        <ul>
+          <li>
+            A write keys by <code>ProgressKeyOf(task)</code>, which is the quest's first non-empty
+            <strong>Id</strong>.
+          </li>
+          <li>
+            A load keys by <code>normalizedName ?? id</code> taken from the stored row, so a named
+            quest comes back under its <strong>NormalizedName</strong>.
+          </li>
+        </ul>
+
+        <p>
+          Part 1's <code>IsRecordedDone</code> asked both keys, which reads like defensive
+          programming and was in fact necessary: an Id-only check reports "not recorded" for a quest
+          that is recorded, so every sync rewrites the same rows and counts them as newly applied.
+          The trouble is what the OR does when <em>both</em> keys are populated at once.
+        </p>
+
+        <p>
+          Loading puts the quest in under its name. Any in-memory write then puts it in again under
+          its Id, leaving both. The OR reports whichever it reaches first, and that is the stale one.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">Reproduction, from the commit message</p>
+          <p>
+            Complete a quest. Restart the app, so the row loads back name-keyed. Mis-mark it Failed,
+            which writes an Id-keyed entry beside it. Now click Complete. Nothing happens: the
+            completion cascade asks "is this already Done?", the OR finds the name-keyed entry still
+            saying Done, and refuses to re-complete a quest the user is looking at with a Failed
+            chip on it.
+          </p>
+        </div>
+
+        <div class="code">
+          <div class="code-head"><span>Services/QuestProgressService.cs</span><span>the collapse</span></div>
+<pre><span class="add">private static void SetQuestRow(
+    ImmutableDictionary&lt;string, QuestStatus&gt;.Builder builder,
+    string key, string? normalizedName, QuestStatus status)
+{
+    builder[key] = status;
+    if (!string.IsNullOrEmpty(normalizedName) &amp;&amp;
+        !string.Equals(normalizedName, key, StringComparison.OrdinalIgnoreCase))
+    {
+        builder.Remove(normalizedName);
+    }
+}</span></pre>
+        </div>
+
+        <p>
+          Every in-memory write now routes through it, including the ones inside
+          <code>PlanQuestChanges</code>'s pending-state loop that used to call
+          <code>SetItem</code> directly. That is what turns the dual-key OR from a hazard back into
+          the safety net it was meant to be: the OR is sound precisely because a quest can no longer
+          occupy both spellings at once. The two helpers are one contract, and reviewing either
+          without the other will not show you the argument.
+        </p>
+
+        <h3>The same shape, in the Failed branch</h3>
+        <p>
+          <code>PlanQuestChanges</code>'s Failed case tested one exact key with
+          <code>RecordedStatus(pending, taskKey)</code>. For an off-screen profile, whose rows come
+          back name-keyed, that check never matched, so every sync re-wrote an already-Failed quest
+          and counted it as applied. It now goes through <code>IsRecordedFailed</code>, the dual-key
+          twin of <code>IsRecordedDone</code>. Same for
+          <code>PlanLogEvent</code>'s Failed case. Guard:
+          <code>ProgressSnapshotTests.An_already_failed_quest_in_an_off_screen_profile_plans_nothing_on_a_second_sync</code>.
+        </p>
+      </section>
+
+      <!-- ===================== LAB C ===================== -->
+      <section id="lab-c">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab C</span>
+            <h3>The stale spelling</h3>
+            <p class="sub">
+              The snapshot dictionary, shown as literal entries. Step the reproduction and watch
+              <code>IsRecordedDone</code> answer. The right-hand panel is what the same steps looked
+              like through the old store fake, which is why no test saw this.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="controls">
+              <span class="ctl-label">Code</span>
+              <div class="seg is-mode" role="group" aria-label="Code version">
+                <button type="button" data-key="before" data-mode="before" aria-pressed="true">Before</button>
+                <button type="button" data-key="after" data-mode="after" aria-pressed="false">After</button>
+              </div>
+              <button type="button" class="btn is-primary" id="keyStep">Advance one step</button>
+              <button type="button" class="btn" id="keyReset">Reset</button>
+            </div>
+
+            <p style="margin:0 0 14px; color: var(--muted); font-size: 14px;" id="keyStory"></p>
+
+            <div class="dictwrap">
+              <div class="dict">
+                <div class="dict-head"><span>snapshot.Quests</span><span>production key policy</span></div>
+                <div class="dict-rows" id="dictProd"></div>
+              </div>
+              <div class="dict">
+                <div class="dict-head"><span>snapshot.Quests</span><span>through the old ProgressStoreFake</span></div>
+                <div class="dict-rows" id="dictFake"></div>
+              </div>
+            </div>
+
+            <div class="readout" id="keyReadout"></div>
+            <div class="verdict" id="keyVerdict" data-tone="good"></div>
+          </div>
+        </div>
+
+        <p>
+          Step to the end under <strong>Before</strong> and compare the panels. Production holds two
+          entries and answers from the wrong one; the fake holds one, because it keyed the load by Id
+          just as it keyed the write, so the second write simply overwrote the first. The fake was
+          not merely a weaker check. It made the defect <em>unrepresentable</em>. Guard:
+          <code>ProgressSnapshotTests.Re_completing_a_quest_failed_by_hand_is_not_blocked_by_its_loaded_row</code>.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 5 ===================== -->
+      <section id="ch5">
+        <div class="chapter-head">
+          <span class="chapter-num">05</span>
+          <div>
+            <h2>The write thrown away</h2>
+            <p class="kicker">
+              Part 1 defended this behaviour explicitly. The defence was wrong, and knowing why is
+              the point of this chapter.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Part 1's compare-and-swap re-checks the owner inside the loop body, because a profile
+          switch can publish a different snapshot between the read and the swap. Writing this
+          profile's rows onto another's cache would show progress that is not theirs, so the
+          re-check is correct and necessary. What it did next was not:
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>part 1, ApplyQuestChangesBatchAsync</span><span>the comment that was wrong</span></div>
+<pre><span class="del">// Bailing out here loses the write rather than misfiling it, which the next sync
+// recovers from; misfiling it is what nothing recovers from.
+if (!string.Equals(ownerId, current.ProfileId, StringComparison.Ordinal))
+    return (current, new List&lt;(string Id, string? NormalizedName, QuestStatus Status)&gt;());</span></pre>
+        </div>
+
+        <p>
+          Two things are wrong with it. The smaller one is that returning an empty list makes "the
+          profile switched under us" indistinguishable from "nothing needed changing", so the caller
+          reports a successful no-op for a write it lost.
+        </p>
+
+        <p>
+          The larger one is the claim that the next sync recovers it. Sync only re-reads sessions
+          inside the configured <code>SettingsService.SyncDaysRange</code> window. Once that session
+          folder ages past the range, the next sync does not look at it, and there is no later run
+          that puts the row back. The write is not deferred. It is gone.
+        </p>
+
+        <div class="note">
+          <p class="note-label">The false choice</p>
+          <p>
+            The original comment framed this as drop-or-misfile, and drop is genuinely better than
+            misfile. But there was never only two options. At the moment the swap is lost, the code
+            still holds <code>ownerId</code>: it knows exactly which partition these rows belong to.
+            It just cannot publish them to a snapshot that now names someone else. Writing to the
+            database without touching the snapshot is precisely the off-screen path the same method
+            already had for a profile that was never loaded.
+          </p>
+        </div>
+
+        <div class="code">
+          <div class="code-head"><span>Services/QuestProgressService.cs</span><span>ApplyForOwnerAsync</span></div>
+<pre><span class="add">// null says "the profile switched under us", which the caller must be able to
+// tell apart from an empty row list ("nothing needed changing"): the rows
+// still belong to a partition we know the name of, so they get written there
+// instead of being dropped.
+if (!string.Equals(ownerId, current.ProfileId, StringComparison.Ordinal))
+    return (current, null);</span>
+
+...
+
+<span class="cmt">// changed == null falls through to:</span>
+<span class="add">return await ApplyOffScreenAsync(owner, ownerId, plan, logLabel);</span></pre>
+        </div>
+
+        <p>
+          That is also why <code>plan</code> is a delegate rather than a precomputed list, and why
+          the parameter documentation insists it be pure. It runs once per compare-and-swap retry and
+          once more on the fallback, each time against a different snapshot, so a plan that captured
+          its inputs would answer for a state that no longer exists.
+        </p>
+
+        <h3>One more edge the fallback opened</h3>
+        <p>
+          If the user switches <em>to</em> the profile being written while that off-screen write is
+          in flight, the reload reads the store before the rows land, so the snapshot names the right
+          profile and does not hold them. The quests look un-completed until something re-reads.
+          <code>ApplyOffScreenAsync</code> closes it by reloading for the revision the published
+          snapshot carries, so a newer transition arriving in the meantime simply discards this
+          reload and reads the rows itself. Guard:
+          <code>ProgressSnapshotTests.A_profile_that_becomes_loaded_mid_write_ends_up_showing_the_rows</code>.
+        </p>
+
+        <p>
+          The refactor that made all this possible is worth noting on its own:
+          <code>ApplyQuestChangesBatchAsync</code> and <code>ApplyLogEventAsync</code> were two
+          near-identical copies of the loaded-versus-off-screen dance. They are now one
+          <code>ApplyForOwnerAsync</code> that differs only in the plan it is handed and the label it
+          logs. Two copies of this logic is two places for exactly the defect above to survive a fix.
+        </p>
+      </section>
+
+      <!-- ===================== LAB D ===================== -->
+      <section id="lab-d">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab D</span>
+            <h3>The lost swap</h3>
+            <p class="sub">
+              A sync writing seasonal rows while the player switches to PvE. Step the four beats and
+              watch where the rows end up, then check whether a later sync can still recover them.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="controls">
+              <span class="ctl-label">Code</span>
+              <div class="seg is-mode" role="group" aria-label="Code version">
+                <button type="button" data-swap="before" data-mode="before" aria-pressed="true">Before</button>
+                <button type="button" data-swap="after" data-mode="after" aria-pressed="false">After</button>
+              </div>
+              <button type="button" class="btn is-primary" id="swapStep">Advance one beat</button>
+              <button type="button" class="btn" id="swapReset">Reset</button>
+            </div>
+
+            <div class="lanes" id="swapLanes"></div>
+            <div class="partitions" id="swapParts"></div>
+            <div class="readout" id="swapReadout"></div>
+            <div class="verdict" id="swapVerdict" data-tone="good"></div>
+          </div>
+        </div>
+
+        <p>
+          The beat that matters is the fourth. Under <strong>Before</strong> the rows exist nowhere:
+          not in the snapshot, not in the store, and not in the count the dialog reports. Under
+          <strong>After</strong> they reach the season partition without ever touching the PvE
+          snapshot the player is now looking at, which is the same silent-write behaviour the PRD
+          already specified for a profile that was never loaded. Guard:
+          <code>ProgressSnapshotTests.A_write_that_loses_the_swap_is_re_planned_off_screen_rather_than_dropped</code>.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 6 ===================== -->
+      <section id="ch6">
+        <div class="chapter-head">
+          <span class="chapter-num">06</span>
+          <div>
+            <h2>What the player is told</h2>
+            <p class="kicker">
+              The PRD makes the per-profile summary the player's only signal, because the per-quest
+              confirmation list is gone. That raises the bar on every number in it.
+            </p>
+          </div>
+        </div>
+
+        <h3>The count was of rows queued, not rows written</h3>
+        <p>
+          <code>ApplyQuestChangesAsync</code> reported <code>batchChanges.Count</code>, which is what
+          it handed down. The two differ routinely and in both directions: the batch skips rows
+          already recorded, and it <em>adds</em> Failed rows for the mutually exclusive alternatives
+          a completion rules out. <code>ApplyQuestChangesBatchAsync</code> now returns
+          <code>Task&lt;int&gt;</code>, and a profile that received nothing is left out of the map
+          entirely rather than shown as a zero, so the summary cannot name a partition it did not
+          touch. Guards:
+          <code>A_second_apply_of_the_same_changes_reports_nothing_applied</code> and
+          <code>A_completion_that_fails_an_alternative_reports_both_rows</code>.
+        </p>
+
+        <h3>A partition that threw looked exactly like one that needed no change</h3>
+        <p>
+          Each profile's write is isolated, so one failure does not cost the others their report.
+          The consequence is that a failed partition is simply absent from
+          <code>AppliedCountsByProfile</code>, which is indistinguishable from an untouched one. With
+          a single profile in the run, the dialog read <strong>"No quests changed."</strong> after
+          losing everything.
+        </p>
+
+        <p>
+          The apply step now returns
+          <code>QuestApplyOutcome(AppliedByProfile, FailedProfiles)</code>, the dialog keeps its
+          header neutral whenever anything failed, and <code>SyncApplyFailedFormat</code> names the
+          profiles in EN, KO and JA. Guard:
+          <code>LogSyncAttributionTests.A_profile_whose_batch_throws_is_reported_as_failed_and_the_others_still_apply</code>.
+        </p>
+
+        <h3>Sync and apply disagreed about where the loaded profile's rows come from</h3>
+        <p>
+          Sync planned every profile from a fresh store read. Apply planned the loaded profile from
+          the snapshot and only an off-screen profile from the store. Hand edits publish to the
+          snapshot synchronously and persist fire-and-forget, so the store read can be behind what
+          the user is looking at. Two planners reaching different conclusions from different sources
+          also fed stale rows into alternative-quest collection, which could re-ask an either-or the
+          player had already answered.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>Services/LogSyncService.cs</span><span>one source of truth per profile</span></div>
+<pre><span class="add">var snapshot = progressService.Snapshot;
+IReadOnlyDictionary&lt;string, QuestStatus&gt; storedProgress =
+    string.Equals(snapshot.ProfileId, ownerId, StringComparison.Ordinal)
+        ? snapshot.Quests
+        : await Store.LoadQuestProgressAsync(ownerId);</span></pre>
+        </div>
+
+        <p>
+          Guard: <code>LogSyncAttributionTests.The_loaded_profile_is_judged_against_its_snapshot_not_a_fresh_store_read</code>.
+        </p>
+
+        <h3>Two smaller arithmetic bugs in the same dialog</h3>
+        <ul>
+          <li>
+            A quest in progress in two profiles was counted twice, because
+            <code>InProgressQuests</code> is ordered output rather than a set. A run-wide
+            <code>InProgressKeys</code> now deduplicates across passes, so "still in progress: N"
+            cannot exceed the number of distinct quests.
+          </li>
+          <li>
+            A quest whose last log event is Started, but which is already recorded Done, fell into no
+            bucket at all: not a change, not in progress, not already current. It now increments
+            <code>AlreadyCurrentCount</code>, which is what stored state already matching the log
+            means, and the numbers add up again.
+          </li>
+        </ul>
+
+        <h3>The partition key can no longer come from a default</h3>
+        <p>
+          <code>QuestChangeInfo.OwnerProfile</code> and
+          <code>AlternativeQuestGroup.OwnerProfile</code> are now <code>required</code>. This is the
+          most mechanical change in the PR and one of the most valuable, because
+          <code>default(AppProfile)</code> is <code>AppProfile.PvpZone</code>: an initializer that
+          simply forgot the field would file the change into the permanent PvP partition, the one
+          that is most expensive to lose and hardest to notice. Making the compiler ask is the only
+          version of this rule that cannot be forgotten.
+        </p>
+
+        <div class="note">
+          <p class="note-label">The pattern worth taking away</p>
+          <p>
+            Three of the fixes in this chapter are the same move: make the type carry the obligation
+            rather than the reviewer. <code>required</code> on the partition key, a non-optional
+            <code>daysRange</code> parameter so the next caller that omits it fails to compile, and a
+            nullable return that forces the caller to distinguish "switched" from "nothing to do".
+            Prefer these to a comment asking the next person to remember.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 7 ===================== -->
+      <section id="ch7">
+        <div class="chapter-head">
+          <span class="chapter-num">07</span>
+          <div>
+            <h2>Ordering and atomicity</h2>
+            <p class="kicker">
+              Four defects that share a root: state that was consistent because of how the old code
+              happened to be scheduled, not because anything enforced it.
+            </p>
+          </div>
+        </div>
+
+        <h3>The refactor deleted an accidental lock</h3>
+        <p>
+          <code>LogSyncService</code> raises <code>QuestEventDetected</code> in a tight loop over one
+          tail read and does not await the handler. The old handler ended in a blocking
+          <code>Dispatcher.Invoke</code>, which serialized events by accident. Part 1 replaced it
+          with an <code>async void</code> body, and that accident went with it: event N+1 began
+          planning while event N was still between its read and its write. A Completed followed by a
+          Failed in one tail could then both plan against the same pre-write rows, and whichever
+          landed second won, leaving a quest the game failed recorded as Done.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>MainWindow.xaml.cs</span><span>both properties made explicit</span></div>
+<pre><span class="add">private readonly SemaphoreSlim _questEventGate = new(1, 1);
+
+await _questEventGate.WaitAsync();
+try
+{
+    // On the UI thread, and not with a blocking Invoke: this runs on a thread-pool
+    // thread, and QuestProgressService.ProgressChanged (raised inside the call
+    // below) has subscribers such as IntegratedItemService that update UI state
+    // without marshalling themselves.
+    await Dispatcher.InvokeAsync(() =&gt; HandleQuestEventAsync(evt)).Task.Unwrap();
+}
+finally
+{
+    _questEventGate.Release();
+}</span></pre>
+        </div>
+
+        <p>
+          <code>.Task.Unwrap()</code> is the detail to check. <code>InvokeAsync</code> of an
+          async lambda completes when the lambda <em>returns its Task</em>, not when that Task
+          finishes, so without the unwrap the gate releases at the first await inside and the
+          serialization is decorative. The teardown path gained a matching
+          <code>QuestEventDetected -=</code>, because a handler that dispatches its whole body onto a
+          shutting-down dispatcher awaits an operation that never runs.
+        </p>
+
+        <h3>Two fields that were one fact</h3>
+        <p>
+          <code>ProfileService</code> assigned the selection and incremented the revision as separate
+          steps, and callers read them as two properties. Two threads transition concurrently in
+          production (the dispatcher when the user clicks, the log watcher's thread pool when
+          evidence arrives), so they could assign in one order and take revisions in the other. A
+          caller reading the pair could then pair the <em>old</em> profile with the <em>new</em>
+          revision, at which point the staleness guard sees nothing wrong and cheerfully publishes
+          one profile's rows as the answer to another's transition.
+        </p>
+
+        <p>
+          Both halves now live under one gate and are read together through
+          <code>CurrentTransition</code>. Two details are deliberate. The gate is
+          <code>static</code>, so it exists even on an instance built by
+          <code>RuntimeHelpers.GetUninitializedObject</code>, which skips field initializers and
+          would otherwise leave every lock throwing on a null (<code>ProfileSwitchingTests</code>
+          builds one that way, and the class is a singleton, so a per-type gate is a per-instance
+          gate in production). And the event is raised <em>outside</em> the lock: subscribers run
+          synchronously and take locks of their own, so holding the gate across the raise is a
+          lock-ordering hazard. The args are built inside, so each subscriber still sees a matched
+          pair.
+        </p>
+
+        <h3>The timeline was documented as not thread-safe, and then shared</h3>
+        <p>
+          The live path keeps one <code>SessionModeTimeline</code> per session folder across watcher
+          callbacks that run on the thread pool, so a <code>Refresh</code> rebuilding the entry list
+          could overlap a <code>Resolve</code> walking it. The resulting
+          <code>InvalidOperationException</code> then hit the bare <code>catch</code> in the live
+          quest-event path, which swallowed it along with the entire batch of events. The player's
+          only signal was a finished raid that never registered.
+        </p>
+
+        <p>
+          Both halves are fixed: the timeline takes its own lock in every public member and
+          <code>Entries</code> hands back a copy, and the <code>catch</code> logs. Putting the
+          guarantee in the class rather than in each caller is the right call here precisely because
+          the failure it prevents is invisible at the call site. Guard:
+          <code>SessionModeTimelineTests.Refresh_and_Resolve_can_run_concurrently_on_one_timeline</code>.
+        </p>
+
+        <h3>The two services nobody looked at</h3>
+        <p>
+          <code>HideoutProgressService</code> and <code>ItemInventoryService</code> subscribed to
+          <code>ActiveProfileChanged</code>, discarded the event's profile, and re-read
+          <code>ProfileService.Instance</code> inside the async body. That is the exact defect this
+          PR exists to remove from quests, still sitting in two other services. Both now take the
+          profile and revision from the event, resolve the storage id before the first await, and run
+          the same revision guard. Their fire-and-forget saves resolve the profile before the
+          <code>Task.Run</code> body too, so a switch between scheduling and running cannot redirect
+          a row.
+        </p>
+
+        <div class="note">
+          <p class="note-label">Worth asking in review</p>
+          <p>
+            These two were found by looking for the pattern rather than by a failing test. The
+            question the reviewer should ask is whether the sweep was complete: is there a third
+            subscriber to <code>ActiveProfileChanged</code>, or a fourth <code>Task.Run</code> that
+            reads <code>ActiveProfileId</code> inside its body?
+            <code>ProfileAttributionSourceTests</code> bounds the write-path files by an allowlist,
+            but an allowlist only covers the files it names.
+          </p>
+        </div>
+
+        <h3>Loading, made survivable</h3>
+        <p>
+          Three smaller lifecycle fixes finish the chapter. The quest and objective loads get
+          separate <code>try</code> blocks, because publishing them together is a statement about
+          <em>atomicity</em> (never one profile's quests beside another's objectives) and not about
+          failing together: an unreadable objective table is no reason to throw away quest rows that
+          read back fine. The publish and notify are themselves wrapped, because the caller reaches
+          this through <code>_ = ReloadForProfileAsync(...)</code> and a throwing subscriber would
+          otherwise fault a Task nobody observes. And the self-healing reload is restored: a
+          provenance-only re-confirmation now reloads if the last load failed or the snapshot names a
+          different profile, which are the two states that used to be curable only by switching
+          profile away and back by hand.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 8 ===================== -->
+      <section id="ch8">
+        <div class="chapter-head">
+          <span class="chapter-num">08</span>
+          <div>
+            <h2>What was deleted</h2>
+            <p class="kicker">
+              Deletions deserve their own pass, because a removed guard and a removed corpse look
+              identical in a diff.
+            </p>
+          </div>
+        </div>
+
+        <ul>
+          <li>
+            <strong><code>SaveProgress</code> and <code>SaveProgressToDbAsync</code></strong>, the
+            legacy whole-snapshot rewrite. Its last caller was
+            <code>ReconcileProgressWithDb</code>, which went with it. Every write now goes through
+            the batch path, which is the one that takes an explicit profile.
+          </li>
+          <li>
+            <strong><code>SyncResult.CompletedQuests</code></strong> and
+            <strong><code>TotalApplied</code></strong>, and
+            <strong><code>SyncResultDialog.AlternativeGroupCount</code></strong> with the
+            <code>out</code> parameter that carried it. All unread once the dialog became a
+            per-profile summary.
+          </li>
+          <li>
+            <strong>Two hand-rolled <code>BuildQuestIdLookup</code> copies</strong>, one in
+            <code>MainWindow</code> and one in <code>LogSyncService</code>, replaced by the indexes
+            <code>QuestProgressService</code> already builds. This one is not purely a cleanup: the
+            new <code>BuildTaskIndexes</code> indexes <strong>every</strong> task by id, including a
+            task with no NormalizedName, where the old <code>Initialize</code> filtered to named
+            tasks first. The live handler resolves by id and returns on a miss, so a nameless quest's
+            completion was previously not recorded at all. <code>QuestTaskIndexTests</code> pins the
+            wider set.
+          </li>
+        </ul>
+
+        <div class="note is-hidden">
+          <p class="note-label">The deletion that changes what ships</p>
+          <p>
+            14 <code>System.Diagnostics.Debug.WriteLine</code> calls became <code>Log.For</code>.
+            That reads as tidying and is not: <code>Debug.WriteLine</code> carries
+            <code>[Conditional("DEBUG")]</code>, so the compiler removes those call sites from a
+            Release build. Every diagnostic quoted in this guide, including the discarded-stale-load
+            line and the batch-save confirmations, did not exist in the build users run. A silent
+            defect with no log line is a defect nobody can report usefully.
+          </p>
+        </div>
+
+        <p>
+          One thing was deliberately <em>not</em> deleted, and part 1 already covered it:
+          <code>LogSyncService</code>'s <code>application*.log</code> glob has never matched a real
+          EFT filename, so its map path is dead. It is still there, with a comment recording the
+          finding, because repairing the glob would only make dead code do unused I/O. Nothing about
+          attribution goes through it, and <code>SessionModeTimeline</code> uses the correct
+          <code>*application*.log</code> pattern.
+        </p>
+
+        <h3>What did not get fixed, and is not a defect</h3>
+        <p>
+          Rows already stored under the wrong mode by a previous version are still not repaired. The
+          PRD records the reasoning and the release notes should say so plainly. Nothing in this
+          second wave changes that decision; it only makes the number of rows in that category stop
+          growing.
+        </p>
+      </section>
+
+      <!-- ===================== QUIZ ===================== -->
+      <section id="quiz">
+        <div class="chapter-head">
+          <span class="chapter-num">09</span>
+          <div>
+            <h2>Comprehension gate</h2>
+            <p class="kicker">
+              Eight questions on the second wave. The reviewer checklist unlocks when all eight are
+              right; wrong answers explain themselves.
+            </p>
+          </div>
+        </div>
+
+        <div class="quiz-intro">
+          <div class="quiz-score" id="quizScore">0/8</div>
+          <div>
+            <p style="margin:0">
+              Questions 1 and 5 are the ones worth failing. A reviewer who cannot answer 1 has not
+              understood why this wave was needed at all, and one who cannot answer 5 will approve
+              the next version of the same mistake.
+            </p>
+          </div>
+        </div>
+
+        <div id="quizList"></div>
+
+        <div class="gate is-locked" id="gate">
+          <h3 id="gateTitle">Approval checklist: locked</h3>
+          <p id="gateBody">Answer all eight questions correctly to unlock the reviewer checklist.</p>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          Part 2 of the guide to PR #38, covering commit <code>c31ee51</code>. Part 1 is
+          <a href="2026-08-profile-data-attribution-code-guide.html">2026-08-profile-data-attribution-code-guide.html</a>;
+          the decisions are in <code>docs/decisions/fix-profile-data-attribution.md</code> and its
+          <code>.spec.md</code> sibling. Labs reimplement the decision logic faithfully but are
+          illustrations, not the shipped code; the shipped behaviour is pinned by the tests named
+          throughout. Locale values in Lab B are the ones measured on .NET 8 and asserted by
+          <code>EftLogPatternsTests</code>.
+        </p>
+      </footer>
+    </main>
+  </div>
+  <script>
+  (function () {
+    "use strict";
+
+    function el(tag, cls, text) {
+      var node = document.createElement(tag);
+      if (cls) node.className = cls;
+      if (text !== undefined && text !== null) node.textContent = text;
+      return node;
+    }
+
+    function stat(key, value, tone) {
+      var box = el("div", "stat");
+      box.appendChild(el("p", "k", key));
+      var v = el("p", "v", value);
+      if (tone) v.setAttribute("data-p", tone);
+      box.appendChild(v);
+      return box;
+    }
+
+    function bindSegment(selector, attr, onPick) {
+      var buttons = Array.prototype.slice.call(document.querySelectorAll(selector));
+      buttons.forEach(function (button) {
+        button.addEventListener("click", function () {
+          buttons.forEach(function (other) {
+            other.setAttribute("aria-pressed", String(other === button));
+          });
+          onPick(button.getAttribute(attr));
+        });
+      });
+    }
+
+    /* ============================================================
+       LAB A: the read cap
+       ============================================================ */
+
+    // Fractions of the session log at which the game wrote a "Session mode" line.
+    // Five transitions, so the last one seen before the cap and the real last one
+    // disagree for every log larger than the cap.
+    var CAP_MB = 4;
+    var TRANSITIONS = [
+      { at: 0.03, p: "pve", label: "Pve" },
+      { at: 0.22, p: "season", label: "PvpSeason" },
+      { at: 0.41, p: "pve", label: "Pve" },
+      { at: 0.63, p: "season", label: "PvpSeason" },
+      { at: 0.87, p: "pve", label: "Pve" }
+    ];
+    var EVENT_AT = 0.95;
+
+    var capMode = "before";
+    var logSize = 11;
+
+    var logSeen = document.getElementById("logSeen");
+    var logUnseen = document.getElementById("logUnseen");
+    var capFlag = document.getElementById("capFlag");
+    var tickLabels = document.getElementById("tickLabels");
+    var logBar = document.getElementById("logBar");
+    var logSizeLabel = document.getElementById("logSizeLabel");
+    var capReadout = document.getElementById("capReadout");
+    var capVerdict = document.getElementById("capVerdict");
+    var logSizeInput = document.getElementById("logSize");
+
+    function renderCap() {
+      var readMb = capMode === "before" ? Math.min(CAP_MB, logSize) : logSize;
+      var readFraction = readMb / logSize;
+
+      logSizeLabel.textContent = logSize + " MB";
+      logSeen.style.width = (readFraction * 100) + "%";
+      logUnseen.style.width = ((1 - readFraction) * 100) + "%";
+
+      var capFraction = CAP_MB / logSize;
+      if (capMode === "before" && logSize > CAP_MB) {
+        capFlag.style.display = "block";
+        capFlag.style.left = (capFraction * 100) + "%";
+      } else {
+        capFlag.style.display = "none";
+      }
+
+      // Redraw the transition ticks and their labels.
+      Array.prototype.slice.call(logBar.querySelectorAll(".tick")).forEach(function (node) {
+        node.remove();
+      });
+      tickLabels.innerHTML = "";
+
+      var seen = [];
+      TRANSITIONS.forEach(function (t) {
+        var isRead = t.at <= readFraction;
+        if (isRead) seen.push(t);
+
+        var tick = el("div", "tick" + (isRead ? "" : " is-unread"));
+        tick.setAttribute("data-p", t.p);
+        tick.style.left = (t.at * 100) + "%";
+        logBar.appendChild(tick);
+
+        var label = el("div", "tick-label" + (isRead ? "" : " is-unread"));
+        label.setAttribute("data-p", t.p);
+        label.style.left = (t.at * 100) + "%";
+        label.appendChild(el("b", null, t.label));
+        label.appendChild(document.createTextNode((t.at * logSize).toFixed(1) + " MB"));
+        tickLabels.appendChild(label);
+      });
+
+      var resolved = seen.length ? seen[seen.length - 1] : null;
+      var truth = TRANSITIONS[TRANSITIONS.length - 1];
+
+      capReadout.innerHTML = "";
+      capReadout.appendChild(stat("Bytes read", readMb.toFixed(1) + " of " + logSize + " MB"));
+      capReadout.appendChild(stat("Transitions in timeline", seen.length + " of " + TRANSITIONS.length,
+        seen.length === TRANSITIONS.length ? null : "hidden"));
+      capReadout.appendChild(stat(
+        "Resolve(event at " + (EVENT_AT * logSize).toFixed(1) + " MB)",
+        resolved ? resolved.p : "null",
+        resolved ? resolved.p : "none"));
+
+      var right = resolved && resolved.p === truth.p;
+      capVerdict.setAttribute("data-tone", right ? "good" : "bad");
+      capVerdict.innerHTML = "";
+
+      if (capMode === "after") {
+        capVerdict.appendChild(el("b", null, "Every transition reached the timeline."));
+        capVerdict.appendChild(document.createTextNode(
+          "The loop keeps calling FrameCompletedLines until the offset stops moving, so the size of the " +
+          "log stops being a correctness variable. Resolve answers " + truth.p + ", which is what the " +
+          "session actually ended in."));
+      } else if (logSize <= CAP_MB) {
+        capVerdict.appendChild(el("b", null, "Below the cap, the two versions are identical."));
+        capVerdict.appendChild(document.createTextNode(
+          "One read consumes the whole file, so the defect is invisible. This is the size a hand-written " +
+          "fixture log has, which is why the suite agreed with the broken code."));
+      } else if (right) {
+        capVerdict.appendChild(el("b", null, "Wrong for the right reason, and correct by luck."));
+        capVerdict.appendChild(document.createTextNode(
+          "The timeline is missing " + (TRANSITIONS.length - seen.length) + " transition(s), but the last " +
+          "one it did see happens to name the same mode as the real last one. The answer is right; nothing " +
+          "about the code is. Move the slider and it stops being right."));
+      } else {
+        capVerdict.appendChild(el("b", null, "Confidently wrong."));
+        capVerdict.appendChild(document.createTextNode(
+          "The timeline stopped at " + CAP_MB + " MB, so the last transition it knows about is the one at " +
+          (resolved ? (resolved.at * logSize).toFixed(1) : "0") + " MB. Resolve returns " +
+          (resolved ? resolved.p : "null") + " rather than " + truth.p + ", the sync files a whole session's " +
+          "completions into the wrong partition, and the summary reports the count as fact. No null, no " +
+          "exception, no warning."));
+      }
+    }
+
+    bindSegment("[data-cap]", "data-cap", function (value) {
+      capMode = value;
+      renderCap();
+    });
+
+    logSizeInput.addEventListener("input", function () {
+      logSize = parseInt(logSizeInput.value, 10);
+      renderCap();
+    });
+
+    renderCap();
+
+    /* ============================================================
+       LAB B: the ambient parse
+       ============================================================ */
+
+    // Measured on .NET 8 and asserted by EftLogPatternsTests. The offsets are the giveaway:
+    // 543 subtracted for the Buddhist era, 621 added for the Persian one, applied to a number
+    // that was never a calendar year.
+    var LOCALES = [
+      {
+        tag: "en-US",
+        cal: "Gregorian",
+        ambient: "2026-08-12 21:03:11",
+        exact: "2026-08-12 21:03:11",
+        broken: false,
+        effect: "Resolves normally. This is the only locale the pre-fix code was ever run under."
+      },
+      {
+        tag: "th-TH",
+        cal: "Buddhist (2026 read as BE, minus 543)",
+        ambient: "1483-08-12 21:03:11",
+        exact: "2026-08-12 21:03:11",
+        broken: true,
+        effect: "Every entry sorts five centuries before the events it should attribute. Resolve finds no transition at or before any event and answers null for all of them."
+      },
+      {
+        tag: "fa-IR",
+        cal: "Persian (2026 read as SH, plus 621)",
+        ambient: "2647-08-12 21:03:11",
+        exact: "2026-08-12 21:03:11",
+        broken: true,
+        effect: "The mirror image: every entry sorts six centuries after the events, so the same null answer arrives by the opposite route."
+      },
+      {
+        tag: "ar-SA",
+        cal: "Umm al-Qura",
+        ambient: "parse fails",
+        exact: "2026-08-12 21:03:11",
+        broken: true,
+        effect: "TryExtractTimestamp returns false, the line is dropped as undated, and the folder builds an empty timeline."
+      }
+    ];
+
+    var localeGrid = document.getElementById("localeGrid");
+
+    LOCALES.forEach(function (loc) {
+      var card = el("div", "loc" + (loc.broken ? " is-broken" : ""));
+      card.appendChild(el("p", "tag", loc.tag));
+      card.appendChild(el("p", "cal", loc.cal));
+
+      var dl = el("dl");
+
+      var dt1 = el("dt", null, "DateTime.TryParse (ambient)");
+      var dd1 = el("dd", loc.broken ? "is-bad" : "is-good", loc.ambient);
+      dl.appendChild(dt1);
+      dl.appendChild(dd1);
+
+      var dt2 = el("dt", null, "TryParseExact + Invariant");
+      var dd2 = el("dd", "is-good", loc.exact);
+      dl.appendChild(dt2);
+      dl.appendChild(dd2);
+
+      card.appendChild(dl);
+
+      var effect = el("p", null, loc.effect);
+      effect.style.margin = "12px 0 0";
+      effect.style.fontSize = "12.5px";
+      effect.style.color = "var(--muted)";
+      card.appendChild(effect);
+
+      localeGrid.appendChild(card);
+    });
+
+    /* ============================================================
+       LAB C: the stale spelling
+       ============================================================ */
+
+    var QUEST_NAME = "the-punisher-part-1";
+    var QUEST_ID = "5c0be5fc86f774467a116593";
+
+    var keyMode = "before";
+    var keyStep = 0;
+
+    var KEY_STEPS = [
+      "Fresh snapshot, nothing loaded yet. Press Advance to walk the reproduction from the commit message.",
+      "The player completed the quest in an earlier session, and the app has just restarted. LoadQuestProgressAsync keys the row by normalizedName ?? id, so it comes back under the NAME.",
+      "The player mis-marks the quest Failed by hand. The write keys by ProgressKeyOf, which is the ID.",
+      "The player notices and clicks Complete. The cascade asks IsRecordedDone before planning anything."
+    ];
+
+    var dictProd = document.getElementById("dictProd");
+    var dictFake = document.getElementById("dictFake");
+    var keyStory = document.getElementById("keyStory");
+    var keyReadout = document.getElementById("keyReadout");
+    var keyVerdict = document.getElementById("keyVerdict");
+    var keyStepButton = document.getElementById("keyStep");
+    var keyResetButton = document.getElementById("keyReset");
+
+    // Returns { entries: [{key, kind, status, state}], } for one world.
+    function keyState(world) {
+      var entries = [];
+
+      if (keyStep >= 1) {
+        // The load. Production keys by name; the old fake keyed by the id it was handed.
+        if (world === "prod") entries.push({ key: QUEST_NAME, kind: "name", status: "Done" });
+        else entries.push({ key: QUEST_ID, kind: "id", status: "Done" });
+      }
+
+      if (keyStep >= 2) {
+        // The hand edit. Always keyed by id.
+        var existing = null;
+        for (var i = 0; i < entries.length; i++) {
+          if (entries[i].key === QUEST_ID) existing = entries[i];
+        }
+        if (existing) {
+          existing.status = "Failed";
+          existing.state = "fresh";
+        } else {
+          entries.push({ key: QUEST_ID, kind: "id", status: "Failed", state: "fresh" });
+        }
+
+        // After the fix, SetQuestRow drops the other spelling so one quest holds one entry.
+        if (keyMode === "after") {
+          entries = entries.filter(function (e) { return e.key !== QUEST_NAME; });
+        }
+      }
+
+      return entries;
+    }
+
+    function recordedDone(entries) {
+      // IsRecordedAs: the id key OR the name key reports Done.
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].status === "Done") return true;
+      }
+      return false;
+    }
+
+    function renderDict(target, entries) {
+      target.innerHTML = "";
+      if (!entries.length) {
+        target.appendChild(el("div", "dict-empty", "empty"));
+        return;
+      }
+      entries.forEach(function (entry) {
+        var stale = keyStep >= 3 && entry.status === "Done";
+        var row = el("div", "entry" + (stale ? " is-stale" : (entry.state === "fresh" ? " is-fresh" : "")));
+        var key = el("span", "key", entry.key);
+        var tag = el("span", "keytag", entry.kind === "name" ? "name" : "id");
+        tag.setAttribute("data-k", entry.kind);
+        key.appendChild(tag);
+        row.appendChild(key);
+        var val = el("span", "val", entry.status);
+        val.setAttribute("data-s", entry.status);
+        row.appendChild(val);
+        target.appendChild(row);
+      });
+    }
+
+    function renderKey() {
+      keyStory.textContent = KEY_STEPS[keyStep];
+
+      var prod = keyState("prod");
+      var fake = keyState("fake");
+      renderDict(dictProd, prod);
+      renderDict(dictFake, fake);
+
+      keyStepButton.disabled = keyStep >= KEY_STEPS.length - 1;
+
+      keyReadout.innerHTML = "";
+      keyVerdict.innerHTML = "";
+
+      if (keyStep < 3) {
+        keyReadout.appendChild(stat("Entries for one quest", prod.length + " in production"));
+        keyReadout.appendChild(stat("Entries through the fake", fake.length));
+        keyVerdict.setAttribute("data-tone", "good");
+        keyVerdict.appendChild(el("b", null, "Keep stepping."));
+        keyVerdict.appendChild(document.createTextNode(
+          "The two panels are already diverging. Watch how many entries one quest ends up holding in each."));
+        return;
+      }
+
+      var prodDone = recordedDone(prod);
+      var fakeDone = recordedDone(fake);
+
+      keyReadout.appendChild(stat("IsRecordedDone, production", String(prodDone),
+        prodDone ? "none" : "pve"));
+      keyReadout.appendChild(stat("The click does", prodDone ? "nothing" : "completes the quest",
+        prodDone ? "none" : "pve"));
+      keyReadout.appendChild(stat("Same test, through the fake", fakeDone ? "blocked" : "passes",
+        fakeDone ? "none" : "hidden"));
+
+      if (keyMode === "before" && prodDone) {
+        keyVerdict.setAttribute("data-tone", "bad");
+        keyVerdict.appendChild(el("b", null, "The click does nothing, and the test says it works."));
+        keyVerdict.appendChild(document.createTextNode(
+          "Production holds two entries for one quest. The dual-key OR reaches the name-keyed one, which " +
+          "still says Done from before the restart, so the cascade refuses to re-complete a quest the " +
+          "player is looking at with a Failed chip on it. The fake holds one entry, because it keyed the " +
+          "load the same way it keyed the write, so the second write simply overwrote the first. There was " +
+          "no test to fix here. The defect could not be expressed."));
+      } else {
+        keyVerdict.setAttribute("data-tone", "good");
+        keyVerdict.appendChild(el("b", null, "One quest, one entry."));
+        keyVerdict.appendChild(document.createTextNode(
+          "SetQuestRow removed the name spelling when it wrote the id one, so IsRecordedDone has only one " +
+          "row to consult and it is the current one. The dual-key OR is still there and still necessary " +
+          "for rows that were never written in memory; it is safe because the collapse guarantees the two " +
+          "keys can never both be live."));
+      }
+    }
+
+    bindSegment("[data-key]", "data-key", function (value) {
+      keyMode = value;
+      renderKey();
+    });
+
+    keyStepButton.addEventListener("click", function () {
+      if (keyStep < KEY_STEPS.length - 1) keyStep++;
+      renderKey();
+    });
+
+    keyResetButton.addEventListener("click", function () {
+      keyStep = 0;
+      renderKey();
+    });
+
+    renderKey();
+
+    /* ============================================================
+       LAB D: the lost swap
+       ============================================================ */
+
+    var swapMode = "before";
+    var swapBeat = 0;
+
+    var SWAP_LANES = [
+      {
+        name: "Sync apply",
+        beats: [
+          "Plans 3 season rows from the season session folder.",
+          "Reads Snapshot: ProfileId = season. Owner matches.",
+          "Enters Mutate. Re-checks the owner inside the swap.",
+          "Owner no longer matches."
+        ]
+      },
+      {
+        name: "Player",
+        beats: [
+          "Looking at PvP Season.",
+          "Clicks PvE.",
+          "ProfileService raises the transition; the reload publishes a PvE snapshot.",
+          "Looking at PvE."
+        ]
+      }
+    ];
+
+    var swapLanes = document.getElementById("swapLanes");
+    var swapParts = document.getElementById("swapParts");
+    var swapReadout = document.getElementById("swapReadout");
+    var swapVerdict = document.getElementById("swapVerdict");
+    var swapStepButton = document.getElementById("swapStep");
+    var swapResetButton = document.getElementById("swapReset");
+
+    function renderSwap() {
+      swapLanes.innerHTML = "";
+      SWAP_LANES.forEach(function (lane) {
+        var wrap = el("div", "lane");
+        wrap.appendChild(el("div", "lane-name", lane.name));
+        var track = el("div", "lane-track");
+        lane.beats.forEach(function (text, index) {
+          var cls = "beat";
+          if (index === swapBeat) cls += " is-on";
+          else if (index < swapBeat) cls += " is-done";
+          var beat = el("div", cls, text);
+          // The final beat is the only one whose text depends on the version under test.
+          if (index === 3 && lane.name === "Sync apply") {
+            beat.textContent = swapMode === "before"
+              ? "Returns an empty row list. The caller reads it as \"nothing needed changing\"."
+              : "Returns null, so the caller falls through to ApplyOffScreenAsync.";
+          }
+          track.appendChild(beat);
+        });
+        wrap.appendChild(track);
+        swapLanes.appendChild(wrap);
+      });
+
+      var landed = swapBeat >= 3 && swapMode === "after" ? 3 : 0;
+      var lost = swapBeat >= 3 && swapMode === "before" ? 3 : 0;
+
+      var PARTS = [
+        { p: "pvp", name: "pvp" },
+        { p: "pve", name: "pve" },
+        { p: "season", name: "season" }
+      ];
+
+      swapParts.innerHTML = "";
+      PARTS.forEach(function (part) {
+        var box = el("div", "part");
+        box.setAttribute("data-p", part.p);
+        var head = el("div", "part-head");
+        head.appendChild(el("span", null, part.name));
+        var written = part.p === "season" ? landed : 0;
+        head.appendChild(el("span", "count", written + " written"));
+        box.appendChild(head);
+
+        var rows = el("div", "part-rows");
+        if (part.p === "season" && landed > 0) {
+          ["Chemical Part 4", "Gunsmith Part 9", "Insomnia"].forEach(function (quest) {
+            var row = el("div", "row");
+            row.appendChild(el("span", null, quest));
+            row.appendChild(el("span", "src", "Done"));
+            rows.appendChild(row);
+          });
+        } else if (part.p === "season" && lost > 0) {
+          var lostRow = el("div", "row is-lost");
+          lostRow.appendChild(el("span", null, "3 rows discarded"));
+          lostRow.appendChild(el("span", "src", "nowhere"));
+          rows.appendChild(lostRow);
+        } else {
+          rows.appendChild(el("div", "part-empty", "untouched"));
+        }
+        box.appendChild(rows);
+        swapParts.appendChild(box);
+      });
+
+      swapStepButton.disabled = swapBeat >= 3;
+
+      swapReadout.innerHTML = "";
+      swapReadout.appendChild(stat("Rows written", String(landed), landed ? "season" : "none"));
+      swapReadout.appendChild(stat("Reported as applied", swapBeat >= 3 ? String(landed) : "-",
+        swapBeat >= 3 && swapMode === "before" ? "none" : null));
+      swapReadout.appendChild(stat("Recoverable later",
+        swapBeat < 3 ? "-" : (swapMode === "before" ? "no" : "n/a"),
+        swapBeat >= 3 && swapMode === "before" ? "none" : null));
+
+      swapVerdict.innerHTML = "";
+      if (swapBeat < 3) {
+        swapVerdict.setAttribute("data-tone", "good");
+        swapVerdict.appendChild(el("b", null, "Nothing has gone wrong yet."));
+        swapVerdict.appendChild(document.createTextNode(
+          "The owner re-check inside the swap is correct and both versions have it. What they disagree " +
+          "about is what to do once it fails."));
+      } else if (swapMode === "before") {
+        swapVerdict.setAttribute("data-tone", "bad");
+        swapVerdict.appendChild(el("b", null, "Three rows, gone, reported as a successful no-op."));
+        swapVerdict.appendChild(document.createTextNode(
+          "The empty list is indistinguishable from \"nothing needed changing\", so the dialog reports " +
+          "zero applied without reporting a problem. And no later run puts them back: sync only re-reads " +
+          "sessions inside SyncDaysRange, so once that folder ages past the window it is never opened " +
+          "again. The comment defending this called it recoverable. It is not."));
+      } else {
+        swapVerdict.setAttribute("data-tone", "good");
+        swapVerdict.appendChild(el("b", null, "Written to season without touching the PvE snapshot."));
+        swapVerdict.appendChild(document.createTextNode(
+          "null tells the caller the profile switched, which is a different fact from an empty plan. " +
+          "ownerId was known the whole time, so the rows go to the store through the same off-screen path " +
+          "the method already had for a profile that was never loaded. The player is looking at PvE and " +
+          "sees nothing change, which is correct: these rows are not theirs."));
+      }
+    }
+
+    bindSegment("[data-swap]", "data-swap", function (value) {
+      swapMode = value;
+      renderSwap();
+    });
+
+    swapStepButton.addEventListener("click", function () {
+      if (swapBeat < 3) swapBeat++;
+      renderSwap();
+    });
+
+    swapResetButton.addEventListener("click", function () {
+      swapBeat = 0;
+      renderSwap();
+    });
+
+    renderSwap();
+
+    /* ============================================================
+       Comprehension gate
+       ============================================================ */
+
+    var QUESTIONS = [
+      {
+        q: "Every defect in this commit shipped through a suite that was green. What made most of them unrepresentable in a test?",
+        options: [
+          "Coverage was too low; the affected branches had no tests at all",
+          "ProgressStoreFake keyed rows by the raw Id it was handed, while UserDataDbService keys by normalizedName ?? id, so tests exercised a dictionary shape production never produces",
+          "The tests only ran against Debug builds, where the behaviour differs",
+          "The assertions were tautological: they checked values the fake had been told to return"
+        ],
+        answer: 1,
+        why: "The double disagreed with the real store about one question, so a whole class of defect could not appear in any test written through it. That is why the durable half of the fix is the new test that pins UserDataDbService's own policy: it asserts nothing about the fake, and exists to fail when the two drift apart again."
+      },
+      {
+        q: "Before the fix, SessionModeTimeline built its timeline from a single capped read. What did a session log larger than 4 MB produce?",
+        options: [
+          "An IOException, caught and logged",
+          "An empty timeline, so every event resolved to null and was dropped",
+          "A confident answer derived from the last transition that happened to fall inside the first 4 MB",
+          "Duplicate entries, because the remainder was re-read on the next Refresh"
+        ],
+        answer: 2,
+        why: "Resolve still finds the last transition at or before the event; it just no longer knows about the ones past the cap. So a seasonal wipe's completions file into PvE and the summary reports the count as fact. A defect that answers null is visible. This one answers wrongly and calls it evidence."
+      },
+      {
+        q: "The timestamp fix is TryParseExact with InvariantCulture. Why not simply pass InvariantCulture to TryParse?",
+        options: [
+          "TryParse cannot parse fractional seconds",
+          "TryParseExact is measurably faster on a hot path",
+          "InvariantCulture is not a valid argument to TryParse on .NET 8",
+          "It would fix the calendar but still accept shapes EFT never writes, so a corrupted line becomes a plausible timestamp; the exact format makes the parser agree with the regex that already required that shape"
+        ],
+        answer: 3,
+        why: "The culture argument fixes the calendar half. The format string is the other half: EFT writes exactly one shape, TimestampRegex has already matched it, and accepting anything else would let a truncated or garbled line through as a real time."
+      },
+      {
+        q: "IsRecordedAs still ORs the Id key with the NormalizedName key. Why is that safe now when it was the bug before?",
+        options: [
+          "SetQuestRow removes the other spelling when it writes, so a quest can never occupy both keys at once",
+          "The OR was changed to an AND",
+          "Loads are now keyed by Id, matching the write policy",
+          "The snapshot dictionaries became case-sensitive, so the two keys can no longer collide"
+        ],
+        answer: 0,
+        why: "The OR is necessary: rows come back name-keyed, so an Id-only check reports \"not recorded\" for a quest that is recorded. It is only sound because the collapse guarantees one live entry per quest. Reviewing either helper without the other will not show you the argument."
+      },
+      {
+        q: "A write loses the compare-and-swap because the profile switched underneath it. The original code dropped the rows, arguing that dropping beats misfiling and the next sync recovers them. What is wrong with that?",
+        options: [
+          "Nothing; dropping really is the right call and the change is a regression",
+          "The swap should simply be retried until it wins",
+          "Sync only re-reads sessions inside SyncDaysRange, so once the folder ages out nothing puts the rows back; and ownerId is still known, so they can be written off screen instead",
+          "Misfiling is actually preferable, because the player can move rows between profiles by hand"
+        ],
+        answer: 2,
+        why: "Two errors in one comment. The recovery it promised does not exist, and the choice it framed was never binary: the code knows exactly which partition the rows belong to, it just cannot publish them to a snapshot naming someone else. Writing to the store without touching the snapshot is the path the method already had."
+      },
+      {
+        q: "The live quest-event handler awaits Dispatcher.InvokeAsync(...).Task.Unwrap() inside a semaphore. What breaks if the Unwrap is dropped?",
+        options: [
+          "The handler runs on the wrong thread and the UI throws",
+          "InvokeAsync of an async lambda completes when the lambda returns its Task, not when that Task finishes, so the gate releases at the first inner await and the serialization does nothing",
+          "The semaphore is never released, deadlocking the second event",
+          "Nothing; Unwrap is defensive and the gate alone is sufficient"
+        ],
+        answer: 1,
+        why: "Without the unwrap the awaited operation is \"the lambda started\", not \"the work finished\". The gate would then be released while the write is still in flight, which is exactly the overlap it exists to prevent, and the code would look correct in review."
+      },
+      {
+        q: "ProfileService's new lock is a static field rather than an instance field. Why?",
+        options: [
+          "To serialize transitions across every instance in the process",
+          "A static readonly object avoids an allocation per instance",
+          "GetUninitializedObject skips field initializers, so an instance field would be null and every lock on it would throw; the class is a singleton, so a per-type gate is a per-instance gate in production",
+          "Static locks are required when the lock is taken from a thread-pool thread"
+        ],
+        answer: 2,
+        why: "ProfileSwitchingTests builds an instance that way. The trade is explicit in the comment: two test instances sharing one gate only serialize with each other, which costs nothing, while a null instance gate would throw on every access."
+      },
+      {
+        q: "Fourteen Debug.WriteLine calls became Log.For. Why is that more than cleanup?",
+        options: [
+          "Log.For writes asynchronously, so it does not block the dispatcher",
+          "Debug.WriteLine carries [Conditional(\"DEBUG\")], so those call sites are compiled out of Release and none of those diagnostics existed in the build users run",
+          "Debug.WriteLine is obsolete in .NET 8 and produces a build warning",
+          "The log format changed, so existing log parsers had to be updated"
+        ],
+        answer: 1,
+        why: "The compiler removes the calls entirely from Release. Given how many defects here are silent by nature, a shipped build with no record of which profile a batch was saved to, or that a load was discarded as stale, leaves a user report with nothing to go on."
+      }
+    ];
+
+    var quizList = document.getElementById("quizList");
+    var answered = new Array(QUESTIONS.length).fill(null);
+
+    QUESTIONS.forEach(function (item, qi) {
+      var card = el("div", "q");
+      card.id = "q" + (qi + 1);
+
+      var head = el("div", "q-head");
+      head.appendChild(el("span", "q-num", String(qi + 1).padStart(2, "0")));
+      head.appendChild(el("p", "q-text", item.q));
+      card.appendChild(head);
+
+      var opts = el("div", "q-opts");
+      var why = el("div", "q-why");
+
+      item.options.forEach(function (text, oi) {
+        var label = el("label", "opt");
+        var input = document.createElement("input");
+        input.type = "radio";
+        input.name = "p2q" + qi;
+        input.value = String(oi);
+        label.appendChild(input);
+        label.appendChild(el("span", null, text));
+        opts.appendChild(label);
+
+        input.addEventListener("change", function () {
+          answered[qi] = oi;
+          var correct = oi === item.answer;
+          card.setAttribute("data-state", correct ? "right" : "wrong");
+
+          Array.prototype.forEach.call(opts.children, function (child, ci) {
+            child.classList.remove("is-right", "is-wrong");
+            if (ci === item.answer && (correct || ci === oi)) child.classList.add("is-right");
+            if (ci === oi && !correct) child.classList.add("is-wrong");
+          });
+
+          why.innerHTML = "";
+          var p = el("p");
+          p.appendChild(el("span", "verdict-word", correct ? "Correct. " : "Not quite. "));
+          p.appendChild(document.createTextNode(item.why));
+          why.appendChild(p);
+
+          updateGate();
+        });
+      });
+
+      card.appendChild(opts);
+      card.appendChild(why);
+      quizList.appendChild(card);
+    });
+
+    var gate = document.getElementById("gate");
+    var gateTitle = document.getElementById("gateTitle");
+    var gateBody = document.getElementById("gateBody");
+    var quizScore = document.getElementById("quizScore");
+    var railLabel = document.getElementById("railGateLabel");
+    var railHint = document.getElementById("railGateHint");
+    var railBar = document.getElementById("railGateBar");
+
+    var CHECKLIST = [
+      "Every consumer of a capped framing helper either loops to exhaustion or documents why one chunk is enough.",
+      "Every parse of machine-written date text is TryParseExact with InvariantCulture, including the session folder stamp.",
+      "Every in-memory quest write routes through SetQuestRow; no SetItem survives on snapshot.Quests.",
+      "No apply path returns an empty result to mean \"the profile switched\", and every reported count is rows written rather than rows queued.",
+      "A partition whose write threw is named in the summary rather than being absent from it.",
+      "Every ActiveProfileChanged subscriber takes the profile and revision from the event and resolves the storage id before its first await. Check for a subscriber the sweep missed.",
+      "Every test double's key policy is pinned against its real collaborator by a test that would fail if only the real one changed."
+    ];
+
+    function updateGate() {
+      var correct = 0;
+      QUESTIONS.forEach(function (item, i) { if (answered[i] === item.answer) correct++; });
+
+      quizScore.textContent = correct + "/" + QUESTIONS.length;
+      railHint.textContent = correct + " of " + QUESTIONS.length + " correct";
+      railBar.style.width = (100 * correct / QUESTIONS.length) + "%";
+
+      if (correct === QUESTIONS.length) {
+        railLabel.textContent = "Gate open";
+        gate.className = "gate is-open";
+        gateTitle.textContent = "Approval checklist: unlocked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Eight of eight. The model is the easy half; this wave is about the places an implementation " +
+          "can defeat a design it implements correctly on paper. Walk these before approving:"));
+        var ul = el("ul");
+        CHECKLIST.forEach(function (line) { ul.appendChild(el("li", null, line)); });
+        gateBody.appendChild(ul);
+        gateBody.appendChild(el("pre", "approval",
+          "Reviewed PR #38 c31ee51 against docs/2026-08-profile-data-attribution-deep-review-guide.html\n" +
+          "Comprehension gate: 8/8\n" +
+          "Checklist walked: read loops, invariant parsing, key collapse, lost-swap fallback,\n" +
+          "                  reported counts, profile-changed subscribers, test-double parity"));
+      } else {
+        railLabel.textContent = "Gate locked";
+        gate.className = "gate is-locked";
+        gateTitle.textContent = "Approval checklist: locked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Answer all eight questions correctly to unlock the reviewer checklist. " +
+          correct + " of " + QUESTIONS.length + " so far; wrong answers explain themselves, so re-read and revise."));
+      }
+    }
+
+    updateGate();
+  })();
+  </script>
+</body>
+</html>

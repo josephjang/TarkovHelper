@@ -39,6 +39,11 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
   진행도 귀속(attribution) 설계를 배경부터 따라가는 코드 가이드. 세션 모드 타임라인,
   싱크 분배, 프로필 전환 경합을 직접 조작해 보는 인터랙티브 랩 3개와, 이해도를
   검증하는 퀴즈 게이트를 포함합니다 (PR #38)
+- [2026-08-profile-data-attribution-deep-review-guide.html](2026-08-profile-data-attribution-deep-review-guide.html):
+  코드 가이드 2부. 전부 통과한 테스트 스위트가 왜 아무것도 증명하지 못했는지,
+  딥 리뷰가 찾은 구현 결함들을 다룹니다. 로그 읽기 상한, 로캘 의존 날짜 파싱,
+  키 철자 불일치, 유실된 쓰기를 조작해 보는 인터랙티브 랩 4개와 퀴즈 게이트를
+  포함합니다 (PR #38)
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
   마커 API 분석
 
