@@ -22,6 +22,21 @@ public sealed class UserDataDbService : IQuestProgressStore
     public string DatabasePath => _databasePath;
 
     /// <summary>
+    /// ProfileSettings key holding the moment a profile was last reset (ISO-8601, local time,
+    /// matching the log-timestamp convention). Written inside the reset transaction by
+    /// <see cref="ResetProfileAsync"/>; the sync and live-event fences read it through
+    /// <see cref="GetProgressResetAtAsync"/> and drop log events that are not after it.
+    /// </summary>
+    public const string ProgressResetAtKey = "app.progressResetAt";
+
+    /// <summary>
+    /// Test seam: invoked between the reset's deletes and its commit, so the rollback
+    /// guarantee (PRD R5) is provable against a real SQLite file rather than asserted.
+    /// Never set in production.
+    /// </summary>
+    internal Func<Task>? BeforeResetCommitAsync { get; set; }
+
+    /// <summary>
     /// 마이그레이션 진행 상황 이벤트
     /// </summary>
     public event Action<string>? MigrationProgress;
@@ -48,8 +63,19 @@ public sealed class UserDataDbService : IQuestProgressStore
     }
 
     private UserDataDbService()
+        : this(Path.Combine(AppEnv.ConfigPath, "user_data.db"))
     {
-        _databasePath = Path.Combine(AppEnv.ConfigPath, "user_data.db");
+    }
+
+    /// <summary>
+    /// Test seam: builds a service against an explicit database file, so the transactional
+    /// reset, the schema migrations, and the watermark round-trip get real SQLite tests
+    /// (temp file per test). The singleton path is unchanged; production code never calls
+    /// this. Mirrors the <see cref="IQuestProgressStore"/> seam precedent.
+    /// </summary>
+    internal UserDataDbService(string databasePath)
+    {
+        _databasePath = databasePath;
     }
 
     /// <summary>
@@ -137,13 +163,17 @@ public sealed class UserDataDbService : IQuestProgressStore
                 PRIMARY KEY (ProfileId, Key)
             );
 
-            -- 레이드 히스토리
+            -- 레이드 히스토리. ProfileId is the EFT character id; AppProfileId is the app
+            -- profile ('pvp'/'pve'/'season') of the session that produced the raid, captured
+            -- at raid creation. NULL means no evidence (legacy row or unknown session mode)
+            -- and such rows are never deleted by a profile reset (PRD R9).
             CREATE TABLE IF NOT EXISTS RaidHistory (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 RaidId TEXT,
                 SessionId TEXT,
                 ShortId TEXT,
                 ProfileId TEXT,
+                AppProfileId TEXT,
                 RaidType INTEGER NOT NULL DEFAULT 0,
                 GameMode INTEGER NOT NULL DEFAULT 0,
                 MapName TEXT,
@@ -176,6 +206,28 @@ public sealed class UserDataDbService : IQuestProgressStore
 
         await using var cmd = new SqliteCommand(createTablesSql, connection);
         await cmd.ExecuteNonQueryAsync();
+
+        await MigrateRaidHistoryOwnerColumnAsync(connection);
+    }
+
+    /// <summary>
+    /// Adds the nullable RaidHistory.AppProfileId column to databases created before raid
+    /// ownership existed. Idempotent (pragma check first, same pattern as
+    /// <see cref="MigrateToProfileSchemaAsync"/>); a fresh database gets the column from the
+    /// CREATE TABLE statement and the check finds it already present. Existing rows keep NULL,
+    /// which is the "no evidence" value a profile reset never deletes.
+    /// </summary>
+    private static async Task MigrateRaidHistoryOwnerColumnAsync(SqliteConnection connection)
+    {
+        var checkColSql = "SELECT COUNT(*) FROM pragma_table_info('RaidHistory') WHERE name='AppProfileId'";
+        await using var checkColCmd = new SqliteCommand(checkColSql, connection);
+        var hasColumn = Convert.ToInt32(await checkColCmd.ExecuteScalarAsync()) > 0;
+        if (hasColumn) return;
+
+        await using var alterCmd = new SqliteCommand(
+            "ALTER TABLE RaidHistory ADD COLUMN AppProfileId TEXT NULL", connection);
+        await alterCmd.ExecuteNonQueryAsync();
+        System.Diagnostics.Debug.WriteLine("[UserDataDbService] Added RaidHistory.AppProfileId column");
     }
 
     /// <summary>
@@ -409,22 +461,6 @@ public sealed class UserDataDbService : IQuestProgressStore
         await cmd.ExecuteNonQueryAsync();
     }
 
-    /// <summary>
-    /// 모든 퀘스트 진행 상태 삭제
-    /// </summary>
-    public async Task ClearAllQuestProgressAsync(string profileId)
-    {
-        await InitializeAsync();
-
-        var connectionString = $"Data Source={_databasePath}";
-        await using var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync();
-
-        await using var cmd = new SqliteCommand("DELETE FROM QuestProgress WHERE ProfileId = @profileId", connection);
-        cmd.Parameters.AddWithValue("@profileId", profileId);
-        await cmd.ExecuteNonQueryAsync();
-    }
-
     #endregion
 
     #region Objective Progress
@@ -525,22 +561,6 @@ public sealed class UserDataDbService : IQuestProgressStore
         await cmd.ExecuteNonQueryAsync();
     }
 
-    /// <summary>
-    /// 모든 목표 진행 상태 삭제
-    /// </summary>
-    public async Task ClearAllObjectiveProgressAsync(string profileId)
-    {
-        await InitializeAsync();
-
-        var connectionString = $"Data Source={_databasePath}";
-        await using var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync();
-
-        await using var cmd = new SqliteCommand("DELETE FROM ObjectiveProgress WHERE ProfileId = @profileId", connection);
-        cmd.Parameters.AddWithValue("@profileId", profileId);
-        await cmd.ExecuteNonQueryAsync();
-    }
-
     #endregion
 
     #region Hideout Progress
@@ -607,22 +627,6 @@ public sealed class UserDataDbService : IQuestProgressStore
         cmd.Parameters.AddWithValue("@level", level);
         cmd.Parameters.AddWithValue("@updatedAt", DateTime.UtcNow.ToString("o"));
 
-        await cmd.ExecuteNonQueryAsync();
-    }
-
-    /// <summary>
-    /// 모든 하이드아웃 진행 상태 삭제
-    /// </summary>
-    public async Task ClearAllHideoutProgressAsync(string profileId)
-    {
-        await InitializeAsync();
-
-        var connectionString = $"Data Source={_databasePath}";
-        await using var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync();
-
-        await using var cmd = new SqliteCommand("DELETE FROM HideoutProgress WHERE ProfileId = @profileId", connection);
-        cmd.Parameters.AddWithValue("@profileId", profileId);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -698,10 +702,29 @@ public sealed class UserDataDbService : IQuestProgressStore
         await cmd.ExecuteNonQueryAsync();
     }
 
+    #endregion
+
+    #region Profile Reset
+
     /// <summary>
-    /// 모든 아이템 인벤토리 삭제
+    /// Removes everything <paramref name="profileId"/> owns, atomically: one connection, one
+    /// transaction across all six profile-keyed tables, with the reset watermark written in the
+    /// same commit (feature-complete-profile-reset.spec.md). No observer, in the app or in the
+    /// file, can see a partially reset profile; on any failure the transaction rolls back and
+    /// the exception propagates to the caller, which is what makes "nothing was removed" a
+    /// statement the UI can make truthfully (PRD R5).
     /// </summary>
-    public async Task ClearAllItemInventoryAsync(string profileId)
+    /// <param name="profileId">The storage partition to reset. Never resolved ambiently.</param>
+    /// <param name="resetAt">
+    /// The reset moment, local time (the log-timestamp convention). Stored as the
+    /// <see cref="ProgressResetAtKey"/> watermark; log events not after it are fenced out.
+    /// </param>
+    /// <param name="preservedSettingKeys">
+    /// ProfileSettings keys that survive the reset (the edition facts). Every key NOT listed is
+    /// deleted: wiped-by-default is the safe direction for progress-shaped data.
+    /// </param>
+    public async Task ResetProfileAsync(
+        string profileId, DateTime resetAt, IReadOnlyCollection<string> preservedSettingKeys)
     {
         await InitializeAsync();
 
@@ -709,9 +732,83 @@ public sealed class UserDataDbService : IQuestProgressStore
         await using var connection = new SqliteConnection(connectionString);
         await connection.OpenAsync();
 
-        await using var cmd = new SqliteCommand("DELETE FROM ItemInventory WHERE ProfileId = @profileId", connection);
-        cmd.Parameters.AddWithValue("@profileId", profileId);
-        await cmd.ExecuteNonQueryAsync();
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
+        try
+        {
+            foreach (var table in new[] { "QuestProgress", "ObjectiveProgress", "HideoutProgress", "ItemInventory" })
+            {
+                await using var cmd = new SqliteCommand(
+                    $"DELETE FROM {table} WHERE ProfileId = @profileId", connection, transaction);
+                cmd.Parameters.AddWithValue("@profileId", profileId);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            // Profile values (level, scav rep, faction, prestige, DSP, ...) go back to their
+            // defaults by deleting the rows; only the named survivors stay (PRD R3, R4).
+            var preserved = preservedSettingKeys.ToList();
+            var placeholders = string.Join(", ", preserved.Select((_, i) => $"@keep{i}"));
+            var settingsSql = preserved.Count == 0
+                ? "DELETE FROM ProfileSettings WHERE ProfileId = @profileId"
+                : $"DELETE FROM ProfileSettings WHERE ProfileId = @profileId AND Key NOT IN ({placeholders})";
+            await using (var cmd = new SqliteCommand(settingsSql, connection, transaction))
+            {
+                cmd.Parameters.AddWithValue("@profileId", profileId);
+                for (var i = 0; i < preserved.Count; i++)
+                {
+                    cmd.Parameters.AddWithValue($"@keep{i}", preserved[i]);
+                }
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            // NULL AppProfileId never matches the equality, so legacy rows and rows with no
+            // session evidence survive by construction (PRD R9).
+            await using (var cmd = new SqliteCommand(
+                             "DELETE FROM RaidHistory WHERE AppProfileId = @profileId", connection, transaction))
+            {
+                cmd.Parameters.AddWithValue("@profileId", profileId);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            // The watermark is written after the settings delete, inside the same transaction:
+            // fence and removal commit atomically, and the insert is not swept by its own
+            // delete. A second reset simply overwrites the previous watermark.
+            await using (var cmd = new SqliteCommand(@"
+                INSERT INTO ProfileSettings (ProfileId, Key, Value)
+                VALUES (@profileId, @key, @value)
+                ON CONFLICT(ProfileId, Key) DO UPDATE SET Value = @value", connection, transaction))
+            {
+                cmd.Parameters.AddWithValue("@profileId", profileId);
+                cmd.Parameters.AddWithValue("@key", ProgressResetAtKey);
+                cmd.Parameters.AddWithValue("@value", resetAt.ToString("o"));
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            if (BeforeResetCommitAsync != null)
+            {
+                await BeforeResetCommitAsync();
+            }
+
+            await transaction.CommitAsync();
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The moment <paramref name="profileId"/> was last reset, or null when it never was.
+    /// Read by the sync and live-event fences (PRD R6); see <see cref="ProgressResetAtKey"/>.
+    /// </summary>
+    public async Task<DateTime?> GetProgressResetAtAsync(string profileId)
+    {
+        var value = await GetProfileSettingAsync(profileId, ProgressResetAtKey);
+        return DateTime.TryParse(
+            value, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var resetAt)
+            ? resetAt
+            : null;
     }
 
     #endregion
@@ -1327,11 +1424,11 @@ public sealed class UserDataDbService : IQuestProgressStore
 
         var sql = @"
             INSERT INTO RaidHistory (
-                RaidId, SessionId, ShortId, ProfileId, RaidType, GameMode,
+                RaidId, SessionId, ShortId, ProfileId, AppProfileId, RaidType, GameMode,
                 MapName, MapKey, ServerIp, ServerPort, IsParty, PartyLeaderAccountId,
                 StartTime, EndTime, DurationSeconds, Rtt, PacketLoss, PacketsSent, PacketsReceived
             ) VALUES (
-                @raidId, @sessionId, @shortId, @profileId, @raidType, @gameMode,
+                @raidId, @sessionId, @shortId, @profileId, @appProfileId, @raidType, @gameMode,
                 @mapName, @mapKey, @serverIp, @serverPort, @isParty, @partyLeaderId,
                 @startTime, @endTime, @durationSeconds, @rtt, @packetLoss, @packetsSent, @packetsReceived
             )";
@@ -1341,6 +1438,7 @@ public sealed class UserDataDbService : IQuestProgressStore
         cmd.Parameters.AddWithValue("@sessionId", raid.SessionId ?? (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@shortId", raid.ShortId ?? (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@profileId", raid.ProfileId ?? (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@appProfileId", raid.AppProfileId ?? (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@raidType", (int)raid.RaidType);
         cmd.Parameters.AddWithValue("@gameMode", (int)raid.GameMode);
         cmd.Parameters.AddWithValue("@mapName", raid.MapName ?? (object)DBNull.Value);
@@ -1384,7 +1482,8 @@ public sealed class UserDataDbService : IQuestProgressStore
         var sql = $@"
             SELECT RaidId, SessionId, ShortId, ProfileId, RaidType, GameMode,
                    MapName, MapKey, ServerIp, ServerPort, IsParty, PartyLeaderAccountId,
-                   StartTime, EndTime, Rtt, PacketLoss, PacketsSent, PacketsReceived
+                   StartTime, EndTime, Rtt, PacketLoss, PacketsSent, PacketsReceived,
+                   AppProfileId
             FROM RaidHistory
             {whereClause}
             ORDER BY StartTime DESC
@@ -1411,7 +1510,9 @@ public sealed class UserDataDbService : IQuestProgressStore
                 MapName = reader.IsDBNull(6) ? null : reader.GetString(6),
                 MapKey = reader.IsDBNull(7) ? null : reader.GetString(7),
                 ServerIp = reader.IsDBNull(8) ? null : reader.GetString(8),
-                ServerPort = reader.GetInt32(9),
+                // ServerPort is a nullable column (only SaveRaidHistoryAsync's own rows are
+                // guaranteed to carry a value); an unchecked GetInt32 threw on such a row.
+                ServerPort = reader.IsDBNull(9) ? 0 : reader.GetInt32(9),
                 IsParty = reader.GetInt32(10) == 1,
                 PartyLeaderAccountId = reader.IsDBNull(11) ? null : reader.GetString(11),
                 StartTime = reader.IsDBNull(12) ? null : DateTime.Parse(reader.GetString(12)),
@@ -1419,7 +1520,8 @@ public sealed class UserDataDbService : IQuestProgressStore
                 Rtt = reader.IsDBNull(14) ? null : reader.GetDouble(14),
                 PacketLoss = reader.IsDBNull(15) ? null : reader.GetDouble(15),
                 PacketsSent = reader.IsDBNull(16) ? null : reader.GetInt64(16),
-                PacketsReceived = reader.IsDBNull(17) ? null : reader.GetInt64(17)
+                PacketsReceived = reader.IsDBNull(17) ? null : reader.GetInt64(17),
+                AppProfileId = reader.IsDBNull(18) ? null : reader.GetString(18)
             };
             result.Add(raid);
         }

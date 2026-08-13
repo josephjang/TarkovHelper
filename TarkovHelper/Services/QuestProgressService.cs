@@ -1171,20 +1171,17 @@ namespace TarkovHelper.Services
         /// Save changed quests in batch (fire-and-forget, doesn't block UI) under
         /// <paramref name="profileId"/>, which is always the ProfileId of the snapshot the
         /// changes were derived from, never the selection at the moment this happens to run.
+        /// Tracked, so a reset of that profile drains this write before its deletes run and a
+        /// batch scheduled before the reset cannot recreate deleted rows; the failure logging
+        /// the old local catch did now lives in <see cref="TrackedUserDataWrites.Run"/>.
         /// </summary>
-        private async Task SaveProgressBatchAsync(
+        private Task SaveProgressBatchAsync(
             List<(string Id, string? NormalizedName, QuestStatus Status)> changedQuests, string profileId)
-        {
-            try
+            => TrackedUserDataWrites.Run(profileId, async () =>
             {
                 await Store.SaveQuestProgressBatchAsync(changedQuests, profileId);
                 _log.Debug($"Batch saved {changedQuests.Count} quest changes to {profileId}");
-            }
-            catch (Exception ex)
-            {
-                _log.Error($"Batch save to {profileId} failed", ex);
-            }
-        }
+            });
 
         /// <summary>
         /// The rows completing <paramref name="tasks"/> would write against
@@ -1245,8 +1242,13 @@ namespace TarkovHelper.Services
             // fall back off screen, and a lazy sequence would be consumed by the first pass.
             var materialized = changes.ToList();
 
-            return ApplyForOwnerAsync(
-                owner, snapshot => PlanQuestChanges(snapshot, materialized), "Batch");
+            // Tracked as one unit, so a reset of this owner orders the whole plan-and-apply
+            // against its deletes. RunAsync propagates failures: the sync caller reports a
+            // failed partition (FailedProfiles), which a swallowing wrapper would hide.
+            return TrackedUserDataWrites.RunAsync(
+                ProfileService.GetProfileId(owner),
+                () => ApplyForOwnerAsync(
+                    owner, snapshot => PlanQuestChanges(snapshot, materialized), "Batch"));
         }
 
         /// <summary>
@@ -1429,12 +1431,35 @@ namespace TarkovHelper.Services
         /// apply paths share). Callers must not invoke this for an unattributed event: an event
         /// with no evidence is dropped, never guessed at.
         /// </para>
+        /// <para>
+        /// <paramref name="timestamp"/> is the event's own log timestamp (local time). An event
+        /// not after the owner's reset watermark is ignored entirely: no row, no snapshot
+        /// change. The watermark is read INSIDE the tracked write, so check-then-write is atomic
+        /// against a concurrent reset; checked outside, an event could pass a stale watermark
+        /// read and land after the new one committed.
+        /// </para>
         /// </summary>
-        public Task ApplyLogEventAsync(TarkovTask task, QuestEventType eventType, AppProfile owner)
-            => ApplyForOwnerAsync(
-                owner,
-                snapshot => PlanLogEvent(snapshot, task, eventType),
-                $"Log event {eventType} for {task.Name}");
+        public Task ApplyLogEventAsync(
+            TarkovTask task, QuestEventType eventType, AppProfile owner, DateTime timestamp)
+        {
+            var ownerId = ProfileService.GetProfileId(owner);
+            return TrackedUserDataWrites.RunAsync(ownerId, async () =>
+            {
+                var resetAt = await Store.GetProgressResetAtAsync(ownerId);
+                if (resetAt.HasValue && timestamp <= resetAt.Value)
+                {
+                    _log.Info(
+                        $"Ignoring quest event {eventType} for {task.Name} at {timestamp:o}: " +
+                        $"not after {ownerId}'s reset at {resetAt.Value:o}");
+                    return 0;
+                }
+
+                return await ApplyForOwnerAsync(
+                    owner,
+                    snapshot => PlanLogEvent(snapshot, task, eventType),
+                    $"Log event {eventType} for {task.Name}");
+            });
+        }
 
         /// <summary>
         /// The rows one log event writes against <paramref name="snapshot"/>. Completed runs the
@@ -1505,20 +1530,12 @@ namespace TarkovHelper.Services
                 }, 0));
 
             // Fire-and-forget async save - don't block UI. The profile is resolved here, from
-            // the snapshot this edit was published onto, rather than inside the Task.Run body:
+            // the snapshot this edit was published onto, rather than inside the deferred body:
             // a profile switch between scheduling and running would otherwise redirect the row.
+            // Tracked, so a reset drains it; failures are logged by TrackedUserDataWrites.Run.
             var profileId = published.ProfileId;
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await Store.SaveQuestProgressAsync(taskKey!, task.NormalizedName, QuestStatus.Failed, profileId);
-                }
-                catch (Exception ex)
-                {
-                    _log.Error($"Failed to save failed quest {taskKey} to {profileId}", ex);
-                }
-            });
+            _ = TrackedUserDataWrites.Run(profileId,
+                () => Store.SaveQuestProgressAsync(taskKey!, task.NormalizedName, QuestStatus.Failed, profileId));
             ProgressChanged?.Invoke(this, EventArgs.Empty);
         }
 
@@ -1541,53 +1558,48 @@ namespace TarkovHelper.Services
             });
 
             // Fire-and-forget async delete - don't block UI. Profile captured from the snapshot
-            // the removal was published onto, not read inside the Task.Run body.
+            // the removal was published onto, not read inside the deferred body. Tracked, so a
+            // reset drains it; failures are logged by TrackedUserDataWrites.Run.
             var profileId = published.ProfileId;
-            _ = Task.Run(async () =>
+            _ = TrackedUserDataWrites.Run(profileId, async () =>
             {
-                try
+                await Store.DeleteQuestProgressAsync(taskKey!, profileId);
+                // Also delete by NormalizedName for clean migration
+                if (alsoByName)
                 {
-                    await Store.DeleteQuestProgressAsync(taskKey!, profileId);
-                    // Also delete by NormalizedName for clean migration
-                    if (alsoByName)
-                    {
-                        await Store.DeleteQuestProgressAsync(task.NormalizedName!, profileId);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _log.Error($"Failed to delete quest progress for {taskKey} in {profileId}", ex);
+                    await Store.DeleteQuestProgressAsync(task.NormalizedName!, profileId);
                 }
             });
             ProgressChanged?.Invoke(this, EventArgs.Empty);
         }
 
         /// <summary>
-        /// Reset all quest progress
+        /// The in-memory consequence of a committed profile reset
+        /// (feature-complete-profile-reset.spec.md): publishes an empty snapshot through the
+        /// existing CAS path, but only when the loaded snapshot belongs to
+        /// <paramref name="profileId"/>; another profile's loaded rows are untouched. Called by
+        /// <see cref="ProfileResetService"/> strictly AFTER the store transaction commits, which
+        /// is what reverses the old memory-first reset order: the screen never shows a reset
+        /// that did not durably happen (PRD R5).
         /// </summary>
-        public void ResetAllProgress()
+        public void HandleProfileReset(string profileId)
         {
-            var (published, _) = Mutate(current =>
-                (current with { Quests = ProgressSnapshot.EmptyQuests, Objectives = ProgressSnapshot.EmptyObjectives }, 0));
-
-            // DB에서 모든 퀘스트 진행 데이터 삭제. Profile captured from the cleared snapshot,
-            // not read inside the Task.Run body, so a switch cannot redirect the delete.
-            var profileId = published.ProfileId;
-            Task.Run(async () =>
+            var (_, cleared) = Mutate(current =>
             {
-                try
-                {
-                    await Store.ClearAllQuestProgressAsync(profileId);
-                    await Store.ClearAllObjectiveProgressAsync(profileId);
-                    _log.Info($"All progress cleared from DB for {profileId}");
-                }
-                catch (Exception ex)
-                {
-                    _log.Error($"Reset failed for {profileId}", ex);
-                }
-            }).GetAwaiter().GetResult();
+                if (!string.Equals(current.ProfileId, profileId, StringComparison.Ordinal))
+                    return (current, false);
 
-            ProgressChanged?.Invoke(this, EventArgs.Empty);
+                return (current with
+                {
+                    Quests = ProgressSnapshot.EmptyQuests,
+                    Objectives = ProgressSnapshot.EmptyObjectives,
+                }, true);
+            });
+
+            if (cleared)
+            {
+                ProgressChanged?.Invoke(this, EventArgs.Empty);
+            }
         }
 
         /// <summary>
@@ -1781,11 +1793,12 @@ namespace TarkovHelper.Services
         /// a parameter resolved once by the caller, not re-read per row: the loop awaits between
         /// rows, and a transition landing mid-loop used to split one edit across two partitions
         /// permanently (objective rows are written one connection at a time, with no transaction).
+        /// Tracked, so a reset drains the whole batch before deleting; failures are logged by
+        /// <see cref="TrackedUserDataWrites.Run"/>.
         /// </summary>
-        private async Task SaveObjectiveProgressBatchAsync(
+        private Task SaveObjectiveProgressBatchAsync(
             List<(string Key, string? QuestId, bool IsCompleted)> items, string profileId)
-        {
-            try
+            => TrackedUserDataWrites.Run(profileId, async () =>
             {
                 foreach (var item in items)
                 {
@@ -1798,12 +1811,7 @@ namespace TarkovHelper.Services
                         await Store.DeleteObjectiveProgressAsync(item.Key, profileId);
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                _log.Error($"Failed to save objective progress to {profileId}", ex);
-            }
-        }
+            });
 
         /// <summary>
         /// Get all completed objective indices for a quest

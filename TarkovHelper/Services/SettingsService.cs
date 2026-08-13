@@ -45,10 +45,22 @@ public class SettingsService
 
     // Profile-specific keys: stored per game mode in the ProfileSettings table.
     // All other keys remain global in the UserSettings table.
-    private static readonly string[] ProfileSpecificKeys =
+    // Internal so the survivor-classification test can pin the subset relation below.
+    internal static readonly string[] ProfileSpecificKeys =
     {
         KeyPlayerLevel, KeyScavRep, KeyShowLevelLockedQuests, KeyDspDecodeCount,
         KeyPlayerFaction, KeyHasEodEdition, KeyHasUnheardEdition, KeyPrestigeLevel
+    };
+
+    // Profile keys a complete profile reset PRESERVES (feature-complete-profile-reset.md):
+    // the editions describe what the account owns, not what a character progressed, and
+    // wiping them would corrupt quest filtering until the player noticed. Declared next to
+    // ProfileSpecificKeys so a future profile key is added in sight of the question "does
+    // this survive a reset?". Deletion is the default: a key not listed here is wiped,
+    // which is the safe direction for progress-shaped data.
+    internal static readonly string[] ProfileKeysSurvivingReset =
+    {
+        KeyHasEodEdition, KeyHasUnheardEdition
     };
 
     // Map settings keys moved to MapSettings service
@@ -94,6 +106,28 @@ public class SettingsService
     /// notify subscribers so the UI reflects the new profile's values.
     /// </summary>
     private void OnActiveProfileChanged(object? sender, ProfileChangedEventArgs e)
+    {
+        ReloadProfileSettingsAndNotify();
+    }
+
+    /// <summary>
+    /// The in-memory consequence of a committed profile reset: when the reset target is the
+    /// active profile, the cached level, scav rep, faction, prestige, DSP count and editions
+    /// are stale (their rows were just deleted, editions excepted), so reload them and re-raise
+    /// the changed events exactly as a profile switch would. A reset of a profile that is not
+    /// active touches no cached value here, so nothing needs reloading. Called by
+    /// <see cref="ProfileResetService"/> strictly AFTER the store transaction commits.
+    /// </summary>
+    public void HandleProfileReset(string profileId)
+    {
+        if (!string.Equals(profileId, ProfileService.Instance.ActiveProfileId, StringComparison.Ordinal))
+            return;
+
+        ReloadProfileSettingsAndNotify();
+    }
+
+    /// <summary>Reloads the active profile's settings and re-raises every profile-scoped changed event.</summary>
+    private void ReloadProfileSettingsAndNotify()
     {
         LoadProfileSettings();
 

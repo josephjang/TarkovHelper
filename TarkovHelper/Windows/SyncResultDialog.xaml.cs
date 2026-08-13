@@ -121,7 +121,11 @@ public partial class SyncResultDialog : Window
             // quest was seen and deliberately left Active rather than missed.
             _result.InProgressQuests.Count,
             _result.UnattributedEventCount,
-            _result.UnmatchedQuestIds.Count);
+            _result.UnmatchedQuestIds.Count,
+            // Events fenced out because they predate their owner profile's reset: the visible
+            // proof the reset holds against the game's retained logs (PRD R6 of
+            // feature-complete-profile-reset.md).
+            _result.PreResetEventCount);
 
         BtnCancel.Content = _loc.SyncSummarySkipButton;
         BtnConfirm.Content = _loc.SyncSummaryConfirmButton;

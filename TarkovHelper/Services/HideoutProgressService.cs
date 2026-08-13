@@ -31,6 +31,14 @@ namespace TarkovHelper.Services
         /// </summary>
         private long _latestRevision;
 
+        /// <summary>
+        /// The profile whose rows <see cref="_progress"/> currently holds, published together
+        /// with it. Empty until the first load. What lets <see cref="HandleProfileReset"/>
+        /// no-op when the reset target is not the loaded profile (the quest snapshot carries
+        /// its own ProfileId; this mutable cache needs the field spelled out).
+        /// </summary>
+        private string _loadedProfileId = string.Empty;
+
         // Currency items should count by reference count, not total amount
         private static readonly HashSet<string> CurrencyItems = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -124,20 +132,16 @@ namespace TarkovHelper.Services
 
         private void SaveSingleModule(string normalizedName, int level)
         {
-            // Resolved before the Task.Run body, not inside it: a profile switch between
+            // Resolved before the deferred body, not inside it: a profile switch between
             // scheduling and running would otherwise redirect this row to the new profile.
+            // Task.Run keeps the write off the dispatcher's synchronization context (this
+            // call site blocks); the tracked run orders it against a reset of this profile
+            // and logs failures (TrackedUserDataWrites.Run never throws).
             var profileId = ProfileService.Instance.ActiveProfileId;
-            Task.Run(async () =>
-            {
-                try
-                {
-                    await _userDataDb.SaveHideoutProgressAsync(normalizedName, level, profileId);
-                }
-                catch (Exception ex)
-                {
-                    _log.Error($"Save failed for {normalizedName} in {profileId}", ex);
-                }
-            }).GetAwaiter().GetResult();
+            Task.Run(() => TrackedUserDataWrites.Run(
+                    profileId,
+                    () => _userDataDb.SaveHideoutProgressAsync(normalizedName, level, profileId)))
+                .GetAwaiter().GetResult();
         }
 
         /// <summary>
@@ -306,26 +310,18 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Reset all hideout progress
+        /// The in-memory consequence of a committed profile reset: swaps in empty state, but
+        /// only when <paramref name="profileId"/> is the loaded profile; another profile's rows
+        /// stay on screen untouched. Called by <see cref="ProfileResetService"/> strictly AFTER
+        /// the store transaction commits (memory follows durable state, PRD R5). The store rows
+        /// themselves are deleted by <c>UserDataDbService.ResetProfileAsync</c>'s transaction,
+        /// not here.
         /// </summary>
-        public void ResetAllProgress()
+        public void HandleProfileReset(string profileId)
         {
-            _progress = new HideoutProgress();
+            if (!string.Equals(_loadedProfileId, profileId, StringComparison.Ordinal)) return;
 
-            // Resolved before the Task.Run body: a switch between scheduling and running would
-            // otherwise clear the profile the user just moved to instead of the one they reset.
-            var profileId = ProfileService.Instance.ActiveProfileId;
-            Task.Run(async () =>
-            {
-                try
-                {
-                    await _userDataDb.ClearAllHideoutProgressAsync(profileId);
-                }
-                catch (Exception ex)
-                {
-                    _log.Error($"Reset failed for {profileId}", ex);
-                }
-            }).GetAwaiter().GetResult();
+            _progress = new HideoutProgress();
             ProgressChanged?.Invoke(this, EventArgs.Empty);
         }
 
@@ -403,6 +399,7 @@ namespace TarkovHelper.Services
             }
 
             _progress = loaded;
+            _loadedProfileId = profileId;
             return true;
         }
 

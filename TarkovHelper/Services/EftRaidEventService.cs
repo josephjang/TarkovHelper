@@ -727,7 +727,7 @@ public sealed class EftRaidEventService : IDisposable
                 _currentRaid = null;
 
                 // 레이드 히스토리에 저장
-                Task.Run(() => SaveRaidHistoryAsync(endedRaid));
+                ScheduleRaidHistorySave(endedRaid);
 
                 RaidEvent?.Invoke(this, new EftRaidEventArgs
                 {
@@ -835,6 +835,7 @@ public sealed class EftRaidEventService : IDisposable
             _currentRaid = new EftRaidInfo
             {
                 ProfileId = raidProfileId,
+                AppProfileId = AppProfileIdOf(_currentSessionProfileHint),
                 RaidType = raidType,
                 GameMode = GameModeOf(_currentSessionProfileHint),
                 MapName = mapName,
@@ -872,6 +873,7 @@ public sealed class EftRaidEventService : IDisposable
                 _currentRaid = new EftRaidInfo
                 {
                     ProfileId = _currentProfile?.PmcProfileId,
+                    AppProfileId = AppProfileIdOf(_currentSessionProfileHint),
                     RaidType = RaidType.Unknown, // scene preset만으로는 PMC/SCAV 구분 불가
                     GameMode = GameModeOf(_currentSessionProfileHint),
                     MapName = bundleName,
@@ -928,6 +930,7 @@ public sealed class EftRaidEventService : IDisposable
                     {
                         RaidId = raidId,
                         ProfileId = _currentProfile?.PmcProfileId,
+                        AppProfileId = AppProfileIdOf(_currentSessionProfileHint),
                         RaidType = RaidType.Unknown,
                         GameMode = GameModeOf(_currentSessionProfileHint),
                         MapName = mapFromTransit,
@@ -969,7 +972,7 @@ public sealed class EftRaidEventService : IDisposable
             endedRaid.EndTime = timestamp;
 
             // 레이드 히스토리에 저장
-            Task.Run(() => SaveRaidHistoryAsync(endedRaid));
+            ScheduleRaidHistorySave(endedRaid);
 
             RaidEvent?.Invoke(this, new EftRaidEventArgs
             {
@@ -993,6 +996,18 @@ public sealed class EftRaidEventService : IDisposable
         SessionProfileHint.PvpZone or SessionProfileHint.PvpSeason => GameMode.PVP,
         _ => GameMode.Unknown
     };
+
+    /// <summary>
+    /// The app profile a session hint proves, as a storage id, or null when the hint carries no
+    /// destination. Captured into <see cref="EftRaidInfo.AppProfileId"/> when a raid object is
+    /// first created, so a profile switch between raid start and the deferred save cannot
+    /// re-own the row; the ambient selection is never consulted (it is not evidence of where
+    /// the raid happened). Both maps are the pure static ones from <see cref="ProfileService"/>.
+    /// </summary>
+    internal static string? AppProfileIdOf(SessionProfileHint profileHint)
+        => ProfileService.TryResolveDetectedProfile(profileHint, out var profile)
+            ? ProfileService.GetProfileId(profile)
+            : null;
 
     internal static bool TryParseCompletedProfileSelection(
         string line,
@@ -1179,6 +1194,25 @@ public sealed class EftRaidEventService : IDisposable
         catch (Exception ex)
         {
             _log.Warning($"Failed to save profile to DB: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Schedules the fire-and-forget raid history save. An owned row (non-null
+    /// <see cref="EftRaidInfo.AppProfileId"/>) goes through the tracked-writes barrier so a
+    /// reset of that profile drains it before deleting; an unowned row cannot conflict with
+    /// any reset (a reset only deletes exact owner matches), so it skips the barrier and keeps
+    /// only the failure logging.
+    /// </summary>
+    private void ScheduleRaidHistorySave(EftRaidInfo raid)
+    {
+        if (raid.AppProfileId is { } ownerId)
+        {
+            _ = TrackedUserDataWrites.Run(ownerId, () => SaveRaidHistoryAsync(raid));
+        }
+        else
+        {
+            _ = Task.Run(() => SaveRaidHistoryAsync(raid));
         }
     }
 

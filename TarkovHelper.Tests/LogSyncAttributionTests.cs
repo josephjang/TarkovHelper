@@ -372,6 +372,63 @@ public sealed class LogSyncAttributionTests : IDisposable
         Assert.False(outcome.AppliedByProfile.ContainsKey(AppProfile.PvpSeason));
     }
 
+    // The reset fence (PRD R6 of feature-complete-profile-reset.md): the game retains days of
+    // session logs, so without the watermark the first sync after a reset re-imports the removed
+    // progress into exactly the profile that was just reset. Events straddle the watermark here:
+    // only the newer one applies, and the dropped one is counted so the player can see the fence
+    // working.
+    [Fact]
+    public async Task Events_not_after_a_profiles_reset_are_fenced_and_counted()
+    {
+        // Second precision, because the notification's dt field is unix seconds: a watermark
+        // with sub-second digits could never be hit exactly by a parsed event timestamp.
+        var now = DateTime.Now;
+        var resetAt = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0).AddHours(-2);
+
+        WriteSession("log_2026.08.10_10-00-00_1.1.0", "PvpSeason", PveQuestId, resetAt.AddHours(-1));
+        WriteSession("log_2026.08.10_12-00-00_1.1.0", "PvpSeason", SeasonQuestId, resetAt.AddHours(1));
+        _store.ResetWatermarks[ProfileService.SeasonProfileId] = resetAt;
+
+        var result = await SyncAsync(daysRange: 0, PveQuest, SeasonQuest);
+
+        Assert.Equal(1, result.PreResetEventCount);
+        var change = Assert.Single(result.QuestsToComplete);
+        Assert.Equal("season-quest", change.NormalizedName);
+    }
+
+    // The boundary is "not after": an event stamped exactly at the reset moment is dropped.
+    [Fact]
+    public async Task An_event_stamped_exactly_at_the_reset_moment_is_dropped()
+    {
+        var now = DateTime.Now;
+        var resetAt = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0).AddHours(-2);
+
+        WriteSession("log_2026.08.10_10-00-00_1.1.0", "PvpSeason", SeasonQuestId, resetAt);
+        _store.ResetWatermarks[ProfileService.SeasonProfileId] = resetAt;
+
+        var result = await SyncAsync(daysRange: 0, SeasonQuest);
+
+        Assert.Equal(1, result.PreResetEventCount);
+        Assert.Empty(result.QuestsToComplete);
+    }
+
+    // The fence is per owner: one profile's reset must not swallow another profile's history.
+    [Fact]
+    public async Task Another_profiles_reset_does_not_fence_this_profiles_events()
+    {
+        var now = DateTime.Now;
+        var resetAt = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0).AddHours(-2);
+
+        WriteSession("log_2026.08.10_10-00-00_1.1.0", "Pve", PveQuestId, resetAt.AddHours(-1));
+        _store.ResetWatermarks[ProfileService.SeasonProfileId] = resetAt;
+
+        var result = await SyncAsync(daysRange: 0, PveQuest);
+
+        Assert.Equal(0, result.PreResetEventCount);
+        var change = Assert.Single(result.QuestsToComplete);
+        Assert.Equal("pve-quest", change.NormalizedName);
+    }
+
     // PRD R3 on the LIVE path: an event with no session mode evidence has no destination, so it
     // is never raised. Dropping it at the source rather than at each subscriber is what makes the
     // rule enforceable - a consumer that forgot the null check would record it under whatever

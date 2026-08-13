@@ -26,13 +26,16 @@ public interface IQuestProgressStore
 
     Task DeleteQuestProgressAsync(string id, string profileId);
 
-    Task ClearAllQuestProgressAsync(string profileId);
-
     Task<Dictionary<string, bool>> LoadObjectiveProgressAsync(string profileId);
 
     Task SaveObjectiveProgressAsync(string id, string? questId, bool isCompleted, string profileId);
 
     Task DeleteObjectiveProgressAsync(string id, string profileId);
 
-    Task ClearAllObjectiveProgressAsync(string profileId);
+    /// <summary>
+    /// The moment this profile was last reset, or null when it never was. The sync and
+    /// live-event fences drop log events whose timestamp is not after it (PRD R6 of
+    /// feature-complete-profile-reset.md); hand entry never consults it.
+    /// </summary>
+    Task<DateTime?> GetProgressResetAtAsync(string profileId);
 }

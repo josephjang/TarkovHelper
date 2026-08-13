@@ -98,31 +98,41 @@ public sealed class ProgressStoreFakeTests
         await store.SaveQuestProgressBatchAsync(
             new[] { ("q-2", (string?)"b-quest", QuestStatus.Done) }, Profile);
         await store.DeleteQuestProgressAsync("q-1", Profile);
-        await store.ClearAllQuestProgressAsync(Profile);
         await store.SaveObjectiveProgressAsync("o-1", "q-1", true, Profile);
         await store.DeleteObjectiveProgressAsync("o-1", Profile);
-        await store.ClearAllObjectiveProgressAsync(Profile);
 
         // A path that skipped the gate would make a "held write across a profile switch" test
         // pass without the write ever being held.
-        Assert.Equal(7, gated.Count);
+        Assert.Equal(5, gated.Count);
         Assert.All(gated, profileId => Assert.Equal(Profile, profileId));
     }
 
     [Fact]
-    public async Task Deletes_and_clears_are_recorded_with_the_profile_they_named()
+    public async Task Deletes_are_recorded_with_the_profile_they_named()
     {
         var store = new ProgressStoreFake();
         store.Seed(Profile, Quest, QuestStatus.Done);
         store.Seed("season", Quest, QuestStatus.Done);
 
         await store.DeleteQuestProgressAsync("q-1", Profile);
-        await store.ClearAllQuestProgressAsync("season");
-        await store.ClearAllObjectiveProgressAsync("season");
 
         Assert.Equal((Profile, "q-1"), Assert.Single(store.QuestDeletes));
-        Assert.Equal("season", Assert.Single(store.QuestClears));
-        Assert.Equal("season", Assert.Single(store.ObjectiveClears));
+        Assert.Equal(QuestStatus.Done, store.QuestsOf("season")[Quest.NormalizedName!]);
+    }
+
+    // The fake's watermark mirrors the real store's app.progressResetAt row: absent means
+    // "never reset" and answers null, seeded means that exact moment comes back.
+    [Fact]
+    public async Task The_reset_watermark_round_trips_and_defaults_to_null()
+    {
+        var store = new ProgressStoreFake();
+        Assert.Null(await store.GetProgressResetAtAsync(Profile));
+
+        var resetAt = new DateTime(2026, 8, 13, 21, 30, 0);
+        store.ResetWatermarks[Profile] = resetAt;
+
+        Assert.Equal(resetAt, await store.GetProgressResetAtAsync(Profile));
+        Assert.Null(await store.GetProgressResetAtAsync("season"));
     }
 
     // Enumerating a partition while a writer mutates it used to throw an intermittent
