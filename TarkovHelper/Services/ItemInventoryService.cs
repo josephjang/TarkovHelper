@@ -33,6 +33,14 @@ namespace TarkovHelper.Services
         /// </summary>
         private long _latestRevision;
 
+        /// <summary>
+        /// The profile whose quantities <see cref="_inventoryData"/> currently holds, published
+        /// together with it under <see cref="_lock"/>. Empty until the first load. Lets
+        /// <see cref="HandleProfileReset"/> no-op when the reset target is not the loaded
+        /// profile.
+        /// </summary>
+        private string _loadedProfileId = string.Empty;
+
         private ItemInventoryService()
         {
             LoadInventory();
@@ -64,13 +72,18 @@ namespace TarkovHelper.Services
                 _pendingSaves.Clear();
             }
 
+            // Each entry is tracked under ITS OWN captured profile id, so a reset of one
+            // profile drains only that profile's pending writes and holds new ones while its
+            // deletes run; entries captured for other profiles are unaffected. Failures are
+            // logged by TrackedUserDataWrites.Run (which never throws), replacing the old
+            // per-entry catch.
             Task.Run(async () =>
             {
                 foreach (var entry in itemsToSave)
                 {
                     var itemName = entry.Key;
                     var profileId = entry.Value;
-                    try
+                    await TrackedUserDataWrites.Run(profileId, async () =>
                     {
                         int firQty, nonFirQty;
                         lock (_lock)
@@ -87,11 +100,7 @@ namespace TarkovHelper.Services
                             }
                         }
                         await _userDataDb.SaveItemInventoryAsync(itemName, firQty, nonFirQty, profileId);
-                    }
-                    catch (Exception ex)
-                    {
-                        _log.Error($"Save failed for {itemName}: {ex.Message}");
-                    }
+                    });
                 }
             }).GetAwaiter().GetResult();
         }
@@ -260,29 +269,41 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Reset all inventory data
+        /// Drops every pending debounced save captured for <paramref name="profileId"/>,
+        /// leaving other profiles' entries in place. Called by <see cref="ProfileResetService"/>
+        /// under the reset barrier (so no flush is mid-flight): these entries describe
+        /// quantities the reset transaction is about to delete, and flushing them first would
+        /// write rows only to remove them.
         /// </summary>
-        public void ResetAllInventory()
+        public void DiscardPendingSaves(string profileId)
         {
             lock (_lock)
             {
+                var doomed = _pendingSaves
+                    .Where(entry => string.Equals(entry.Value, profileId, StringComparison.Ordinal))
+                    .Select(entry => entry.Key)
+                    .ToList();
+                foreach (var key in doomed)
+                {
+                    _pendingSaves.Remove(key);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The in-memory consequence of a committed profile reset: swaps in empty quantities,
+        /// but only when <paramref name="profileId"/> is the loaded profile. Called by
+        /// <see cref="ProfileResetService"/> strictly AFTER the store transaction commits
+        /// (memory follows durable state, PRD R5); the rows themselves are deleted by
+        /// <c>UserDataDbService.ResetProfileAsync</c>'s transaction.
+        /// </summary>
+        public void HandleProfileReset(string profileId)
+        {
+            lock (_lock)
+            {
+                if (!string.Equals(_loadedProfileId, profileId, StringComparison.Ordinal)) return;
                 _inventoryData = new ItemInventoryData();
             }
-
-            // Resolved before the Task.Run body: a switch between scheduling and running would
-            // otherwise clear the profile the user just moved to instead of the one they reset.
-            var profileId = ProfileService.Instance.ActiveProfileId;
-            Task.Run(async () =>
-            {
-                try
-                {
-                    await _userDataDb.ClearAllItemInventoryAsync(profileId);
-                }
-                catch (Exception ex)
-                {
-                    _log.Error($"Reset failed for {profileId}", ex);
-                }
-            }).GetAwaiter().GetResult();
 
             InventoryChanged?.Invoke(this, EventArgs.Empty);
         }
@@ -391,6 +412,7 @@ namespace TarkovHelper.Services
             lock (_lock)
             {
                 _inventoryData = newData;
+                _loadedProfileId = profileId;
             }
             return true;
         }

@@ -1117,11 +1117,11 @@
                                                        Foreground="{StaticResource ErrorBrush}" VerticalAlignment="Center"/>
                                         </StackPanel>
                                         <TextBlock x:Name="TxtResetProgressDesc"
-                                                   Text="Reset all quest and hideout progress. This cannot be undone."
+                                                   Text="Completely reset the selected profile: quests, hideout, items, raid history, and profile values. This cannot be undone."
                                                    FontSize="{DynamicResource FontSizeXSmall}"
                                                    Foreground="{StaticResource TextSecondaryBrush}"
                                                    TextWrapping="Wrap" Margin="0,0,0,12"/>
-                                        <Button x:Name="BtnResetProgress" Content="Reset All Progress"
+                                        <Button x:Name="BtnResetProgress" Content="Reset Profile..."
                                                 Padding="12,8" HorizontalAlignment="Left"
                                                 Background="Transparent" BorderBrush="{StaticResource ErrorBrush}" Foreground="{StaticResource ErrorBrush}"
                                                 Click="BtnResetProgress_Click"/>

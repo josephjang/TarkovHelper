@@ -182,6 +182,15 @@ namespace TarkovHelper.Models
         public int UnattributedEventCount { get; set; }
 
         /// <summary>
+        /// Quest events dropped because they are not after their owner profile's reset
+        /// watermark. The game retains several days of session logs, so without this fence the
+        /// first sync after a reset would re-import the removed progress into exactly the
+        /// profile that was just reset (PRD R6 of feature-complete-profile-reset.md). Counted
+        /// so the player can see the fence working rather than wonder where the events went.
+        /// </summary>
+        public int PreResetEventCount { get; set; }
+
+        /// <summary>
         /// Whether the sync was successful overall
         /// </summary>
         public bool Success => Errors.Count == 0 || TotalEventsFound > 0;

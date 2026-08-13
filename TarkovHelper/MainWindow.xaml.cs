@@ -1229,32 +1229,29 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Reset all progress with confirmation
+    /// Opens the complete-profile-reset dialog (feature-complete-profile-reset.md). The target
+    /// is the profile selected at this moment, captured ONCE and carried through the dialog and
+    /// the reset itself: an automatic profile switch while the dialog is open must not move the
+    /// reset (PRD R1). The reset work is ProfileResetService's; this window only opens the
+    /// dialog and refreshes its pages afterwards.
     /// </summary>
     private async void BtnResetProgress_Click(object sender, RoutedEventArgs e)
     {
-        var result = MessageBox.Show(
-            "정말 진행도를 초기화 하시겠습니까?\nAre you sure you want to reset all progress?\n\nThis will reset:\n- Quest progress\n- Hideout progress",
-            "Reset Progress / 진행도 초기화",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning);
+        var (target, _) = ProfileService.Instance.CurrentTransition;
 
-        if (result == MessageBoxResult.Yes)
+        var dialog = new ProfileResetDialog(
+            target, () => ProfileResetService.Instance.ResetAsync(target))
         {
-            // Reset quest progress
-            QuestProgressService.Instance.ResetAllProgress();
+            Owner = this
+        };
+        dialog.ShowDialog();
 
-            // Reset hideout progress
-            _hideoutProgressService.ResetAllProgress();
-
-            // Reload pages
+        if (dialog.ResetSucceeded)
+        {
+            // The services already published their cleared state and raised their change
+            // events; this reloads the quest list page itself, matching what every other
+            // whole-profile transition does.
             await LoadAndShowQuestListAsync();
-
-            MessageBox.Show(
-                "진행도가 초기화되었습니다.\nAll progress has been reset.",
-                "Reset Complete / 초기화 완료",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
         }
     }
 
@@ -1830,7 +1827,10 @@ public partial class MainWindow : Window
         var task = progressService.GetTaskById(evt.QuestId);
         if (task == null) return;
 
-        await progressService.ApplyLogEventAsync(task, evt.EventType, owner);
+        // The event's own log timestamp rides along so the reset fence can judge it: an event
+        // from before the owner's reset must never restore removed progress (PRD R6 of
+        // feature-complete-profile-reset.md).
+        await progressService.ApplyLogEventAsync(task, evt.EventType, owner, evt.Timestamp);
 
         // Refresh quest list if visible. ApplyLogEventAsync leaves the snapshot untouched for
         // a profile that is not loaded, so this is a no-op redraw in that case.

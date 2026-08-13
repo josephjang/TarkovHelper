@@ -364,7 +364,7 @@ public partial class LocalizationService
     /// <summary>
     /// {0} = events found, {1} = already up to date, {2} = prerequisites auto-completed,
     /// {3} = quests still in progress, {4} = events with no game mode evidence,
-    /// {5} = unmatched quest IDs.
+    /// {5} = unmatched quest IDs, {6} = events from before a profile reset.
     /// </summary>
     public string SyncStatsFormat => CurrentLanguage switch
     {
@@ -374,21 +374,24 @@ public partial class LocalizationService
             "자동 완료된 선행 퀘스트: {2}\n" +
             "아직 진행중인 퀘스트: {3}\n" +
             "게임 모드를 알 수 없어 제외된 이벤트: {4}\n" +
-            "매칭 실패한 퀘스트 ID: {5}",
+            "매칭 실패한 퀘스트 ID: {5}\n" +
+            "프로필 초기화 이전이라 제외된 이벤트: {6}",
         AppLanguage.JA =>
             "ログで見つかったイベント: {0}\n" +
             "すでに最新のクエスト: {1}\n" +
             "自動完了した前提クエスト: {2}\n" +
             "まだ進行中のクエスト: {3}\n" +
             "ゲームモードが不明で除外したイベント: {4}\n" +
-            "マッチング失敗したクエストID: {5}",
+            "マッチング失敗したクエストID: {5}\n" +
+            "プロフィールリセット以前のため除外したイベント: {6}",
         _ =>
             "Events found in logs: {0}\n" +
             "Already up to date: {1}\n" +
             "Prerequisites auto-completed: {2}\n" +
             "Still in progress: {3}\n" +
             "Skipped, no game mode in logs: {4}\n" +
-            "Unmatched quest IDs: {5}"
+            "Unmatched quest IDs: {5}\n" +
+            "Skipped, before a profile reset: {6}"
     };
 
     /// <summary>{0} = number of mutually exclusive groups awaiting a choice.</summary>

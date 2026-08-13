@@ -1,0 +1,101 @@
+<Window x:Class="TarkovHelper.Windows.ProfileResetDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Reset Profile"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ResizeMode="NoResize"
+        SizeToContent="WidthAndHeight"
+        ShowInTaskbar="False">
+
+    <Border Background="{DynamicResource BackgroundDarkBrush}"
+            CornerRadius="8" Padding="24"
+            MinWidth="440" MaxWidth="560">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
+        </Border.Effect>
+        <Grid>
+            <!--
+                Confirm state: names the captured target profile, enumerates every category the
+                reset removes, and warns when a raid appears to be running (PRD R1, R2, R8).
+                Every interactive element carries an AutomationId (via x:Name) because the e2e
+                harness drives owned WPF windows by title and InvokePattern but cannot drive a
+                native MessageBox at all; this dialog replaces two of those.
+            -->
+            <StackPanel x:Name="ConfirmPanel">
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                    <TextBlock Text="&#xE7BA;" FontFamily="{StaticResource IconFont}"
+                               FontSize="{DynamicResource FontSizeLarge}"
+                               Foreground="{StaticResource ErrorBrush}" VerticalAlignment="Center"
+                               Margin="0,0,8,0"/>
+                    <TextBlock x:Name="TxtResetTitle" Text="Reset Profile"
+                               FontSize="{DynamicResource FontSizeXLarge}" FontWeight="SemiBold"
+                               Foreground="{StaticResource ErrorBrush}" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <TextBlock x:Name="TxtResetTarget"
+                           FontSize="{DynamicResource FontSizeSmall}" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           TextWrapping="Wrap" Margin="0,0,0,8"/>
+
+                <Border Background="{DynamicResource BackgroundMediumBrush}"
+                        CornerRadius="4" Padding="12,10" Margin="0,0,0,8">
+                    <TextBlock x:Name="TxtResetCategories"
+                               FontSize="{DynamicResource FontSizeXSmall}"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               TextWrapping="Wrap" LineHeight="20"/>
+                </Border>
+
+                <TextBlock x:Name="TxtResetSurvivors"
+                           FontSize="{DynamicResource FontSizeTiny}"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           TextWrapping="Wrap" Margin="0,0,0,8"/>
+
+                <Border x:Name="RaidWarningBorder" Background="#44FFA726" CornerRadius="4"
+                        Padding="12,8" Margin="0,0,0,8" Visibility="Collapsed">
+                    <TextBlock x:Name="TxtRaidWarning"
+                               FontSize="{DynamicResource FontSizeXSmall}"
+                               Foreground="#FFA726" TextWrapping="Wrap"/>
+                </Border>
+
+                <TextBlock x:Name="TxtResetWorking"
+                           FontSize="{DynamicResource FontSizeXSmall}"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           Visibility="Collapsed" Margin="0,0,0,8"/>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                    <Button x:Name="BtnCancelReset" Content="Cancel"
+                            Padding="16,8" Margin="0,0,8,0"
+                            Click="BtnCancelReset_Click"/>
+                    <Button x:Name="BtnConfirmReset" Content="Reset This Profile"
+                            Padding="16,8"
+                            Background="Transparent"
+                            BorderBrush="{StaticResource ErrorBrush}"
+                            Foreground="{StaticResource ErrorBrush}"
+                            Click="BtnConfirmReset_Click"/>
+                </StackPanel>
+            </StackPanel>
+
+            <!--
+                Result state: success confirms completion; failure names the failure and states
+                that nothing was removed (PRD R5). Same window, swapped in after the outcome is
+                known, so the player cannot lose the result behind a closed dialog.
+            -->
+            <StackPanel x:Name="ResultPanel" Visibility="Collapsed">
+                <TextBlock x:Name="TxtResetResult"
+                           FontSize="{DynamicResource FontSizeSmall}" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           TextWrapping="Wrap" Margin="0,0,0,8"/>
+                <TextBlock x:Name="TxtResetError"
+                           FontSize="{DynamicResource FontSizeTiny}"
+                           Foreground="#EF5350"
+                           TextWrapping="Wrap" Visibility="Collapsed" Margin="0,0,0,8"/>
+                <Button x:Name="BtnCloseReset" Content="Close"
+                        Padding="16,8" HorizontalAlignment="Right" Margin="0,8,0,0"
+                        Click="BtnCloseReset_Click"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

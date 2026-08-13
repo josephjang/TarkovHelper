@@ -171,6 +171,16 @@ public class EftRaidInfo
     public string? ProfileId { get; set; }
 
     /// <summary>
+    /// The app profile ("pvp"/"pve"/"season") of the session that produced this raid,
+    /// captured from the session-mode evidence when the raid object is first created.
+    /// Null means "no evidence", never a default: a raid with no owner is preserved by
+    /// every profile reset rather than guessed into one (PRD R9 of
+    /// feature-complete-profile-reset.md). Distinct from <see cref="ProfileId"/>, which
+    /// is the EFT character id and says nothing about app-profile ownership.
+    /// </summary>
+    public string? AppProfileId { get; set; }
+
+    /// <summary>
     /// 레이드 타입 (PMC/SCAV)
     /// </summary>
     public RaidType RaidType { get; set; }

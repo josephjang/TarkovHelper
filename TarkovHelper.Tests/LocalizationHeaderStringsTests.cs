@@ -41,12 +41,17 @@ public class LocalizationHeaderStringsTests
         "UpdateStatusAvailable", "UpdateStatusFailed", "TimeJustNow",
         "TimeMinutesAgoFormat", "SettingsDangerZoneLabel", "SettingsResetProgressDesc",
         "SettingsResetProgressButton",
+        // Profile reset dialog (feature-complete-profile-reset.md)
+        "ProfileResetDialogTitle", "ProfileResetTargetFormat", "ProfileResetCategories",
+        "ProfileResetSurvivorsNote", "ProfileResetRaidWarning", "ProfileResetConfirmButton",
+        "ProfileResetWorking", "ProfileResetSuccessFormat", "ProfileResetFailedText",
     };
 
     private static readonly string[] FormatKeys =
     {
         "HeaderProfileChangedFromLogsFormat", "HeaderVersionTooltipInstall", "HeaderUpdateAvailableFormat",
         "SettingsCurrentVersionFormat", "SettingsUpdateToFormat", "TimeMinutesAgoFormat",
+        "ProfileResetTargetFormat", "ProfileResetSuccessFormat",
     };
 
     private static string GetString(LocalizationService loc, string key)

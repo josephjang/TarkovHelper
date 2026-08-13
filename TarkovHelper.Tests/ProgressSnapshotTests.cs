@@ -233,7 +233,7 @@ public sealed class ProgressSnapshotTests
         var progressChanged = 0;
         service.ProgressChanged += (_, _) => progressChanged++;
 
-        await service.ApplyLogEventAsync(Quest, QuestEventType.Completed, AppProfile.PvpSeason);
+        await service.ApplyLogEventAsync(Quest, QuestEventType.Completed, AppProfile.PvpSeason, DateTime.Now);
 
         Assert.Equal(QuestStatus.Done, store.QuestsOf(IdOf(AppProfile.PvpSeason))[StoredKey]);
         Assert.Empty(store.QuestsOf(IdOf(AppProfile.PveZone)));
@@ -251,7 +251,7 @@ public sealed class ProgressSnapshotTests
         var progressChanged = 0;
         service.ProgressChanged += (_, _) => progressChanged++;
 
-        await service.ApplyLogEventAsync(Quest, QuestEventType.Completed, AppProfile.PveZone);
+        await service.ApplyLogEventAsync(Quest, QuestEventType.Completed, AppProfile.PveZone, DateTime.Now);
 
         Assert.Equal(QuestStatus.Done, store.QuestsOf(IdOf(AppProfile.PveZone))[StoredKey]);
         // In memory the row keeps the key the WRITE named, until the next reload re-reads it
@@ -271,8 +271,8 @@ public sealed class ProgressSnapshotTests
         var store = new ProgressStoreFake();
         var service = ProgressServiceHarness.Create(store, AppProfile.PvpZone, Quest);
 
-        await service.ApplyLogEventAsync(Quest, QuestEventType.Failed, AppProfile.PveZone);
-        await service.ApplyLogEventAsync(Quest, QuestEventType.Failed, AppProfile.PveZone);
+        await service.ApplyLogEventAsync(Quest, QuestEventType.Failed, AppProfile.PveZone, DateTime.Now);
+        await service.ApplyLogEventAsync(Quest, QuestEventType.Failed, AppProfile.PveZone, DateTime.Now);
 
         Assert.Equal(QuestStatus.Failed, store.QuestsOf(IdOf(AppProfile.PveZone))[StoredKey]);
         // Once, not twice: the second pass re-reads the stored row under its NAME, so an

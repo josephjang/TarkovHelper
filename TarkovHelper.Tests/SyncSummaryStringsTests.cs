@@ -24,7 +24,7 @@ public sealed class SyncSummaryStringsTests
     private static readonly (string Key, int Slots)[] FormatKeys =
     {
         ("SyncAppliedCountFormat", 1),
-        ("SyncStatsFormat", 6),
+        ("SyncStatsFormat", 7),
         ("SyncAlternativesHeaderFormat", 1),
         ("SyncAlternativeGroupFormat", 2),
         ("SyncAlternativesAppliedFormat", 1),

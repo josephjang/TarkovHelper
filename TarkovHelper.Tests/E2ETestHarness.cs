@@ -946,6 +946,90 @@ internal static class E2EDb
         command.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// Seeds one QuestProgress row before a launch, creating the table with the app's own
+    /// schema first (the app's CREATE TABLE IF NOT EXISTS adopts it). Lets a reset test start
+    /// from a database that already holds per-profile progress.
+    /// </summary>
+    public static void SeedQuestProgress(
+        string configDir, string profileId, string id, string? normalizedName, string status)
+    {
+        using var connection = new SqliteConnection($"Data Source={Path.Combine(configDir, "user_data.db")}");
+        connection.Open();
+        using (var create = connection.CreateCommand())
+        {
+            create.CommandText = @"
+                CREATE TABLE IF NOT EXISTS QuestProgress (
+                    ProfileId TEXT NOT NULL DEFAULT 'pvp',
+                    Id TEXT NOT NULL,
+                    NormalizedName TEXT,
+                    Status TEXT NOT NULL,
+                    UpdatedAt TEXT NOT NULL,
+                    PRIMARY KEY (ProfileId, Id)
+                )";
+            create.ExecuteNonQuery();
+        }
+        using var insert = connection.CreateCommand();
+        insert.CommandText = @"
+            INSERT OR REPLACE INTO QuestProgress (ProfileId, Id, NormalizedName, Status, UpdatedAt)
+            VALUES ($profile, $id, $name, $status, $updatedAt)";
+        insert.Parameters.AddWithValue("$profile", profileId);
+        insert.Parameters.AddWithValue("$id", id);
+        insert.Parameters.AddWithValue("$name", (object?)normalizedName ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$status", status);
+        insert.Parameters.AddWithValue("$updatedAt", DateTime.UtcNow.ToString("o"));
+        insert.ExecuteNonQuery();
+    }
+
+    /// <summary>Seeds one per-profile setting row pre-launch (same table-adoption pattern).</summary>
+    public static void SeedProfileSetting(string configDir, string profileId, string key, string value)
+    {
+        using var connection = new SqliteConnection($"Data Source={Path.Combine(configDir, "user_data.db")}");
+        connection.Open();
+        using (var create = connection.CreateCommand())
+        {
+            create.CommandText = @"
+                CREATE TABLE IF NOT EXISTS ProfileSettings (
+                    ProfileId TEXT NOT NULL,
+                    Key TEXT NOT NULL,
+                    Value TEXT NOT NULL,
+                    PRIMARY KEY (ProfileId, Key)
+                )";
+            create.ExecuteNonQuery();
+        }
+        using var insert = connection.CreateCommand();
+        insert.CommandText = @"
+            INSERT INTO ProfileSettings (ProfileId, Key, Value) VALUES ($profile, $key, $value)
+            ON CONFLICT(ProfileId, Key) DO UPDATE SET Value = $value";
+        insert.Parameters.AddWithValue("$profile", profileId);
+        insert.Parameters.AddWithValue("$key", key);
+        insert.Parameters.AddWithValue("$value", value);
+        insert.ExecuteNonQuery();
+    }
+
+    /// <summary>Reads one per-profile setting value, or null when the row/table/db is missing.</summary>
+    public static string? ReadProfileSetting(string configDir, string profileId, string key)
+    {
+        var dbPath = Path.Combine(configDir, "user_data.db");
+        if (!File.Exists(dbPath)) return null;
+
+        using var connection = new SqliteConnection($"Data Source={dbPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Value FROM ProfileSettings WHERE ProfileId = $profile AND Key = $key";
+        command.Parameters.AddWithValue("$profile", profileId);
+        command.Parameters.AddWithValue("$key", key);
+        try
+        {
+            return command.ExecuteScalar() as string;
+        }
+        catch (SqliteException)
+        {
+            // Table not created yet.
+            return null;
+        }
+    }
+
     /// <summary>Reads a persisted setting value, or null when the key/db is missing.</summary>
     public static string? ReadSetting(string configDir, string key)
     {

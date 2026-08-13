@@ -61,6 +61,13 @@ public sealed class ProfileAttributionSourceTests
         // stay empty.
         ("TarkovHelper/Services/UserDataDbService.cs", Array.Empty<AllowedRead>()),
 
+        // The reset path (feature-complete-profile-reset.spec.md): the target profile is
+        // captured by MainWindow when the confirmation opens and arrives as a parameter
+        // everywhere below it, so neither the orchestrator nor the barrier may ask which
+        // profile is selected. Empty and must stay empty.
+        ("TarkovHelper/Services/ProfileResetService.cs", Array.Empty<AllowedRead>()),
+        ("TarkovHelper/Services/TrackedUserDataWrites.cs", Array.Empty<AllowedRead>()),
+
         // Hideout and inventory progress is hand entry only - no log carries it - so the
         // selection IS the evidence for these writes. They are listed anyway because the
         // dangerous shape is the same one: a read taken inside a deferred body rather than
@@ -72,8 +79,6 @@ public sealed class ProfileAttributionSourceTests
                 "Constructor: subscribes to transitions, carrying the event's own profile and revision."),
             new AllowedRead("SaveSingleModule", "var profileId = ProfileService.Instance.ActiveProfileId;",
                 "Hand-entered module level; resolved before the deferred save body."),
-            new AllowedRead("ResetAllProgress", "var profileId = ProfileService.Instance.ActiveProfileId;",
-                "Hand-invoked reset of the profile on screen; resolved before the deferred body."),
             new AllowedRead("LoadProgress", "var (profile, revision) = ProfileService.Instance.CurrentTransition;",
                 "Startup load: the one load with no ActiveProfileChanged to learn the profile from."),
         }),
@@ -81,8 +86,6 @@ public sealed class ProfileAttributionSourceTests
         {
             new AllowedRead("ItemInventoryService", "ProfileService.Instance.ActiveProfileChanged +=",
                 "Constructor: subscribes to transitions, carrying the event's own profile and revision."),
-            new AllowedRead("ResetAllInventory", "var profileId = ProfileService.Instance.ActiveProfileId;",
-                "Hand-invoked reset of the profile on screen; resolved before the deferred body."),
             new AllowedRead("ScheduleSave", "_pendingSaves[itemNormalizedName] = ProfileService.Instance.ActiveProfileId;",
                 "Debounced save: the profile is captured at dirty-time, not when the timer fires."),
             new AllowedRead("LoadInventory", "var (profile, revision) = ProfileService.Instance.CurrentTransition;",

@@ -450,16 +450,105 @@ public partial class LocalizationService
 
     public string SettingsResetProgressDesc => CurrentLanguage switch
     {
-        AppLanguage.KO => "모든 퀘스트와 은신처 진행도를 초기화합니다. 되돌릴 수 없습니다.",
-        AppLanguage.JA => "すべてのクエストとハイドアウトの進行状況をリセットします。元に戻せません。",
-        _ => "Reset all quest and hideout progress. This cannot be undone."
+        AppLanguage.KO => "선택된 프로필의 모든 데이터(퀘스트, 은신처, 아이템, 레이드 기록, 프로필 값)를 초기화합니다. 되돌릴 수 없습니다.",
+        AppLanguage.JA => "選択中のプロフィールのすべてのデータ(クエスト、ハイドアウト、アイテム、レイド記録、プロフィール値)をリセットします。元に戻せません。",
+        _ => "Completely reset the selected profile: quests, hideout, items, raid history, and profile values. This cannot be undone."
     };
 
     public string SettingsResetProgressButton => CurrentLanguage switch
     {
-        AppLanguage.KO => "모든 진행도 초기화",
-        AppLanguage.JA => "全進行状況をリセット",
-        _ => "Reset All Progress"
+        AppLanguage.KO => "프로필 초기화...",
+        AppLanguage.JA => "プロフィールをリセット...",
+        _ => "Reset Profile..."
+    };
+
+    #endregion
+
+    #region Profile Reset Dialog (feature-complete-profile-reset.md)
+
+    public string ProfileResetDialogTitle => CurrentLanguage switch
+    {
+        AppLanguage.KO => "프로필 초기화",
+        AppLanguage.JA => "プロフィールのリセット",
+        _ => "Reset Profile"
+    };
+
+    /// <summary>{0} = localized profile name (the captured target, PRD R1).</summary>
+    public string ProfileResetTargetFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO => "{0} 프로필의 모든 데이터를 영구적으로 삭제합니다:",
+        AppLanguage.JA => "{0} プロフィールのすべてのデータを完全に削除します:",
+        _ => "This will permanently remove everything the {0} profile owns:"
+    };
+
+    /// <summary>The enumerated categories a reset removes (PRD R2, R3).</summary>
+    public string ProfileResetCategories => CurrentLanguage switch
+    {
+        AppLanguage.KO =>
+            "- 퀘스트 및 목표 진행도\n" +
+            "- 은신처 진행도\n" +
+            "- 아이템 인벤토리\n" +
+            "- 이 프로필의 레이드 기록\n" +
+            "- 플레이어 레벨, 스캐브 평판, 진영, 프레스티지, DSP 해독 횟수",
+        AppLanguage.JA =>
+            "- クエストと目標の進行状況\n" +
+            "- ハイドアウトの進行状況\n" +
+            "- アイテムインベントリ\n" +
+            "- このプロフィールのレイド記録\n" +
+            "- プレイヤーレベル、スカーヴ評判、陣営、プレステージ、DSP解読回数",
+        _ =>
+            "- Quest and objective progress\n" +
+            "- Hideout progress\n" +
+            "- Item inventory\n" +
+            "- Raid history recorded for this profile\n" +
+            "- Player level, Scav Rep, faction, prestige, and DSP decode count"
+    };
+
+    /// <summary>What a reset never touches (PRD R4).</summary>
+    public string ProfileResetSurvivorsNote => CurrentLanguage switch
+    {
+        AppLanguage.KO => "게임 에디션(EOD, The Unheard Edition), 앱 설정, 다른 프로필의 데이터는 유지됩니다.",
+        AppLanguage.JA => "ゲームエディション(EOD、The Unheard Edition)、アプリ設定、他のプロフィールのデータは保持されます。",
+        _ => "Game editions (EOD, The Unheard Edition), app settings, and other profiles are not affected."
+    };
+
+    /// <summary>Shown when a raid appears to be in progress; warns, never blocks (PRD R8).</summary>
+    public string ProfileResetRaidWarning => CurrentLanguage switch
+    {
+        AppLanguage.KO => "레이드가 진행 중인 것으로 보입니다. 확인하면 초기화는 그대로 진행됩니다.",
+        AppLanguage.JA => "レイドが進行中のようです。確認するとリセットはそのまま実行されます。",
+        _ => "A raid appears to be in progress. The reset will still proceed if you confirm."
+    };
+
+    public string ProfileResetConfirmButton => CurrentLanguage switch
+    {
+        AppLanguage.KO => "이 프로필 초기화",
+        AppLanguage.JA => "このプロフィールをリセット",
+        _ => "Reset This Profile"
+    };
+
+    /// <summary>Shown while the reset transaction runs (buttons disabled).</summary>
+    public string ProfileResetWorking => CurrentLanguage switch
+    {
+        AppLanguage.KO => "초기화 중...",
+        AppLanguage.JA => "リセット中...",
+        _ => "Resetting..."
+    };
+
+    /// <summary>{0} = localized profile name.</summary>
+    public string ProfileResetSuccessFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO => "{0} 프로필이 초기화되었습니다.",
+        AppLanguage.JA => "{0} プロフィールをリセットしました。",
+        _ => "The {0} profile has been reset."
+    };
+
+    /// <summary>The all-or-nothing failure outcome: nothing was removed (PRD R5).</summary>
+    public string ProfileResetFailedText => CurrentLanguage switch
+    {
+        AppLanguage.KO => "초기화에 실패했습니다. 아무것도 삭제되지 않았습니다.",
+        AppLanguage.JA => "リセットに失敗しました。何も削除されていません。",
+        _ => "The reset failed. Nothing was removed."
     };
 
     #endregion

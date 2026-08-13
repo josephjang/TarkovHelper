@@ -1058,6 +1058,26 @@ namespace TarkovHelper.Services
             {
                 var owner = group.Key;
                 var ownerId = ProfileService.GetProfileId(owner);
+                var ownerEvents = group.ToList();
+
+                // The reset fence (PRD R6 of feature-complete-profile-reset.md): events not
+                // after the owner's reset watermark describe progress the player deliberately
+                // removed, and the game retains their session logs for days. "Not after" is the
+                // boundary, so an event stamped exactly at the reset moment is dropped too.
+                var resetAt = await Store.GetProgressResetAtAsync(ownerId);
+                if (resetAt.HasValue)
+                {
+                    var preReset = ownerEvents.Count(e => e.Timestamp <= resetAt.Value);
+                    if (preReset > 0)
+                    {
+                        result.PreResetEventCount += preReset;
+                        ownerEvents = ownerEvents.Where(e => e.Timestamp > resetAt.Value).ToList();
+                        _log.Info(
+                            $"Dropped {preReset} quest events for {ownerId} from before its reset " +
+                            $"at {resetAt.Value:o}");
+                    }
+                    if (ownerEvents.Count == 0) continue;
+                }
 
                 // The loaded profile's rows are the snapshot, not the store: hand edits publish to
                 // the snapshot synchronously and persist fire-and-forget, so a fresh store read can
@@ -1071,7 +1091,7 @@ namespace TarkovHelper.Services
                         ? snapshot.Quests
                         : await Store.LoadQuestProgressAsync(ownerId);
 
-                changes.AddRange(RunProfilePass(owner, group.ToList(), storedProgress, run));
+                changes.AddRange(RunProfilePass(owner, ownerEvents, storedProgress, run));
             }
 
             // Sort by timestamp (oldest first) for chronological display
@@ -1082,6 +1102,7 @@ namespace TarkovHelper.Services
             _log.Info(
                 $"Sync complete: {result.TotalEventsFound} events, {result.QuestsToComplete.Count} to apply, " +
                 $"{result.AlreadyCurrentCount} already current, {result.UnattributedEventCount} unattributed, " +
+                $"{result.PreResetEventCount} pre-reset, " +
                 $"{result.InProgressQuests.Count} in progress, {result.UnmatchedQuestIds.Count} unmatched");
 
             // 매칭되지 않은 ID 샘플 출력

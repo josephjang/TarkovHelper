@@ -54,14 +54,15 @@ internal sealed class ProgressStoreFake : IQuestProgressStore
     /// </summary>
     public List<(string ProfileId, string Key)> QuestDeletes { get; } = new();
 
-    /// <summary>Every profile whose quest rows were cleared wholesale, in order.</summary>
-    public List<string> QuestClears { get; } = new();
-
     /// <summary>Every objective write in order (true = saved, false = deleted).</summary>
     public List<(string ProfileId, string Key, bool IsCompleted)> ObjectiveWrites { get; } = new();
 
-    /// <summary>Every profile whose objective rows were cleared wholesale, in order.</summary>
-    public List<string> ObjectiveClears { get; } = new();
+    /// <summary>
+    /// Per-profile reset watermark, mirroring the <c>app.progressResetAt</c> ProfileSettings
+    /// row the real store keeps. Seed it to put a fence in front of a profile; a profile with
+    /// no entry was never reset, which <see cref="GetProgressResetAtAsync"/> answers null for.
+    /// </summary>
+    public Dictionary<string, DateTime> ResetWatermarks { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Awaited by the loaders before they return. Lets a test hold a reload open and act in the
@@ -237,17 +238,6 @@ internal sealed class ProgressStoreFake : IQuestProgressStore
         }
     }
 
-    public async Task ClearAllQuestProgressAsync(string profileId)
-    {
-        await Gate(profileId);
-        var partition = QuestPartition(profileId);
-        lock (_sync)
-        {
-            partition.Clear();
-            QuestClears.Add(profileId);
-        }
-    }
-
     public async Task<Dictionary<string, bool>> LoadObjectiveProgressAsync(string profileId)
     {
         var gate = ObjectiveLoadGate ?? LoadGate;
@@ -277,14 +267,16 @@ internal sealed class ProgressStoreFake : IQuestProgressStore
         }
     }
 
-    public async Task ClearAllObjectiveProgressAsync(string profileId)
+    /// <summary>
+    /// The watermark read is deliberately NOT gated by <see cref="SaveGate"/>: it is a read,
+    /// and gating it would deadlock a test that holds the gate open to trap a write mid-fence.
+    /// </summary>
+    public Task<DateTime?> GetProgressResetAtAsync(string profileId)
     {
-        await Gate(profileId);
-        var partition = ObjectivePartition(profileId);
         lock (_sync)
         {
-            partition.Clear();
-            ObjectiveClears.Add(profileId);
+            return Task.FromResult<DateTime?>(
+                ResetWatermarks.TryGetValue(profileId, out var resetAt) ? resetAt : null);
         }
     }
 }
