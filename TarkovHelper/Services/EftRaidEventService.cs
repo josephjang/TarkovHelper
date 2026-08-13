@@ -1202,13 +1202,15 @@ public sealed class EftRaidEventService : IDisposable
     /// <see cref="EftRaidInfo.AppProfileId"/>) goes through the tracked-writes barrier so a
     /// reset of that profile drains it before deleting; an unowned row cannot conflict with
     /// any reset (a reset only deletes exact owner matches), so it skips the barrier and keeps
-    /// only the failure logging.
+    /// only the failure logging. Both arms hand the write to the thread pool: this runs on the
+    /// log-polling thread, inside its read lock.
     /// </summary>
     private void ScheduleRaidHistorySave(EftRaidInfo raid)
     {
         if (raid.AppProfileId is { } ownerId)
         {
-            _ = TrackedUserDataWrites.Run(ownerId, () => SaveRaidHistoryAsync(raid));
+            _ = TrackedUserDataWrites.RunLoggingFailures(
+                ownerId, $"raid history {raid.MapKey} ({raid.RaidType})", () => SaveRaidHistoryAsync(raid));
         }
         else
         {

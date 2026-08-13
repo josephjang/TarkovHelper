@@ -33,11 +33,28 @@ namespace TarkovHelper.Services
 
         /// <summary>
         /// The profile whose rows <see cref="_progress"/> currently holds, published together
-        /// with it. Empty until the first load. What lets <see cref="HandleProfileReset"/>
-        /// no-op when the reset target is not the loaded profile (the quest snapshot carries
-        /// its own ProfileId; this mutable cache needs the field spelled out).
+        /// with it under <see cref="_stateGate"/>. Empty until the first load. What lets
+        /// <see cref="HandleProfileReset"/> no-op when the reset target is not the loaded
+        /// profile (the quest snapshot carries its own ProfileId; this mutable cache needs the
+        /// field spelled out).
         /// </summary>
         private string _loadedProfileId = string.Empty;
+
+        /// <summary>
+        /// Guards the (<see cref="_progress"/>, <see cref="_loadedProfileId"/>) pair and every
+        /// read of the module levels. The pair used to be published by two bare assignments: a
+        /// reset hook running between them saw the OLD profile id next to the NEW profile's
+        /// rows, passed its guard, and wiped levels the load had just published. Publishing and
+        /// checking under one gate makes that interleaving impossible, and it also stops a
+        /// <see cref="SetLevel"/> on the dispatcher from mutating the level dictionary while a
+        /// pool thread reads it.
+        /// <para>
+        /// Static because this service is a singleton, so one gate covers exactly one cache. It
+        /// is never held across an await, across <see cref="SaveSingleModule"/> (which blocks on
+        /// the reset barrier), or across a <see cref="ProgressChanged"/> raise.
+        /// </para>
+        /// </summary>
+        private static readonly object _stateGate = new();
 
         // Currency items should count by reference count, not total amount
         private static readonly HashSet<string> CurrencyItems = new(StringComparer.OrdinalIgnoreCase)
@@ -94,7 +111,7 @@ namespace TarkovHelper.Services
             if (string.IsNullOrEmpty(module.NormalizedName))
                 return 0;
 
-            return _progress.Modules.TryGetValue(module.NormalizedName, out var level) ? level : 0;
+            return GetCurrentLevel(module.NormalizedName);
         }
 
         /// <summary>
@@ -102,7 +119,10 @@ namespace TarkovHelper.Services
         /// </summary>
         public int GetCurrentLevel(string normalizedName)
         {
-            return _progress.Modules.TryGetValue(normalizedName, out var level) ? level : 0;
+            lock (_stateGate)
+            {
+                return _progress.Modules.TryGetValue(normalizedName, out var level) ? level : 0;
+            }
         }
 
         /// <summary>
@@ -116,16 +136,23 @@ namespace TarkovHelper.Services
             // Clamp level between 0 and max level
             level = Math.Max(0, Math.Min(level, module.MaxLevel));
 
-            if (level == 0)
+            // The gate covers the cache mutation only. SaveSingleModule blocks until the reset
+            // barrier for this profile lowers, and the reset lowers it only after
+            // HandleProfileReset has taken the gate: holding it here would deadlock the pair.
+            lock (_stateGate)
             {
-                _progress.Modules.Remove(module.NormalizedName);
-            }
-            else
-            {
-                _progress.Modules[module.NormalizedName] = level;
+                if (level == 0)
+                {
+                    _progress.Modules.Remove(module.NormalizedName);
+                }
+                else
+                {
+                    _progress.Modules[module.NormalizedName] = level;
+                }
+
+                _progress.LastUpdated = DateTime.UtcNow;
             }
 
-            _progress.LastUpdated = DateTime.UtcNow;
             SaveSingleModule(module.NormalizedName, level);
             ProgressChanged?.Invoke(this, EventArgs.Empty);
         }
@@ -134,12 +161,14 @@ namespace TarkovHelper.Services
         {
             // Resolved before the deferred body, not inside it: a profile switch between
             // scheduling and running would otherwise redirect this row to the new profile.
-            // Task.Run keeps the write off the dispatcher's synchronization context (this
-            // call site blocks); the tracked run orders it against a reset of this profile
-            // and logs failures (TrackedUserDataWrites.Run never throws).
+            // Task.Run keeps the whole call off the dispatcher's synchronization context (this
+            // call site blocks on the result); the tracked run orders it against a reset of this
+            // profile, runs the write on the pool, and logs failures against the module name
+            // (RunLoggingFailures never throws).
             var profileId = ProfileService.Instance.ActiveProfileId;
-            Task.Run(() => TrackedUserDataWrites.Run(
+            Task.Run(() => TrackedUserDataWrites.RunLoggingFailures(
                     profileId,
+                    $"hideout module {normalizedName} at level {level}",
                     () => _userDataDb.SaveHideoutProgressAsync(normalizedName, level, profileId)))
                 .GetAwaiter().GetResult();
         }
@@ -316,12 +345,22 @@ namespace TarkovHelper.Services
         /// the store transaction commits (memory follows durable state, PRD R5). The store rows
         /// themselves are deleted by <c>UserDataDbService.ResetProfileAsync</c>'s transaction,
         /// not here.
+        /// <para>
+        /// The guard and the swap happen together under <see cref="_stateGate"/>, so a load
+        /// publishing a DIFFERENT profile concurrently either lands entirely before this check
+        /// (which then no-ops) or entirely after this swap (and its rows stand). Reading the
+        /// profile id and writing the rows as two unguarded steps let a reset of the outgoing
+        /// profile empty the incoming one.
+        /// </para>
         /// </summary>
         public void HandleProfileReset(string profileId)
         {
-            if (!string.Equals(_loadedProfileId, profileId, StringComparison.Ordinal)) return;
+            lock (_stateGate)
+            {
+                if (!string.Equals(_loadedProfileId, profileId, StringComparison.Ordinal)) return;
+                _progress = new HideoutProgress();
+            }
 
-            _progress = new HideoutProgress();
             ProgressChanged?.Invoke(this, EventArgs.Empty);
         }
 
@@ -398,8 +437,13 @@ namespace TarkovHelper.Services
                 return false;
             }
 
-            _progress = loaded;
-            _loadedProfileId = profileId;
+            // One gated step: no reader, and no reset hook, can observe the new rows under the
+            // previous profile's id or the reverse.
+            lock (_stateGate)
+            {
+                _progress = loaded;
+                _loadedProfileId = profileId;
+            }
             return true;
         }
 

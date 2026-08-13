@@ -36,7 +36,11 @@ The sibling PRD states the user-facing goals. Technically:
   memory-first order.
 - Every removal is scoped by an explicit profile id captured before the
   confirmation opens. Nothing in the reset path reads
-  `ProfileService.Instance` after that point.
+  `ProfileService.Instance` after that point, with one deliberate exception:
+  `SettingsService.HandleProfileReset` asks which profile is selected, because
+  its cache is keyed by the selection rather than by a captured id, so the
+  selection is the only identity it could compare the reset target against.
+  See the settings note under Non-Goals.
 
 ## Non-Goals
 
@@ -45,11 +49,22 @@ user-data tables are routed through the new barrier. The other `_ = SomeAsync()`
 sites (overlay settings, map state) and the missing
 `TaskScheduler.UnobservedTaskException` handler stay as they are.
 
-**SettingsService write ownership.** `SettingsService.SaveProfileSetting`
-resolves `ProfileService.Instance.ActiveProfileId` at call time, an ambient read
-on a write path. It is synchronous and its only triggers are UI handlers, which
-the modal reset dialog excludes while the reset runs, so reset ordering does not
-depend on it. Rewriting it to carry an explicit profile id is SPA-1 territory.
+**SettingsService profile ownership, on both the write and the read side.**
+`SettingsService.SaveProfileSetting` resolves
+`ProfileService.Instance.ActiveProfileId` at call time, an ambient read on a
+write path. It is synchronous and its only triggers are UI handlers, which the
+modal reset dialog excludes while the reset runs, so reset ordering does not
+depend on it. `GetProfileSetting` resolves the selection the same way, and
+`LoadProfileSettings` goes through it once per key, so the profile-settings
+cache has no identity of its own: whatever profile is selected when the load
+runs is whose values are cached. That is why the reset hook has nothing to
+guard against but the selection, and why it compares against
+`ProfileService.Instance.ActiveProfileId` rather than a captured field. A
+`_loadedProfileId` set in `LoadProfileSettings` would only add a second
+identity that can disagree with the values actually in the cache. Rewriting the
+`SaveProfileSetting`/`GetProfileSetting` pair to carry an explicit profile id,
+which is what would give the cache an identity worth guarding, is SPA-1
+territory.
 
 **The wider snapshot work (SPA-2, THR-1).** `HideoutProgressService` keeps its
 mutable `_progress`; this change only adds the loaded-profile field the reset
@@ -188,8 +203,11 @@ A new `TrackedUserDataWrites` (static, `Services/`):
 
 The barrier is acquired inside the persistence helpers, not at their call
 sites: `QuestProgressService`'s batch-save and delete helpers, the body of
-`ApplyLogEventAsync`, `ItemInventoryService.SavePendingItems` (per entry, with
-that entry's captured profile id), `HideoutProgressService`'s save helper, and
+`ApplyLogEventAsync`, `ItemInventoryService.SavePendingItemsAsync` (per entry,
+with that entry's captured profile id, and the entry is claimed out of
+`_pendingSaves` from inside its tracked write rather than snapshotted and
+cleared up front, so an entry is either claimed before the barrier rises or
+discarded by the reset), `HideoutProgressService`'s save helper, and
 `EftRaidEventService`'s raid save (when `AppProfileId` is non-null; an unowned
 raid row cannot conflict with any reset, so it is tracked for failure logging
 only). A future caller of any helper is ordered automatically; there is no
@@ -215,10 +233,20 @@ result; it no longer touches the progress services directly.
    `_pendingSaves` entries whose captured profile id is the target. They
    describe quantities the transaction is about to delete; flushing them first
    would write rows only to remove them. Entries captured for other profiles
-   stay. This runs under the barrier, so no flush is mid-flight.
-5. `await UserDataDbService.Instance.ResetProfileAsync(...)`. On failure the
-   barrier is lowered and the failure returned; no cache was touched, so the
-   app still shows the surviving data (PRD R5).
+   stay. A flush already under way cannot put a discarded entry back:
+   `SavePendingItemsAsync` claims each entry from inside that entry's own
+   tracked write, after the write has passed the barrier, so an entry removed
+   here is gone by the time the flush reaches it and that write finds nothing
+   to do.
+5. `await UserDataDbService.Instance.ResetProfileAsync(...)`, under a bounded
+   wait (`ProfileResetService.StoreTimeout`): the caller is a modal that
+   refuses to close while the reset runs, so waiting forever on a wedged
+   connection would leave a window nothing can dismiss. On failure the barrier
+   is lowered and the failure returned; no cache was touched, so the app still
+   shows the surviving data (PRD R5). A wait that runs out of budget is its own
+   outcome, not a failure: abandoning a wait does not cancel the transaction,
+   so that one path cannot repeat R5's "nothing was removed" and says the
+   outcome is unknown instead.
 6. After the commit, each service applies its in-memory consequence through a
    new `HandleProfileReset(string profileId)` hook that no-ops when its loaded
    state belongs to a different profile: `QuestProgressService` publishes an
@@ -231,6 +259,13 @@ result; it no longer touches the progress services directly.
    level, faction, and the rest are now stale. Each service raises its usual
    change event so pages refresh through the existing subscriptions.
 7. Barrier down. Success returned.
+
+Every exit returns a `ProfileResetOutcome`, a record with a private constructor
+and three factories (`Succeeded()`, `Failed(message)`, `Abandoned()`) mapping
+one to one onto `ProfileResetStatus`. The states that would render nonsense (a
+success carrying a failure message, a failure carrying none) are therefore not
+constructible, and the dialog switches on the status rather than re-deriving it
+from two independent fields.
 
 The whole flow is async end to end. A blocking wait on the dispatcher would
 deadlock against tracked writes whose continuations return to it, which is also
@@ -264,8 +299,12 @@ A new `ProfileResetDialog` (`Windows/`) replaces both `MessageBox` calls: one
 window with a confirm state (localized profile label via the existing
 `LocalizationService.ProfileName(AppProfile)`, the enumerated category list, a
 warning line when `EftRaidEventService.Instance.CurrentRaid?.State` is
-`Matching`, `Connecting`, or `InRaid`) and a result state (success text, or
-failure text naming that nothing was removed). Buttons and the window title
+`Matching`, `Connecting`, or `InRaid`) and a result state, whose headline
+follows the outcome's status: success text, failure text naming that nothing
+was removed, or, for an abandoned wait, text saying the outcome is unknown and
+asking the player to restart and check the profile. A failure also renders the
+underlying message ("database is locked") as a detail line below the headline;
+the other two statuses have no detail to render. Buttons and the window title
 come from `LocalizationService`, and every interactive element carries an
 `AutomationId`, because the e2e harness drives owned WPF windows by title and
 `InvokePattern` but cannot drive a native `MessageBox` at all
@@ -333,6 +372,7 @@ come from `LocalizationService`, and every interactive element carries an
   Danger Zone, pass the live timestamp)
 - `TarkovHelper.Tests`: new `ProfileResetStoreTests`,
   `TrackedUserDataWritesTests`, `ProfileResetHooksTests`,
+  `ProfileResetOrchestrationTests`,
   `ProfileResetE2ETests`; updates to `ProgressStoreFake`,
   `ProgressStoreFakeTests`, `ProgressSnapshotTests`,
   `ProfileAttributionSourceTests`, `LogSyncAttributionTests` (sync fence),
@@ -440,6 +480,18 @@ service's lazy init would have to be replicated field by field.
   - A write attempted while the barrier is up lands only after it drops.
   - A failing tracked write is logged, not thrown, and does not wedge the
     barrier.
+- **Unit, orchestration (`ProfileResetOrchestrationTests`):**
+  - One throwing refresh hook costs only its own hook; the later services
+    still refresh, and nothing escapes to turn a committed reset into a
+    reported failure.
+  - A store call that never returns becomes an abandoned outcome inside the
+    budget instead of hanging the modal; a throwing one keeps its own message,
+    including when it throws before returning a task.
+  - The outcome factories: no failure without a detail, no success with one.
+  - The result headline per status, in particular that the abandoned one never
+    repeats "nothing was removed".
+  - The raid warning fires only while the watcher is running, so a raid state
+    left over from a stopped watcher does not cry wolf.
 - **Unit, services (via `ProgressServiceHarness` and `ProgressStoreFake`):**
   - `HandleProfileReset` publishes an empty snapshot only when
     `Snapshot.ProfileId` matches the target; another profile's loaded
