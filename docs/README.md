@@ -49,6 +49,10 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
   트랜잭션 리셋과 롤백, 진행 중 쓰기를 배수하는 배리어, 로그 재유입을 막는
   워터마크 펜스를 직접 조작해 보는 인터랙티브 랩 3개와 퀴즈 게이트를 포함합니다
   (PR #41)
+- [2026-08-complete-profile-reset-deep-review-guide.html](2026-08-complete-profile-reset-deep-review-guide.html):
+  코드 가이드 4부. 프로필 완전 초기화 딥 리뷰가 찾은 결함들과 수정을 다룹니다.
+  멈춘 쓰기와 배수 타임아웃, 리셋이 볼 수 없던 대기 중 저장, 첫 실행 마이그레이션
+  경합을 조작해 보는 인터랙티브 랩 3개와 퀴즈 게이트를 포함합니다 (PR #42)
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
   마커 API 분석
 
