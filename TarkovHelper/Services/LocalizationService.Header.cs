@@ -520,11 +520,15 @@ public partial class LocalizationService
         _ => "A raid appears to be in progress. The reset will still proceed if you confirm."
     };
 
-    public string ProfileResetConfirmButton => CurrentLanguage switch
+    /// <summary>
+    /// {0} = localized profile name. The confirm button names its target so the last thing
+    /// the player clicks says exactly which profile is about to be wiped (PRD R1).
+    /// </summary>
+    public string ProfileResetConfirmButtonFormat => CurrentLanguage switch
     {
-        AppLanguage.KO => "이 프로필 초기화",
-        AppLanguage.JA => "このプロフィールをリセット",
-        _ => "Reset This Profile"
+        AppLanguage.KO => "{0} 초기화",
+        AppLanguage.JA => "{0}をリセット",
+        _ => "Reset {0}"
     };
 
     /// <summary>Shown while the reset transaction runs (buttons disabled).</summary>

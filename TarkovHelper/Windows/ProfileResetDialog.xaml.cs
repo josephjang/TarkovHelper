@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Documents;
+using System.Windows.Media;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
 using TarkovHelper.Services.Logging;
@@ -59,12 +61,13 @@ public partial class ProfileResetDialog : Window
 
         Title = _loc.ProfileResetDialogTitle;
         TxtResetTitle.Text = _loc.ProfileResetDialogTitle;
-        TxtResetTarget.Text = string.Format(_loc.ProfileResetTargetFormat, _loc.ProfileName(target));
+        SetTargetLine(_loc.ProfileResetTargetFormat, _loc.ProfileName(target));
         TxtResetCategories.Text = _loc.ProfileResetCategories;
         TxtResetSurvivors.Text = _loc.ProfileResetSurvivorsNote;
         TxtRaidWarning.Text = _loc.ProfileResetRaidWarning;
         TxtResetWorking.Text = _loc.ProfileResetWorking;
-        BtnConfirmReset.Content = _loc.ProfileResetConfirmButton;
+        BtnConfirmReset.Content =
+            string.Format(_loc.ProfileResetConfirmButtonFormat, _loc.ProfileName(target));
         BtnCancelReset.Content = _loc.Cancel;
         BtnCloseReset.Content = _loc.Close;
 
@@ -87,6 +90,36 @@ public partial class ProfileResetDialog : Window
     /// </summary>
     internal static bool ShouldWarnAboutRaid(bool monitoring, RaidState? raidState)
         => monitoring && raidState is RaidState.Matching or RaidState.Connecting or RaidState.InRaid;
+
+    /// <summary>
+    /// Renders the target line with the profile name as its own emphasized run (bold, in the
+    /// danger color): the name is the load-bearing word of the whole dialog (PRD R1), so it
+    /// must not blend into the sentence around it. Plain runs keep TextBlock.Text, and with
+    /// it the UIA Name the e2e test asserts, equal to the flat formatted string.
+    /// </summary>
+    private void SetTargetLine(string format, string profileName)
+    {
+        var slot = format.IndexOf("{0}", StringComparison.Ordinal);
+        if (slot < 0)
+        {
+            // A translation that lost its slot degrades to the unstyled sentence rather
+            // than crashing; the localization tests guard the slot's presence.
+            TxtResetTarget.Text = format;
+            return;
+        }
+
+        TxtResetTarget.Inlines.Clear();
+        if (slot > 0)
+            TxtResetTarget.Inlines.Add(new Run(format[..slot]));
+        TxtResetTarget.Inlines.Add(new Run(profileName)
+        {
+            FontWeight = FontWeights.Bold,
+            Foreground = (Brush)FindResource("ErrorBrush")
+        });
+        var suffix = format[(slot + "{0}".Length)..];
+        if (suffix.Length > 0)
+            TxtResetTarget.Inlines.Add(new Run(suffix));
+    }
 
     private async void BtnConfirmReset_Click(object sender, RoutedEventArgs e)
     {
