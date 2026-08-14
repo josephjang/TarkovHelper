@@ -81,7 +81,14 @@ public sealed class ProfileResetE2ETests : E2ETestBase
             Assert.False(AppDriver.HasTextElementUnder(dialog, loc.ProfileResetRaidWarning),
                 "the raid warning appeared with the raid watcher off");
 
-            AppDriver.Invoke(AppDriver.WaitForElementUnder(dialog, "BtnConfirmReset"));
+            // ...and so does the confirm button: the last thing the player clicks says
+            // which profile is about to be wiped.
+            var confirm = AppDriver.WaitForElementUnder(dialog, "BtnConfirmReset");
+            Assert.Equal(
+                string.Format(loc.ProfileResetConfirmButtonFormat, loc.HeaderPvpSeason),
+                confirm.Current.Name);
+
+            AppDriver.Invoke(confirm);
 
             // The result state appears with the success text (PRD R5's happy half).
             var result = AppDriver.WaitForElementUnder(dialog, "TxtResetResult");

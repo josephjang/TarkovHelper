@@ -43,7 +43,7 @@ public class LocalizationHeaderStringsTests
         "SettingsResetProgressButton",
         // Profile reset dialog (feature-complete-profile-reset.md)
         "ProfileResetDialogTitle", "ProfileResetTargetFormat", "ProfileResetCategories",
-        "ProfileResetSurvivorsNote", "ProfileResetRaidWarning", "ProfileResetConfirmButton",
+        "ProfileResetSurvivorsNote", "ProfileResetRaidWarning", "ProfileResetConfirmButtonFormat",
         "ProfileResetWorking", "ProfileResetSuccessFormat", "ProfileResetFailedText",
         "ProfileResetAbandonedText",
     };
@@ -52,7 +52,7 @@ public class LocalizationHeaderStringsTests
     {
         "HeaderProfileChangedFromLogsFormat", "HeaderVersionTooltipInstall", "HeaderUpdateAvailableFormat",
         "SettingsCurrentVersionFormat", "SettingsUpdateToFormat", "TimeMinutesAgoFormat",
-        "ProfileResetTargetFormat", "ProfileResetSuccessFormat",
+        "ProfileResetTargetFormat", "ProfileResetSuccessFormat", "ProfileResetConfirmButtonFormat",
     };
 
     private static string GetString(LocalizationService loc, string key)
