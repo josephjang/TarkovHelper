@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Windows.Automation;
 using TarkovHelper.Services;
 
@@ -37,28 +36,21 @@ public sealed class ProfileResetE2ETests : E2ETestBase
         return configDir;
     }
 
-    private const byte VkEscape = 0x1B;
-    private const uint KeyUp = 0x0002;
-
-    /// <summary>
-    /// The harness keeps keybd_event private to its Ctrl-click helper, which holds a modifier
-    /// rather than pressing a key; these tests need the key press itself.
-    /// </summary>
-    [DllImport("user32.dll")]
-    private static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extraInfo);
-
     /// <summary>
     /// Presses Escape at <paramref name="window"/>, the keyboard dismissal path a borderless
-    /// modal has no title-bar X for.
+    /// modal has no title-bar X for. Escape is real keyboard input (no InvokePattern involved),
+    /// so the window must verifiably hold the foreground before the key is sent.
     /// </summary>
     private static void PressEscape(AutomationElement window)
     {
         var hwnd = new IntPtr(window.Current.NativeWindowHandle);
         Assert.NotEqual(IntPtr.Zero, hwnd);
-        Win32.SetForegroundWindow(hwnd);
-        Thread.Sleep(100); // let the focus change land before the key arrives
-        keybd_event(VkEscape, 0, 0, UIntPtr.Zero);
-        keybd_event(VkEscape, 0, KeyUp, UIntPtr.Zero);
+        WaitUntil(() =>
+        {
+            Win32.SetForegroundWindow(hwnd);
+            return Win32.GetForegroundWindow() == hwnd;
+        }, "the dialog to take foreground");
+        Win32.PressEscape();
     }
 
     [E2EFact]
