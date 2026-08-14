@@ -136,6 +136,10 @@ public partial class ProfileResetDialog : Window
         ConfirmPanel.Visibility = Visibility.Collapsed;
         ResultPanel.Visibility = Visibility.Visible;
 
+        // Focus follows the state swap, so Enter/Space dismiss the result without a Tab
+        // first; Escape already reaches Close through its own IsCancel flag.
+        BtnCloseReset.Focus();
+
         TxtResetResult.Text = ResultHeadline(_loc, outcome, _target);
 
         // Only a failure carries a library-level detail ("database is locked"), and the outcome

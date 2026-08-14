@@ -8,7 +8,8 @@
         Background="Transparent"
         ResizeMode="NoResize"
         SizeToContent="WidthAndHeight"
-        ShowInTaskbar="False">
+        ShowInTaskbar="False"
+        FocusManager.FocusedElement="{Binding ElementName=BtnCancelReset}">
 
     <Border Background="{DynamicResource BackgroundDarkBrush}"
             CornerRadius="8" Padding="24"
@@ -66,10 +67,11 @@
                            Visibility="Collapsed" Margin="0,0,0,8"/>
 
                 <!-- Action Buttons. IsCancel gives the borderless modal its keyboard path:
-                     Escape clicks Cancel. Deliberately NO IsDefault on the confirm button,
-                     unlike the other confirmations: Enter must not be able to wipe a profile.
-                     Only one of the two IsCancel buttons here is ever visible (the panels
-                     swap), so Escape is never ambiguous. -->
+                     Escape clicks Cancel, and initial focus sits on Cancel (FocusManager on
+                     the Window) so Enter/Space are safe by default too. Deliberately NO
+                     IsDefault on the confirm button, unlike the other confirmations: Enter
+                     must not be able to wipe a profile. Only one of the two IsCancel buttons
+                     here is ever visible (the panels swap), so Escape is never ambiguous. -->
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
                     <Button x:Name="BtnCancelReset" Content="Cancel" IsCancel="True"
                             Padding="16,8" Margin="0,0,8,0"

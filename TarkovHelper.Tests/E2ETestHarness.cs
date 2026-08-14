@@ -878,7 +878,18 @@ internal static class Win32
         }
     }
 
+    /// <summary>
+    /// Presses and releases Escape as real keyboard input to the foreground window,
+    /// for exercising a dialog's IsCancel keyboard path (InvokePattern cannot).
+    /// </summary>
+    public static void PressEscape()
+    {
+        keybd_event(VK_ESCAPE, 0, 0, UIntPtr.Zero);
+        keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+    }
+
     private const byte VK_CONTROL = 0x11;
+    private const byte VK_ESCAPE = 0x1B;
     private const uint KEYEVENTF_KEYUP = 0x0002;
     [DllImport("user32.dll")] private static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extraInfo);
 
