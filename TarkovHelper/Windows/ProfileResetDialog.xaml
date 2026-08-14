@@ -54,11 +54,16 @@
                            Foreground="{DynamicResource TextSecondaryBrush}"
                            TextWrapping="Wrap" Margin="0,0,0,8"/>
 
-                <Border x:Name="RaidWarningBorder" Background="#44FFA726" CornerRadius="4"
+                <Border x:Name="RaidWarningBorder" CornerRadius="4"
                         Padding="12,8" Margin="0,0,0,8" Visibility="Collapsed">
+                    <!-- The app-wide warning color at ~27% opacity (the 0x44 alpha the old
+                         hardcoded value used), so the tint tracks WarningColor. -->
+                    <Border.Background>
+                        <SolidColorBrush Color="{StaticResource WarningColor}" Opacity="0.27"/>
+                    </Border.Background>
                     <TextBlock x:Name="TxtRaidWarning"
                                FontSize="{DynamicResource FontSizeXSmall}"
-                               Foreground="#FFA726" TextWrapping="Wrap"/>
+                               Foreground="{StaticResource WarningBrush}" TextWrapping="Wrap"/>
                 </Border>
 
                 <TextBlock x:Name="TxtResetWorking"
@@ -100,7 +105,7 @@
                            TextWrapping="Wrap" Margin="0,0,0,8"/>
                 <TextBlock x:Name="TxtResetError"
                            FontSize="{DynamicResource FontSizeTiny}"
-                           Foreground="#EF5350"
+                           Foreground="{StaticResource ErrorBrush}"
                            TextWrapping="Wrap" Visibility="Collapsed" Margin="0,0,0,8"/>
                 <Button x:Name="BtnCloseReset" Content="Close" IsCancel="True"
                         Padding="16,8" HorizontalAlignment="Right" Margin="0,8,0,0"
