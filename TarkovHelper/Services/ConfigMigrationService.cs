@@ -2,6 +2,8 @@ using System.IO;
 using System.Text.Json;
 using TarkovHelper.Debug;
 using TarkovHelper.Models;
+using TarkovHelper.Services.Logging;
+using TarkovHelper.Services.Settings;
 
 namespace TarkovHelper.Services;
 
@@ -11,6 +13,8 @@ namespace TarkovHelper.Services;
 /// </summary>
 public sealed class ConfigMigrationService
 {
+    private static readonly ILogger _log = Log.For<ConfigMigrationService>();
+
     private static ConfigMigrationService? _instance;
     public static ConfigMigrationService Instance => _instance ??= new ConfigMigrationService();
 
@@ -217,12 +221,32 @@ public sealed class ConfigMigrationService
         if (inventoryMigrationResult.error != null)
             result.Warnings.Add(inventoryMigrationResult.error);
 
+        // The other half of the flush this step began with. ItemInventoryService caches
+        // quantities and only reloads them on a profile switch, so without this it keeps
+        // rendering the pre-import numbers - and AdjustFirQuantity persists cached + delta
+        // ABSOLUTELY, so one nudge of a spinner would write the pre-import quantity back over the
+        // row just imported. The partition comes from the step that wrote it, not from a second
+        // hardcoding of the same constant.
+        if (inventoryMigrationResult.profileWrittenTo != null)
+        {
+            await ItemInventoryService.Instance.ReloadAfterExternalWriteAsync(
+                inventoryMigrationResult.profileWrittenTo);
+        }
+
         // 4. App Settings
         progress?.Report("Migrating settings...");
         var settingsMigrationResult = await MigrateAppSettingsAsync(configFolderPath, userDataDb);
         result.SettingsCount = settingsMigrationResult.count;
         if (settingsMigrationResult.error != null)
             result.Warnings.Add(settingsMigrationResult.error);
+
+        // Same question for the settings cache: rows were written behind its back, so it re-reads
+        // them and re-raises the changed events when its snapshot names that partition. Once,
+        // after the whole import, rather than one event per imported value.
+        if (settingsMigrationResult.profileWrittenTo != null)
+        {
+            SettingsService.Instance.ReloadAfterExternalWrite(settingsMigrationResult.profileWrittenTo);
+        }
 
         // 매핑 실패 항목 경고 추가
         if (_unmappedQuests.Count > 0)
@@ -429,11 +453,40 @@ public sealed class ConfigMigrationService
         }
     }
 
-    private async Task<(int count, string? error)> MigrateItemInventoryAsync(string configFolderPath, UserDataDbService userDataDb)
+    /// <summary>
+    /// legacy item_inventory.json 마이그레이션.
+    /// <para>
+    /// Like the three steps around it, the rows go to the PvP partition: the file predates
+    /// profiles. <c>ItemInventoryService</c> is not consulted for the write - it would attribute
+    /// the rows to whichever profile is loaded - but it does have to be told, in both directions:
+    /// its debounced saves are flushed BEFORE the first write here, because they carry pre-import
+    /// quantities and would land on top of the imported rows, and its cache is reloaded AFTER the
+    /// last one by <see cref="MigrateFromConfigFolderAsync"/>.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// The number of items imported, the partition they were written to (null when nothing was
+    /// written, which is what tells the caller no cache refresh is due), and a warning message, or
+    /// null when everything landed.
+    /// </returns>
+    private async Task<(int count, string? profileWrittenTo, string? error)> MigrateItemInventoryAsync(
+        string configFolderPath, UserDataDbService userDataDb)
     {
         var filePath = Path.Combine(configFolderPath, "item_inventory.json");
         if (!File.Exists(filePath))
-            return (0, null);
+            return (0, null, null);
+
+        // Before the first write, and never after it: a pending debounced save holds an absolute
+        // quantity captured before this import, so flushing it later would overwrite an imported
+        // row with the number it replaced.
+        await ItemInventoryService.Instance.FlushPendingSavesAsync();
+
+        // Declared outside the try for the reason MigrateAppSettingsAsync declares its own
+        // counters outside: a failure halfway through leaves the rows before it committed, and
+        // both the caller's cache refresh and its "delete the imported files" decision have to
+        // see them.
+        var count = 0;
+        string? profileWrittenTo = null;
 
         try
         {
@@ -441,9 +494,8 @@ public sealed class ConfigMigrationService
             using var doc = JsonDocument.Parse(json);
 
             if (!doc.RootElement.TryGetProperty("items", out var itemsElement))
-                return (0, null);
+                return (0, null, null);
 
-            var count = 0;
             foreach (var prop in itemsElement.EnumerateObject())
             {
                 var itemName = prop.Name;
@@ -458,31 +510,127 @@ public sealed class ConfigMigrationService
                 if (firQty > 0 || nonFirQty > 0)
                 {
                     await userDataDb.SaveItemInventoryAsync(itemName, firQty, nonFirQty, ProfileService.PvpProfileId);
+                    profileWrittenTo = ProfileService.PvpProfileId;
                     count++;
                 }
             }
 
-            return (count, null);
+            return (count, profileWrittenTo, null);
         }
         catch (Exception ex)
         {
-            return (0, $"Item inventory migration error: {ex.Message}");
+            return (count, profileWrittenTo, $"Item inventory migration error: {ex.Message}");
         }
     }
 
-    private async Task<(int count, string? error)> MigrateAppSettingsAsync(string configFolderPath, UserDataDbService userDataDb)
+    /// <summary>
+    /// legacy app_settings.json 마이그레이션.
+    /// <para>
+    /// The file predates profiles: it holds one flat set of values, so the profile-scoped ones
+    /// (player level, scav rep, DSP decode count, level-locked quest visibility, faction) belong
+    /// to PvP. They are written straight to the PvP partition, matching the three sibling
+    /// migrations above, which all pass <see cref="ProfileService.PvpProfileId"/>, and matching
+    /// <c>SettingsService.MigrateFromJsonIfNeeded</c>, which imports the same five.
+    /// They deliberately do NOT go through the
+    /// <c>SettingsService</c> properties any more: those setters persist under the profile the
+    /// live settings snapshot names (docs/decisions/fix-profile-settings-race.spec.md), which is
+    /// whichever profile the player has loaded when they press "Data Migration" - so a PvE player
+    /// importing an old Config folder used to get quests, hideout and inventory under pvp and the
+    /// level and Fence karma under pve.
+    /// </para>
+    /// <para>
+    /// What the setters do to a value before storing it - clamp it, round the scav rep, format the
+    /// doubles invariantly, lower case the faction - is NOT reproduced here but taken from
+    /// <see cref="LegacyAppSettingsValues"/>, which the startup reader of the same file takes it
+    /// from too. Raising the changed events is not reproduced per value either; the caller
+    /// refreshes the cache once, after the whole import.
+    /// </para>
+    /// <para>
+    /// The remaining keys are global (per install, UserSettings table), so no partition applies to
+    /// them and they still go through the properties.
+    /// </para>
+    /// <para>
+    /// Every write is guarded on its own. One value the store refuses (user_data.db locked by a
+    /// log sync or a profile reset) must cost only that value, which is what the property setters
+    /// this path replaced always did - they persist through <c>SettingsService.SaveProfileSetting</c>,
+    /// which logs the failure and returns. The failed keys come back in the returned message so
+    /// the caller can surface them as a warning.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// The number of values imported, the partition the profile-scoped ones were written to (null
+    /// when none was, which is what tells the caller no cache refresh is due), and a warning
+    /// message naming what failed, or null when everything landed. The partition is REPORTED
+    /// rather than assumed by the caller: naming <see cref="ProfileService.PvpProfileId"/> a
+    /// second time at the refresh would be a copy that has to agree with the writes below by
+    /// discipline alone.
+    /// </returns>
+    internal async Task<(int count, string? profileWrittenTo, string? error)> MigrateAppSettingsAsync(string configFolderPath, UserDataDbService userDataDb)
     {
         var filePath = Path.Combine(configFolderPath, "app_settings.json");
         if (!File.Exists(filePath))
-            return (0, null);
+            return (0, null, null);
+
+        // Both are declared outside the try so a failure halfway through still reports the rows
+        // that did land: they are already committed, the caller's refresh must see them, and
+        // MigrateFromConfigFolderAsync deletes the imported JSON files only when the total is
+        // non-zero - reporting zero for a partial import left the file behind to re-trigger the
+        // auto migration on every launch.
+        var count = 0;
+        string? profileWrittenTo = null;
+
+        // The JSON property names whose own write failed, reported together at the end. Named as
+        // the file spells them, not as the store keys them: that is the one vocabulary all nine
+        // values share (four of them are global, whose key names this class cannot see) and the
+        // one the player can look up in the file they imported.
+        var failedNames = new List<string>();
 
         try
         {
             var json = await File.ReadAllTextAsync(filePath);
             using var doc = JsonDocument.Parse(json);
 
-            var count = 0;
-            var settingsService = SettingsService.Instance;
+            // Resolved on first use rather than up front, because only the global keys below need
+            // it: constructing SettingsService opens user_data.db and subscribes to profile
+            // changes. The running app has already paid that (MainWindow constructs the service in
+            // a field initializer); what the laziness buys is that an import carrying only
+            // profile-scoped values touches nothing but the store it was handed.
+            SettingsService? settingsService = null;
+            SettingsService Settings() => settingsService ??= SettingsService.Instance;
+
+            // The one place a profile-scoped value is persisted, counted and guarded, so the
+            // clamped arms below cannot drift apart in bounds, format or error handling.
+            async Task WriteProfileValue(string name, string key, string value)
+            {
+                try
+                {
+                    await userDataDb.SetProfileSettingAsync(ProfileService.PvpProfileId, key, value);
+                    profileWrittenTo = ProfileService.PvpProfileId;
+                    count++;
+                }
+                catch (Exception ex)
+                {
+                    failedNames.Add(name);
+                    _log.Error($"app_settings.json import failed for {name} ({key}): {ex.Message}");
+                }
+            }
+
+            // Global values persist through the property setters, which swallow store failures
+            // themselves; the guard here is for the rest of the setter, the lazy service
+            // construction above included.
+            void WriteGlobalValue(string name, Action write)
+            {
+                try
+                {
+                    write();
+                    count++;
+                }
+                catch (Exception ex)
+                {
+                    failedNames.Add(name);
+                    _log.Error($"app_settings.json import failed for {name}: {ex.Message}");
+                }
+            }
 
             foreach (var prop in doc.RootElement.EnumerateObject())
             {
@@ -494,60 +642,133 @@ public sealed class ConfigMigrationService
                     case "playerLevel":
                         if (prop.Value.TryGetInt32(out var level))
                         {
-                            settingsService.PlayerLevel = level;
-                            count++;
+                            await WriteProfileValue(
+                                prop.Name, SettingsService.KeyPlayerLevel,
+                                LegacyAppSettingsValues.PlayerLevel(level));
                         }
                         break;
 
                     case "scavRep":
                         if (prop.Value.TryGetDouble(out var scavRep))
                         {
-                            settingsService.ScavRep = scavRep;
-                            count++;
+                            await WriteProfileValue(
+                                prop.Name, SettingsService.KeyScavRep,
+                                LegacyAppSettingsValues.ScavRep(scavRep));
                         }
                         break;
 
                     case "dspDecodeCount":
                         if (prop.Value.TryGetInt32(out var dspCount))
                         {
-                            settingsService.DspDecodeCount = dspCount;
-                            count++;
+                            await WriteProfileValue(
+                                prop.Name, SettingsService.KeyDspDecodeCount,
+                                LegacyAppSettingsValues.DspDecodeCount(dspCount));
+                        }
+                        break;
+
+                    case "showLevelLockedQuests":
+                        if (TryGetBoolean(prop.Value, out var showLevelLockedQuests))
+                        {
+                            await WriteProfileValue(
+                                prop.Name, SettingsService.KeyShowLevelLockedQuests,
+                                LegacyAppSettingsValues.ShowLevelLockedQuests(showLevelLockedQuests));
+                        }
+                        break;
+
+                    case "playerFaction":
+                        // Dropping this value entirely, as this reader used to, left the faction
+                        // unset, and ShouldIncludeTask then admits BOTH factions' quests.
+                        var faction = LegacyAppSettingsValues.PlayerFaction(AsString(prop.Value));
+                        if (faction != null)
+                        {
+                            await WriteProfileValue(
+                                prop.Name, SettingsService.KeyPlayerFaction, faction);
                         }
                         break;
 
                     case "logFolderPath":
-                        var logPath = prop.Value.GetString();
+                        var logPath = AsString(prop.Value);
                         if (!string.IsNullOrEmpty(logPath))
                         {
-                            settingsService.LogFolderPath = logPath;
-                            count++;
+                            WriteGlobalValue(prop.Name, () => Settings().LogFolderPath = logPath);
                         }
                         break;
 
                     case "baseFontSize":
                         if (prop.Value.TryGetDouble(out var fontSize))
                         {
-                            settingsService.BaseFontSize = fontSize;
-                            count++;
+                            WriteGlobalValue(prop.Name, () => Settings().BaseFontSize = fontSize);
+                        }
+                        break;
+
+                    case "syncDaysRange":
+                        if (prop.Value.TryGetInt32(out var syncDaysRange))
+                        {
+                            WriteGlobalValue(prop.Name, () => Settings().SyncDaysRange = syncDaysRange);
                         }
                         break;
 
                     case "hideWipeWarning":
-                        if (prop.Value.TryGetInt32(out var hideWarning) ||
-                            (prop.Value.ValueKind == JsonValueKind.True || prop.Value.ValueKind == JsonValueKind.False))
+                        if (TryGetBoolean(prop.Value, out var hideWipeWarning))
                         {
-                            settingsService.HideWipeWarning = prop.Value.ValueKind == JsonValueKind.True || hideWarning == 1;
-                            count++;
+                            WriteGlobalValue(prop.Name, () => Settings().HideWipeWarning = hideWipeWarning);
                         }
                         break;
                 }
             }
 
-            return (count, null);
+            return (count, profileWrittenTo, DescribeFailures(failedNames, null));
         }
         catch (Exception ex)
         {
-            return (0, $"Settings migration error: {ex.Message}");
+            // Reading and parsing the file are what can still land here; every write above guards
+            // itself. The count and the partition are returned as they stand rather than as zero
+            // and null, so a throw can never understate an import that is already durable.
+            return (count, profileWrittenTo, DescribeFailures(failedNames, $"Settings migration error: {ex.Message}"));
         }
+    }
+
+    /// <summary>
+    /// The JSON value as a string, or null when it is not one. <c>JsonElement.GetString()</c>
+    /// throws on any other kind, and one badly typed value used to abort the whole settings
+    /// import and report zero for the values already written.
+    /// </summary>
+    private static string? AsString(JsonElement element)
+        => element.ValueKind == JsonValueKind.String ? element.GetString() : null;
+
+    /// <summary>
+    /// A legacy flag as a bool. Accepts a JSON boolean and the 0/1 an older writer could store,
+    /// which is the pair <c>hideWipeWarning</c> has always accepted here.
+    /// </summary>
+    private static bool TryGetBoolean(JsonElement element, out bool value)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.True:
+                value = true;
+                return true;
+            case JsonValueKind.False:
+                value = false;
+                return true;
+            case JsonValueKind.Number when element.TryGetInt32(out var number):
+                value = number == 1;
+                return true;
+            default:
+                value = false;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// The warning the settings import reports: <paramref name="error"/> on its own when every
+    /// write landed, otherwise the failed values named alongside it.
+    /// </summary>
+    private static string? DescribeFailures(IReadOnlyList<string> failedNames, string? error)
+    {
+        if (failedNames.Count == 0)
+            return error;
+
+        var note = $"Settings migration could not import: {string.Join(", ", failedNames)}";
+        return error == null ? note : $"{error}. {note}";
     }
 }

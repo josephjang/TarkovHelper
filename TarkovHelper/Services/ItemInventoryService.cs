@@ -413,8 +413,58 @@ namespace TarkovHelper.Services
         {
             var profileId = ProfileService.GetProfileId(profile);
 
+            await FlushPendingSavesAsync();
+
+            if (!await LoadInventoryFromDbAsync(profileId, revision)) return;
+
+            InventoryChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// Writes every debounced quantity out now, under each entry's own captured profile, and
+        /// stops the timer that would have done it later. The public form of the flush a profile
+        /// switch does before it swaps caches, for the one other caller that has to know the store
+        /// holds no unwritten quantity: <see cref="ConfigMigrationService"/>, before a legacy
+        /// item_inventory.json import writes rows for the same items.
+        /// <para>
+        /// The timer is stopped BEFORE the flush, not after, so a tick that fires between the two
+        /// cannot re-stage the entries this is draining.
+        /// </para>
+        /// </summary>
+        public async Task FlushPendingSavesAsync()
+        {
             _saveTimer?.Stop();
             await SavePendingItemsAsync();
+        }
+
+        /// <summary>
+        /// Re-reads <paramref name="profileId"/>'s quantities after someone wrote them behind this
+        /// service's back, and notifies the UI. Does nothing when that profile is not the loaded
+        /// one, whose quantities are the only ones this cache holds.
+        /// <para>
+        /// Deliberately does NOT flush first, which is what separates it from
+        /// <see cref="ReloadForProfileAsync"/>: a pending entry holds an absolute quantity captured
+        /// before the external write, so flushing here would write the pre-write number back over
+        /// the row that write just made. The caller flushes BEFORE it writes instead
+        /// (<see cref="FlushPendingSavesAsync"/>), which is the only order in which both the
+        /// player's unsaved edits and the imported rows survive.
+        /// </para>
+        /// <para>
+        /// The revision is captured BEFORE the loaded-profile check, and in that order: an
+        /// external write announces no transition of its own, so it has to borrow the newest one
+        /// claimed. Reading it afterwards would let a switch land in between and hand this load
+        /// the NEW transition's revision, whereupon its staleness check would pass and it would
+        /// publish the old profile's rows over the switch.
+        /// </para>
+        /// </summary>
+        public async Task ReloadAfterExternalWriteAsync(string profileId)
+        {
+            var revision = Interlocked.Read(ref _latestRevision);
+
+            lock (_lock)
+            {
+                if (!string.Equals(_loadedProfileId, profileId, StringComparison.Ordinal)) return;
+            }
 
             if (!await LoadInventoryFromDbAsync(profileId, revision)) return;
 
@@ -428,7 +478,7 @@ namespace TarkovHelper.Services
         /// </summary>
         private async Task<bool> LoadInventoryFromDbAsync(string profileId, long revision)
         {
-            ClaimRevision(revision);
+            RevisionGate.Claim(ref _latestRevision, revision);
 
             ItemInventoryData newData;
             try
@@ -471,17 +521,6 @@ namespace TarkovHelper.Services
                 _loadedProfileId = profileId;
             }
             return true;
-        }
-
-        /// <summary>Raises <see cref="_latestRevision"/> to <paramref name="revision"/> if it is newer.</summary>
-        private void ClaimRevision(long revision)
-        {
-            while (true)
-            {
-                var current = Interlocked.Read(ref _latestRevision);
-                if (revision <= current) return;
-                if (Interlocked.CompareExchange(ref _latestRevision, revision, current) == current) return;
-            }
         }
 
         #endregion

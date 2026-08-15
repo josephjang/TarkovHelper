@@ -45,6 +45,17 @@ namespace TarkovHelper.Pages
         private static readonly TimeSpan SearchDebounceInterval = TimeSpan.FromMilliseconds(250);
 
         /// <summary>
+        /// Collapses the profile-scoped settings burst into one refresh. SettingsService raises all
+        /// seven of its changed events on every published reload (profile switch, profile reset,
+        /// self-heal), all seven of which this page consumes, and each one used to run a full
+        /// <see cref="RefreshAllForStateChange"/> pass over every task. Built by
+        /// <see cref="RefreshCoalescer.OnDispatcher"/> in the constructor BODY, not here:
+        /// <see cref="DispatcherObject.Dispatcher"/> is only set once the base constructor has run,
+        /// which is after field initializers.
+        /// </summary>
+        private readonly RefreshCoalescer _settingsRefresh;
+
+        /// <summary>
         /// The quest list column's MinWidth, mirroring QuestListPage.xaml's first
         /// ColumnDefinition — the space the detail panel must leave for the list.
         /// </summary>
@@ -168,6 +179,8 @@ namespace TarkovHelper.Pages
 
         public QuestListPage()
         {
+            _settingsRefresh = RefreshCoalescer.OnDispatcher(this, RefreshForSettingsChange);
+
             InitializeComponent();
             SubscribeServiceEvents();
 
@@ -189,6 +202,8 @@ namespace TarkovHelper.Pages
             SettingsService.Instance.HasUnheardEditionChanged += OnProfileSettingChanged;
             SettingsService.Instance.PrestigeLevelChanged += OnPrestigeLevelChanged;
             SettingsService.Instance.DspDecodeCountChanged += OnDspDecodeCountChanged;
+            SettingsService.Instance.PlayerLevelChanged += OnPlayerLevelChanged;
+            SettingsService.Instance.ScavRepChanged += OnScavRepChanged;
             SettingsService.Instance.PlayerFactionChanged += OnPlayerFactionChanged;
             QuestDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
         }
@@ -202,6 +217,8 @@ namespace TarkovHelper.Pages
             SettingsService.Instance.HasUnheardEditionChanged -= OnProfileSettingChanged;
             SettingsService.Instance.PrestigeLevelChanged -= OnPrestigeLevelChanged;
             SettingsService.Instance.DspDecodeCountChanged -= OnDspDecodeCountChanged;
+            SettingsService.Instance.PlayerLevelChanged -= OnPlayerLevelChanged;
+            SettingsService.Instance.ScavRepChanged -= OnScavRepChanged;
             SettingsService.Instance.PlayerFactionChanged -= OnPlayerFactionChanged;
             QuestDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
         }
@@ -334,19 +351,38 @@ namespace TarkovHelper.Pages
             });
         }
 
-        private void OnProfileSettingChanged(object? sender, bool e)
-        {
-            Dispatcher.Invoke(RefreshAllForStateChange);
-        }
+        // The seven profile-scoped settings events this page consumes all need the same refresh, so
+        // they route through one coalesced request and differ only in delegate signature. Faction
+        // additionally mirrors the selection into the radio buttons, which is cheap and has to land
+        // before the refresh reads it, so that part stays inline.
+        //
+        // Player level and Scav Rep are subscribed HERE rather than pushed in by MainWindow's
+        // drawer handlers: MainWindow's push ran a full refresh per event, outside this coalescer,
+        // so a published reload rebuilt the whole list seven times over. The drawer still owns its
+        // own controls; the list refresh is this page's business, exactly like the other five.
 
-        private void OnPrestigeLevelChanged(object? sender, int e)
-        {
-            Dispatcher.Invoke(RefreshAllForStateChange);
-        }
+        private void OnProfileSettingChanged(object? sender, bool e) => _settingsRefresh.Request();
 
-        private void OnDspDecodeCountChanged(object? sender, int e)
+        private void OnPrestigeLevelChanged(object? sender, int e) => _settingsRefresh.Request();
+
+        private void OnDspDecodeCountChanged(object? sender, int e) => _settingsRefresh.Request();
+
+        private void OnPlayerLevelChanged(object? sender, int e) => _settingsRefresh.Request();
+
+        private void OnScavRepChanged(object? sender, double e) => _settingsRefresh.Request();
+
+        /// <summary>
+        /// The refresh a profile-scoped settings change needs. Runs on the dispatcher, once per
+        /// burst, scheduled by <see cref="_settingsRefresh"/>.
+        /// </summary>
+        private void RefreshForSettingsChange()
         {
-            Dispatcher.Invoke(RefreshAllForStateChange);
+            // The refresh is scheduled rather than inline, so it can land after Unloaded dropped the
+            // subscriptions. Loaded re-runs the same sequence on the way back in, so skipping here
+            // loses nothing.
+            if (_isUnloaded) return;
+
+            RefreshAllForStateChange();
         }
 
         private void OnPlayerFactionChanged(object? sender, string? e)
@@ -376,15 +412,21 @@ namespace TarkovHelper.Pages
                         RbUsec.IsChecked = false;
                     }
                 }
-
-                RefreshAllForStateChange();
             });
+
+            // Coalesced with the rest of the burst. The radio mirror ran inline above, so the
+            // refresh this request books reads the new selection; and if an earlier event in the
+            // same burst already ran its refresh, this request books a fresh pass rather than
+            // joining the finished one.
+            _settingsRefresh.Request();
         }
 
         /// <summary>
-        /// Refreshes the whole page for an externally-driven profile/progress change —
-        /// MainWindow calls this for player level, Scav Rep, DSP decodes, edition and
-        /// prestige edits. Runs the SAME sequence as the internal state-change handlers
+        /// Refreshes the whole page for an externally-driven progress change: MainWindow calls this
+        /// after applying a quest event from the game logs and after the in-progress quest input
+        /// dialog. Profile-scoped SETTINGS changes do not come through here - the page subscribes to
+        /// those seven events itself and coalesces them (see <see cref="_settingsRefresh"/>).
+        /// Runs the SAME sequence as the internal state-change handlers
         /// (<see cref="RefreshAllForStateChange"/>) rather than a shorter copy of it:
         /// level and karma flip quests between LevelLocked and Active, and the
         /// recommendations panel lists Active quests, so a sequence that skipped

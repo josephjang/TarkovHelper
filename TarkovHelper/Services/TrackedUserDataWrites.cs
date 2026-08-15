@@ -14,12 +14,27 @@ namespace TarkovHelper.Services;
 /// The barrier is acquired inside the persistence helpers rather than at their call sites, so a
 /// new caller of an already-wrapped helper is ordered automatically and there is no per-call-site
 /// discipline to erode. That is a property of the wrapped helpers, not of the class: a write path
-/// that never calls in here is not ordered, and one such path exists today. ProfileSettings is
-/// profile-owned and its rows are deleted by <c>UserDataDbService.ResetProfileAsync</c>, but its
-/// only writer (<c>SettingsService.SaveProfileSetting</c> to
-/// <c>UserDataDbService.SetProfileSetting</c>) opens its own connection without passing through
-/// here. No reachable post-reset subscriber writes a profile setting back today, so nothing is
-/// resurrected in practice; a new one would have to be wrapped.
+/// that never calls in here is not ordered, and the ProfileSettings table is written by several.
+/// Its rows are profile-owned and deleted by <c>UserDataDbService.ResetProfileAsync</c>, yet every
+/// writer opens its own connection without passing through here: <c>SettingsService</c>'s eight
+/// property setters (<c>SaveProfileSetting</c> to <c>UserDataDbService.SetProfileSetting</c>), its
+/// two startup migrations (<c>MigrateGlobalSettingsToProfileIfNeeded</c> and
+/// <c>MigrateFromJsonIfNeeded</c>), and <c>ConfigMigrationService</c>'s legacy import
+/// (<c>UserDataDbService.SetProfileSettingAsync</c>). No reachable post-reset subscriber writes a
+/// profile setting back today, so nothing is resurrected in practice.
+/// </para>
+/// <para>
+/// Wrapping them is not the mechanical change it looks like, which is why they are still outside.
+/// A settings write must be DURABLE before its snapshot is published - an overtaken load re-reads
+/// the row and would otherwise revert on screen a value the player just typed - so the write has
+/// to complete synchronously on the calling thread, which for every settings write reachable
+/// today is the WPF dispatcher. Blocking the dispatcher on <see cref="RegisterAsync"/> during a reset of the same
+/// profile would hang the app outright rather than merely delay the write: the barrier is lowered
+/// by <c>ProfileResetService.ResetAsync</c>'s finally, whose continuations (and whose refresh
+/// hooks, which raise change events into <c>MainWindow.Dispatcher.Invoke</c> handlers) need that
+/// same dispatcher. Wrapping becomes safe once either the reset no longer needs the dispatcher to
+/// complete, or this class grows a bounded-wait synchronous entry point with a defined policy for
+/// what a settings write does when the wait elapses.
 /// </para>
 /// <para>
 /// Outside a reset the barrier costs one dictionary lookup and one lock per write; writes for

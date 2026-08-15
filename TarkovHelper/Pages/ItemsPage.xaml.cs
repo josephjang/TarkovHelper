@@ -5,11 +5,13 @@ using System.Windows.Input;
 using System.Windows.Media;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
+using TarkovHelper.Services.Logging;
 
 namespace TarkovHelper.Pages
 {
     public partial class ItemsPage : UserControl
     {
+        private static readonly ILogger _log = Log.For<ItemsPage>();
         private readonly LocalizationService _loc = LocalizationService.Instance;
         private readonly QuestProgressService _questProgressService = QuestProgressService.Instance;
         private readonly HideoutProgressService _hideoutProgressService = HideoutProgressService.Instance;
@@ -23,6 +25,17 @@ namespace TarkovHelper.Pages
         private bool _isUnloaded = false;
         private bool _needsRefreshOnLoad = false; // Flag to indicate data refresh needed after unload
         private string? _pendingItemSelection = null;
+
+        /// <summary>
+        /// Collapses the profile-scoped settings burst into one rebuild. SettingsService raises all
+        /// seven of its changed events on every published reload (profile switch, profile reset,
+        /// self-heal), five of which this page consumes, and each one used to run the full
+        /// <see cref="LoadItemsAsync"/> aggregation plus a background image pass. Built by
+        /// <see cref="RefreshCoalescer.OnDispatcher"/> in the constructor BODY, not here:
+        /// <see cref="System.Windows.Threading.DispatcherObject.Dispatcher"/> is only set once the
+        /// base constructor has run, which is after field initializers.
+        /// </summary>
+        private readonly RefreshCoalescer _settingsRefresh;
 
         // Currency items should count by reference count, not total amount
         private static readonly HashSet<string> CurrencyItems = new(StringComparer.OrdinalIgnoreCase)
@@ -153,7 +166,22 @@ namespace TarkovHelper.Pages
 
         public ItemsPage()
         {
+            _settingsRefresh = RefreshCoalescer.OnDispatcher(this, RefreshForSettingsChange);
+
             InitializeComponent();
+            SubscribeServiceEvents();
+
+            Loaded += ItemsPage_Loaded;
+            Unloaded += ItemsPage_Unloaded;
+        }
+
+        /// <summary>
+        /// The service events this page consumes. The constructor, Unloaded, and the
+        /// Loaded re-subscribe all go through this pair, so an event added to one list
+        /// cannot be forgotten in another (a classic WPF leak / double-subscription).
+        /// </summary>
+        private void SubscribeServiceEvents()
+        {
             _loc.LanguageChanged += OnLanguageChanged;
             _questProgressService.ProgressChanged += OnProgressChanged;
             _hideoutProgressService.ProgressChanged += OnProgressChanged;
@@ -166,16 +194,11 @@ namespace TarkovHelper.Pages
             QuestDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
             HideoutDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
             ItemDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
-
-            Loaded += ItemsPage_Loaded;
-            Unloaded += ItemsPage_Unloaded;
         }
 
-        private void ItemsPage_Unloaded(object sender, RoutedEventArgs e)
+        /// <summary>Mirror of <see cref="SubscribeServiceEvents"/>: keep the lists in sync.</summary>
+        private void UnsubscribeServiceEvents()
         {
-            _isUnloaded = true;
-            _needsRefreshOnLoad = true; // Mark for refresh on next load to catch changes
-            // Unsubscribe from events to prevent memory leaks
             _loc.LanguageChanged -= OnLanguageChanged;
             _questProgressService.ProgressChanged -= OnProgressChanged;
             _hideoutProgressService.ProgressChanged -= OnProgressChanged;
@@ -188,6 +211,14 @@ namespace TarkovHelper.Pages
             QuestDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
             HideoutDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
             ItemDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
+        }
+
+        private void ItemsPage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            _isUnloaded = true;
+            _needsRefreshOnLoad = true; // Mark for refresh on next load to catch changes
+            // Unsubscribe from events to prevent memory leaks
+            UnsubscribeServiceEvents();
         }
 
         private void OnInventoryChanged(object? sender, EventArgs e)
@@ -230,18 +261,7 @@ namespace TarkovHelper.Pages
             if (_isUnloaded)
             {
                 _isUnloaded = false;
-                _loc.LanguageChanged += OnLanguageChanged;
-                _questProgressService.ProgressChanged += OnProgressChanged;
-                _hideoutProgressService.ProgressChanged += OnProgressChanged;
-                _inventoryService.InventoryChanged += OnInventoryChanged;
-                SettingsService.Instance.PlayerFactionChanged += OnFactionChanged;
-                SettingsService.Instance.HasEodEditionChanged += OnEditionChanged;
-                SettingsService.Instance.HasUnheardEditionChanged += OnEditionChanged;
-                SettingsService.Instance.PrestigeLevelChanged += OnPrestigeLevelChanged;
-                SettingsService.Instance.DspDecodeCountChanged += OnDspDecodeCountChanged;
-                QuestDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
-                HideoutDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
-                ItemDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
+                SubscribeServiceEvents();
             }
 
             // Apply localization on every load (language might have changed)
@@ -427,53 +447,47 @@ namespace TarkovHelper.Pages
             });
         }
 
-        private void OnFactionChanged(object? sender, string? e)
+        // The five profile-scoped settings events this page consumes all need the same rebuild, so
+        // they are adapters over one coalesced request. They differ only in delegate signature.
+        // Faction changes item counts; editions and prestige move quests in and out of Unavailable;
+        // the DSP decode count moves them in and out of Locked.
+
+        private void OnFactionChanged(object? sender, string? e) => _settingsRefresh.Request();
+
+        private void OnEditionChanged(object? sender, bool e) => _settingsRefresh.Request();
+
+        private void OnPrestigeLevelChanged(object? sender, int e) => _settingsRefresh.Request();
+
+        private void OnDspDecodeCountChanged(object? sender, int e) => _settingsRefresh.Request();
+
+        /// <summary>
+        /// The rebuild a profile-scoped settings change needs. Runs on the dispatcher, once per
+        /// burst, scheduled by <see cref="_settingsRefresh"/>.
+        /// </summary>
+        private async void RefreshForSettingsChange()
         {
-            // Reload items when faction changes to update item counts
-            Dispatcher.Invoke(async () =>
+            // The refresh is scheduled rather than inline, so it can land after Unloaded dropped the
+            // subscriptions. Unloaded already sets _needsRefreshOnLoad, so the next Loaded rebuilds.
+            if (_isUnloaded) return;
+
+            try
             {
                 await LoadItemsAsync();
                 ApplyFilters();
                 UpdateDetailPanel();
                 // Load images in background
                 _ = LoadImagesInBackgroundAsync();
-            });
-        }
-
-        private void OnEditionChanged(object? sender, bool e)
-        {
-            // Edition change affects which quests are available (Unavailable status)
-            Dispatcher.Invoke(async () =>
+            }
+            catch (Exception ex)
             {
-                await LoadItemsAsync();
-                ApplyFilters();
-                UpdateDetailPanel();
-                _ = LoadImagesInBackgroundAsync();
-            });
-        }
-
-        private void OnPrestigeLevelChanged(object? sender, int e)
-        {
-            // Prestige level change affects which quests are available (Unavailable status)
-            Dispatcher.Invoke(async () =>
-            {
-                await LoadItemsAsync();
-                ApplyFilters();
-                UpdateDetailPanel();
-                _ = LoadImagesInBackgroundAsync();
-            });
-        }
-
-        private void OnDspDecodeCountChanged(object? sender, int e)
-        {
-            // DSP decode count change affects which quests are available (Locked status)
-            Dispatcher.Invoke(async () =>
-            {
-                await LoadItemsAsync();
-                ApplyFilters();
-                UpdateDetailPanel();
-                _ = LoadImagesInBackgroundAsync();
-            });
+                // This method is async void AND the top of the dispatcher stack (the coalescer
+                // posts it directly), so an exception escaping it goes straight to App's
+                // DispatcherUnhandledException, which logs and then lets the process terminate.
+                // Losing one settings-driven rebuild is not worth the app: the page keeps the rows
+                // it already has, and the next burst or the next Loaded rebuilds it. Logged, never
+                // swallowed silently.
+                _log.Error("Failed to refresh the items page for a profile settings change", ex);
+            }
         }
 
         // Fully synchronous today (raised CS1998 as an async method); keeps the Task

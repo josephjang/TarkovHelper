@@ -8,6 +8,30 @@
 > later change that reverses a decision here appends `Superseded by <doc>` below
 > this line, in the PR that reverses it.
 
+> Note (2026-08-15): `fix-profile-settings-race.spec.md` holds the current design
+> of the profile-settings cache and of `SettingsService.HandleProfileReset`. Two
+> passages below describe code that no longer exists, and are retired as
+> descriptions:
+>
+> - The last Goals bullet's "one deliberate exception:
+>   `SettingsService.HandleProfileReset` asks which profile is selected". The hook
+>   now compares the reset target against the profile id carried by the
+>   `ProfileSettingsSnapshot` it holds, like the three sibling hooks, so the reset
+>   path has no ambient-selection read left to except.
+> - The "SettingsService profile ownership" Non-Goal and its reasoning that the
+>   cache has no identity of its own. The cache is one immutable snapshot naming
+>   its own profile, an edit persists under that profile id rather than under the
+>   selection current at call time, and the per-key `SaveProfileSetting(key,
+>   value)`, `GetProfileSetting(key)` and `LoadProfileSettings()` shapes named
+>   there are gone: one bulk `UserDataDbService.LoadProfileSettings(profileId)`
+>   reads the whole set.
+>
+> That Non-Goal deferred the rewrite as SPA-1 territory, and
+> `fix-profile-settings-race.spec.md` records under "Writes take their profile
+> from the snapshot" its reading that the deferral anticipated exactly this
+> follow-up, so it claims no decision here is reversed. This note retires the two
+> descriptions only. Every decision here stands.
+
 ## Summary
 
 The reset becomes one SQLite transaction: `UserDataDbService.ResetProfileAsync`
