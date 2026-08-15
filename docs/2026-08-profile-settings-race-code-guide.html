@@ -1,0 +1,2063 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Profile Settings Race - Code Guide</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Ground and structure, inherited from the earlier guides so the
+         interactive docs read as one set. */
+      --page: #101010;
+      --surface: #181818;
+      --surface-2: #222222;
+      --surface-3: #2d2d2d;
+      --line: #3d3d3d;
+      --line-soft: #2a2a2a;
+      --text: #e0e0e0;
+      --muted: #9e9e9e;
+      --dim: #737373;
+
+      /* Accent: the app's own AccentBrush. */
+      --gold: #c5a84a;
+      --gold-hover: #d4b85a;
+      --gold-ink: #19170f;
+
+      /* Profile hues. These are a LAW, not decoration: the same profile is the same
+         colour in every table, lane and timeline on this page. */
+      --pvp: #5ea9e8;
+      --pve: #4caf50;
+      --season: #ff9800;
+
+      /* Reserved for data in the wrong place. */
+      --wrong: #ef5350;
+      --right: #4caf50;
+
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+
+      --body: "Segoe UI", "Noto Sans", system-ui, sans-serif;
+      --mono: Consolas, "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 14% -12%, rgba(197, 168, 74, .12), transparent 36rem),
+        var(--page);
+      color: var(--text);
+      font-family: var(--body);
+      line-height: 1.55;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    }
+
+    button, input, select { font: inherit; }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* ---------- shell ---------- */
+
+    .shell {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      gap: 44px;
+      width: min(1320px, calc(100% - 44px));
+      margin: 0 auto;
+      padding: 56px 0 96px;
+      align-items: start;
+    }
+
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .rail { position: static; margin-bottom: 40px; }
+    }
+
+    .rail {
+      position: sticky;
+      top: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 18px 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: rgba(24, 24, 24, .84);
+      backdrop-filter: blur(10px);
+    }
+
+    .rail-title {
+      margin: 0 0 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .rail a {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 13.5px;
+      text-decoration: none;
+      transition: background .15s, color .15s;
+    }
+
+    .rail a:hover { background: var(--surface-2); color: var(--text); }
+    .rail a .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+    .rail a.is-lab { color: var(--gold); }
+    .rail a.is-lab .n { color: var(--gold); }
+
+    .rail-gate {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line-soft);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    .rail-gate strong { display: block; color: var(--text); font-size: 13px; }
+
+    .gate-meter {
+      height: 5px;
+      margin-top: 8px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .gate-meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--gold);
+      transition: width .3s ease;
+    }
+
+    /* ---------- type ---------- */
+
+    main { max-width: 100%; }
+
+    .eyebrow {
+      margin: 0;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    h1 {
+      max-width: 18ch;
+      margin: 12px 0 18px;
+      font-size: clamp(38px, 5.6vw, 70px);
+      font-weight: 800;
+      line-height: 1.0;
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+
+    .lede {
+      max-width: 62ch;
+      margin: 0 0 14px;
+      font-size: 19px;
+      color: #c2c2c2;
+    }
+
+    h2 {
+      margin: 0 0 6px;
+      font-size: clamp(24px, 3vw, 33px);
+      font-weight: 800;
+      letter-spacing: -.03em;
+      line-height: 1.12;
+      text-wrap: balance;
+    }
+
+    h3 {
+      margin: 30px 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    p, li { max-width: 68ch; }
+    p { margin: 0 0 14px; }
+    ul, ol { margin: 0 0 14px; padding-left: 22px; }
+    li { margin-bottom: 7px; }
+
+    strong { color: #f0f0f0; }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: #ddc98a;
+      font-family: var(--mono);
+      font-size: .88em;
+    }
+
+    a { color: var(--gold); }
+
+    section { margin-bottom: 68px; scroll-margin-top: 24px; }
+
+    .chapter-head {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 16px;
+      align-items: baseline;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .chapter-num {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      color: var(--gold);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kicker {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 62ch;
+    }
+
+    /* ---------- callouts ---------- */
+
+    .note {
+      margin: 22px 0;
+      padding: 16px 18px;
+      border-left: 3px solid var(--gold);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: linear-gradient(100deg, rgba(197, 168, 74, .1), rgba(197, 168, 74, .02));
+    }
+
+    .note p:last-child { margin-bottom: 0; }
+
+    .note-label {
+      margin: 0 0 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .note.is-wrong { border-left-color: var(--wrong); background: linear-gradient(100deg, rgba(239, 83, 80, .1), transparent); }
+    .note.is-wrong .note-label { color: var(--wrong); }
+
+    /* ---------- code and logs ---------- */
+
+    .code {
+      margin: 18px 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #141414;
+      overflow: hidden;
+    }
+
+    .code-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .code pre {
+      margin: 0;
+      padding: 14px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.62;
+      tab-size: 2;
+    }
+
+    .code .del { display: block; background: rgba(239, 83, 80, .12); color: #f0b3b1; }
+    .code .add { display: block; background: rgba(76, 175, 80, .12); color: #b3e0b5; }
+    .code .cmt { color: var(--dim); }
+
+    /* ---------- labs ---------- */
+
+    .lab {
+      margin: 34px 0 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .lab-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      align-items: baseline;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line-soft);
+      background: linear-gradient(180deg, rgba(197, 168, 74, .07), transparent);
+    }
+
+    .lab-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .lab-head h3 { margin: 0; font-size: 19px; }
+    .lab-head .sub { width: 100%; margin: 2px 0 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
+
+    .lab-body { padding: 20px; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    .ctl-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .seg {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      background: var(--surface-2);
+      gap: 3px;
+    }
+
+    .seg button {
+      padding: 6px 14px;
+      border: 0;
+      border-radius: 99px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+
+    .seg button:hover { color: var(--text); }
+    .seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); }
+    .seg button[aria-pressed="true"][data-tone="bad"] { background: rgba(239, 83, 80, .2); color: var(--wrong); }
+    .seg button[aria-pressed="true"][data-tone="good"] { background: rgba(76, 175, 80, .2); color: var(--right); }
+
+    .btn {
+      padding: 8px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+
+    .btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--gold); }
+    .btn:disabled { opacity: .42; cursor: not-allowed; }
+    .btn.is-primary { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+    .btn.is-primary:hover:not(:disabled) { background: var(--gold-hover); }
+
+    .slider-wrap { display: flex; align-items: center; gap: 10px; }
+    .slider-wrap input[type="range"] { width: 210px; accent-color: var(--gold); }
+    .slider-read { font-family: var(--mono); font-size: 13px; color: var(--text); min-width: 15ch; }
+
+    .verdict {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: var(--surface-2);
+      font-size: 14.5px;
+    }
+
+    .verdict[data-tone="bad"] { border-color: rgba(239, 83, 80, .5); background: rgba(239, 83, 80, .08); }
+    .verdict[data-tone="good"] { border-color: rgba(76, 175, 80, .45); background: rgba(76, 175, 80, .07); }
+    .verdict b { display: block; margin-bottom: 3px; }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-top: 6px;
+    }
+
+    .stat {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .stat .k {
+      margin: 0 0 4px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .stat .v {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .v[data-tone="bad"] { color: var(--wrong); }
+    .v[data-tone="good"] { color: var(--right); }
+    .v[data-tone="season"] { color: var(--season); }
+    .v[data-tone="pve"] { color: var(--pve); }
+    .v[data-tone="pvp"] { color: var(--pvp); }
+
+    /* ---------- lab A: the eight reads ---------- */
+
+    .reads { border: 1px solid var(--line-soft); border-radius: var(--radius-sm); overflow: hidden; }
+
+    .read-row {
+      display: grid;
+      grid-template-columns: 62px minmax(0, 1fr) 118px 96px;
+      gap: 10px;
+      align-items: center;
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      background: var(--surface-2);
+    }
+
+    .read-row:last-child { border-bottom: 0; }
+    .read-row .rn { color: var(--dim); }
+    .read-row .rk { color: var(--text); overflow-wrap: anywhere; }
+    .read-row .rv { font-weight: 700; text-align: right; }
+    .read-row .ro { font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; text-align: right; }
+
+    .read-row[data-owner="season"] .rv, .read-row[data-owner="season"] .ro { color: var(--season); }
+    .read-row[data-owner="pve"] .rv, .read-row[data-owner="pve"] .ro { color: var(--pve); }
+    .read-row.is-boundary { box-shadow: inset 0 -2px 0 var(--wrong); }
+
+    @media (max-width: 760px) {
+      .read-row { grid-template-columns: 44px minmax(0, 1fr) 84px; }
+      .read-row .ro { display: none; }
+    }
+
+    /* ---------- lab B: the two lanes ---------- */
+
+    .lanes { display: grid; gap: 12px; }
+
+    .lane {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .lane[data-profile="pve"] { border-left: 3px solid var(--pve); }
+    .lane[data-profile="season"] { border-left: 3px solid var(--season); }
+
+    .lane-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 12px;
+      align-items: baseline;
+      margin-bottom: 8px;
+      font-size: 13.5px;
+      font-weight: 700;
+    }
+
+    .lane-head .rev { font-family: var(--mono); font-size: 12px; color: var(--dim); font-weight: 600; }
+
+    .steps { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .step {
+      padding: 4px 9px;
+      border: 1px solid var(--line-soft);
+      border-radius: 99px;
+      background: #141414;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--dim);
+    }
+
+    .step.is-done { color: var(--text); border-color: var(--line); }
+    .step.is-now { color: var(--gold-ink); background: var(--gold); border-color: var(--gold); font-weight: 700; }
+    .step.is-kill { color: var(--wrong); border-color: rgba(239, 83, 80, .55); }
+    .step.is-win { color: var(--right); border-color: rgba(76, 175, 80, .55); }
+
+    /* ---------- lab C: the two partitions ---------- */
+
+    .parts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+
+    .part {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .part[data-profile="season"] { border-left: 3px solid var(--season); }
+    .part[data-profile="pve"] { border-left: 3px solid var(--pve); }
+
+    .part .pk {
+      margin: 0 0 6px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .part .pv { margin: 0; font-family: var(--mono); font-size: 15px; font-weight: 700; }
+    .part .pn { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+    .part.is-hit { border-color: rgba(239, 83, 80, .6); }
+    .part.is-hit .pv { color: var(--wrong); }
+    .part.is-ok .pv { color: var(--right); }
+
+    /* ---------- quiz ---------- */
+
+    .quiz-intro {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 26px;
+      padding: 18px 20px;
+      border: 1px solid rgba(197, 168, 74, .35);
+      border-radius: var(--radius);
+      background: linear-gradient(110deg, rgba(197, 168, 74, .12), rgba(197, 168, 74, .02));
+    }
+
+    .quiz-score {
+      display: grid;
+      place-items: center;
+      min-width: 62px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      color: var(--gold);
+    }
+
+    .q {
+      margin-bottom: 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .q[data-state="right"] { border-color: rgba(76, 175, 80, .55); }
+    .q[data-state="wrong"] { border-color: rgba(239, 83, 80, .5); }
+
+    .q-head { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 16px 18px 10px; }
+
+    .q-num {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--gold);
+      padding-top: 3px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .q-text { margin: 0; font-size: 15.5px; font-weight: 600; max-width: 72ch; }
+
+    .q-opts { display: grid; gap: 7px; padding: 4px 18px 16px 44px; }
+
+    .opt {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      cursor: pointer;
+      font-size: 14px;
+      transition: border-color .15s, background .15s;
+    }
+
+    .opt:hover { border-color: var(--line); background: var(--surface-3); }
+    .opt input { margin: 3px 0 0; accent-color: var(--gold); }
+    .opt.is-right { border-color: rgba(76, 175, 80, .6); background: rgba(76, 175, 80, .1); }
+    .opt.is-wrong { border-color: rgba(239, 83, 80, .55); background: rgba(239, 83, 80, .1); }
+
+    .q-why {
+      display: none;
+      margin: 0 18px 16px 44px;
+      padding: 12px 14px;
+      border-left: 3px solid var(--line);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: var(--surface-2);
+      font-size: 13.5px;
+      color: #c4c4c4;
+    }
+
+    .q-why p { margin: 0; max-width: 74ch; }
+    .q[data-state] .q-why { display: block; }
+    .q[data-state="right"] .q-why { border-left-color: var(--right); }
+    .q[data-state="wrong"] .q-why { border-left-color: var(--wrong); }
+
+    .q-why .verdict-word { font-weight: 700; }
+    .q[data-state="right"] .verdict-word { color: var(--right); }
+    .q[data-state="wrong"] .verdict-word { color: var(--wrong); }
+
+    /* gate */
+
+    .gate {
+      margin-top: 30px;
+      padding: 22px 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .gate.is-locked { border-style: dashed; color: var(--muted); }
+    .gate.is-open { border-color: rgba(76, 175, 80, .55); background: linear-gradient(150deg, rgba(76, 175, 80, .1), transparent); }
+
+    .gate h3 { margin: 0 0 8px; }
+    .gate ul { margin-top: 10px; }
+
+    .approval {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: #141414;
+      border: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: #b9d8bb;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    footer {
+      margin-top: 22px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--dim);
+      font-size: 13px;
+    }
+
+    footer a { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="rail" aria-label="Guide contents">
+      <p class="rail-title">Curriculum</p>
+      <a href="#ch1"><span class="n">01</span><span>The guard three services had</span></a>
+      <a href="#ch2"><span class="n">02</span><span>The unguarded fourth</span></a>
+      <a href="#lab-a" class="is-lab"><span class="n">LAB</span><span>The eight-read window</span></a>
+      <a href="#ch3"><span class="n">03</span><span>The older transition publishes last</span></a>
+      <a href="#lab-b" class="is-lab"><span class="n">LAB</span><span>The revision gate</span></a>
+      <a href="#ch4"><span class="n">04</span><span>The correction that overwrites</span></a>
+      <a href="#ch5"><span class="n">05</span><span>The snapshot</span></a>
+      <a href="#ch6"><span class="n">06</span><span>Writes follow the snapshot</span></a>
+      <a href="#lab-c" class="is-lab"><span class="n">LAB</span><span>Where the edit lands</span></a>
+      <a href="#ch7"><span class="n">07</span><span>Healing, and what stayed</span></a>
+      <a href="#quiz"><span class="n">08</span><span>Comprehension gate</span></a>
+      <div class="rail-gate">
+        <strong id="railGateLabel">Gate locked</strong>
+        <span id="railGateHint">0 of 8 correct</span>
+        <div class="gate-meter"><i id="railGateBar"></i></div>
+      </div>
+    </nav>
+
+    <main>
+      <p class="eyebrow">PR #43 &middot; Code guide, part 6</p>
+      <h1>The settings that belonged to nobody</h1>
+      <p class="lede">
+        Three of the four services that reload on a profile switch had grown a transition
+        guard. The fourth held the numbers a player edits by hand: level, scav reputation,
+        faction, prestige, DSP count, editions. It refilled them one key at a time, asking
+        "which profile is selected?" eight separate times, and wrote a player's correction
+        into whichever profile the answer happened to be. Three labs let you drive the tear,
+        the revision gate, and the write attribution yourself.
+      </p>
+      <p class="lede" style="color:var(--muted);font-size:16px;">
+        Part 6 of the profile series. Part 1 covers write attribution for progress data,
+        part 3 the complete profile reset, part 5 the reset dialog UX. Companion to
+        <code>docs/decisions/fix-profile-settings-race.md</code> (R1, R2, R5) and
+        <code>docs/decisions/fix-profile-settings-race.spec.md</code>. It closes SPA-2 of
+        <code>docs/assessments/2026-08-seasonal-profile-amplified-issues.md</code>, the last
+        of the four services that finding named.
+      </p>
+
+      <div class="note">
+        <p class="note-label">The whole change in one sentence</p>
+        <p>
+          The eight profile-scoped settings become one immutable snapshot that carries the
+          profile it belongs to and the transition it was loaded for, built from a single
+          bulk query and published only while its revision is still the latest, so a reload
+          can no longer tear across two profiles or publish an older profile's values last,
+          and an edit is stored in the profile whose value was on screen instead of the one
+          the switch just selected.
+        </p>
+      </div>
+
+      <!-- ===================== CHAPTER 1 ===================== -->
+      <section id="ch1">
+        <div class="chapter-head">
+          <span class="chapter-num">01</span>
+          <div>
+            <h2>The guard three services had</h2>
+            <p class="kicker">
+              A profile switch is announced, not awaited. Two of them can be in flight at
+              once, from two different threads, and the subscriber that handles them has to
+              be able to tell which one it is serving.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          <code>ProfileService</code> keeps the selection and a monotonic transition counter
+          as one unit under a static gate. <code>CurrentTransition</code> hands out the pair
+          atomically, and <code>ProfileChangedEventArgs</code> carries <code>Profile</code>,
+          <code>ProfileChanged</code> and <code>Revision</code>. The revision counts every
+          raise, including a provenance-only re-confirmation, so no two loads ever serve the
+          same number.
+        </p>
+        <p>
+          The event is raised <em>outside</em> that lock, deliberately: handlers run
+          synchronously and take locks of their own, so holding the gate across the raise
+          would be a lock-ordering hazard. The cost is the thing this whole guide is about.
+          Two near-simultaneous transitions, one from the dispatcher when the player clicks
+          and one from the EFT log watcher's thread pool, can deliver their events to a given
+          subscriber <strong>in either order</strong>.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/ProfileService.cs</span><span>unchanged by this PR</span></div>
+          <pre><code>public (AppProfile Profile, long Revision) CurrentTransition
+{
+    get { lock (_gate) return (_activeProfile, _transitionRevision); }
+}</code></pre>
+        </div>
+
+        <p>
+          Five subscribers listen. <code>QuestProgressService</code>,
+          <code>HideoutProgressService</code> and <code>ItemInventoryService</code> share one
+          shape, grown over parts 1 and 3 of this series:
+        </p>
+        <ol>
+          <li>the handler takes the event's own <code>Profile</code> and <code>Revision</code>, never a fresh lookup;</li>
+          <li><code>ClaimRevision</code> lifts the latest-known revision to this one;</li>
+          <li>the store read happens off to the side, touching no cache;</li>
+          <li>the revision is re-checked <em>after</em> the read;</li>
+          <li>a stale result is discarded rather than published.</li>
+        </ol>
+        <p>
+          Publication is atomic per service. <code>QuestProgressService</code> swaps an
+          immutable <code>ProgressSnapshot</code> that embeds its own <code>ProfileId</code>
+          and <code>Revision</code>; the other two swap a mutable cache together with a
+          <code>_loadedProfileId</code> string under a lock.
+          <code>ProfileReloadRaceTests</code> and <code>ProgressSnapshotTests</code> pin it.
+        </p>
+        <p>
+          The fifth subscriber is <code>MainWindow</code>, which only repaints a header. The
+          fourth is where the data was.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 2 ===================== -->
+      <section id="ch2">
+        <div class="chapter-head">
+          <span class="chapter-num">02</span>
+          <div>
+            <h2>The unguarded fourth</h2>
+            <p class="kicker">
+              SettingsService threw away both halves of the event and rebuilt its cache by
+              asking a global question eight times in a row.
+            </p>
+          </div>
+        </div>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/SettingsService.cs</span><span>before</span></div>
+          <pre><code><span class="del">private void OnActiveProfileChanged(object? sender, ProfileChangedEventArgs e)</span>
+<span class="del">{</span>
+<span class="del">    ReloadProfileSettingsAndNotify();   // e.Profile and e.Revision both discarded</span>
+<span class="del">}</span>
+
+<span class="del">private void LoadProfileSettings()</span>
+<span class="del">{</span>
+<span class="del">    _playerLevel = int.TryParse(GetProfileSetting(KeyPlayerLevel), out var level) ? level : null;</span>
+<span class="del">    _scavRep = double.TryParse(GetProfileSetting(KeyScavRep), out var scavRep) ? scavRep : null;</span>
+<span class="cmt">    // ... six more, one per key ...</span>
+<span class="del">}</span>
+
+<span class="del">private string? GetProfileSetting(string key)</span>
+<span class="del">    =&gt; _userDataDb.GetProfileSetting(ProfileService.Instance.ActiveProfileId, key);</span></code></pre>
+        </div>
+
+        <p>
+          Read that last line against the loop above it. Every one of the eight reads
+          resolves <code>ActiveProfileId</code> <strong>again, at its own call time</strong>,
+          and <code>UserDataDbService.GetProfileSetting</code> opens a fresh SQLite connection
+          per call. One reload is eight sequential connection open, query, close cycles, and
+          the selection is free to move between any two of them.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">Failure shape one: the tear</p>
+          <p>
+            A transition landing between read <em>k</em> and read <em>k+1</em> leaves keys 1
+            to <em>k</em> holding profile A's values and keys <em>k+1</em> to 8 holding
+            profile B's. There is no field naming which profile the cache holds, so nothing
+            in the service can detect the state, and nothing clears it. It stands until the
+            next transition, however long that is.
+          </p>
+        </div>
+
+        <p>
+          The eight values are not decorative. Level, scav reputation, faction, prestige,
+          editions and the DSP count are what <code>QuestProgressService.GetStatus</code>
+          consults to decide whether a quest is Active, Locked, LevelLocked or Unavailable,
+          and what <code>ItemsPage</code> filters on. While the mixture stands, the lists are
+          filtered by two profiles at once.
+        </p>
+      </section>
+
+      <!-- ===================== LAB A ===================== -->
+      <section id="lab-a">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab A</span>
+            <h3>The eight-read window</h3>
+            <p class="sub">
+              Drag the switch to land between any two reads. Pinned by
+              <code>SettingsReloadRaceTests.A_published_reload_replaces_every_value_and_the_profile_id_together</code>,
+              which asserts that no seed value survives beside a loaded one.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="controls">
+              <span class="ctl-label">World</span>
+              <div class="seg" id="labAWorld">
+                <button type="button" data-a-world="before" data-tone="bad" aria-pressed="true">Before: eight reads</button>
+                <button type="button" data-a-world="after" data-tone="good" aria-pressed="false">After: one bulk read</button>
+              </div>
+              <span class="ctl-label">Switch to PvE lands</span>
+              <div class="slider-wrap">
+                <input type="range" id="labASwitch" min="0" max="8" step="1" value="3" aria-label="Where the profile switch lands">
+                <span class="slider-read" id="labASwitchRead">after read 3</span>
+              </div>
+            </div>
+
+            <div class="reads" id="labAReads"></div>
+
+            <div class="state-grid">
+              <div class="stat"><p class="k">Reads issued</p><p class="v" id="labAReadCount">8</p></div>
+              <div class="stat"><p class="k">Profiles in the cache</p><p class="v" id="labAOwners">2</p></div>
+              <div class="stat"><p class="k">Cache identity</p><p class="v" id="labAIdentity">(none)</p></div>
+            </div>
+
+            <div class="verdict" id="labAVerdict"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 3 ===================== -->
+      <section id="ch3">
+        <div class="chapter-head">
+          <span class="chapter-num">03</span>
+          <div>
+            <h2>The older transition publishes last</h2>
+            <p class="kicker">
+              Suppose the tear were fixed by a single query and nothing else. The second
+              failure shape survives untouched, and it is the one a bulk read cannot reach.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Because the event is raised outside the publisher's lock, the handler for the
+          <em>older</em> transition can run last and therefore publish last. Every value it
+          publishes belongs to one profile, so there is no mixture to spot; the cache simply
+          holds the previous profile's complete set under the newer profile's name. From
+          inside the service the state is indistinguishable from a correct load, and it heals
+          on exactly the same schedule as the tear, which is to say never.
+        </p>
+
+        <div class="note">
+          <p class="note-label">Why a bulk query alone was rejected</p>
+          <p>
+            Replacing the eight reads with one query removes the tear and leaves the
+            inversion. That is the spec's own reasoning for taking the snapshot shape rather
+            than the smaller diff: the guard has to be about <em>which transition this load
+            serves</em>, not about how many round trips it takes.
+          </p>
+        </div>
+
+        <p>
+          The revision exists precisely for this. Each reload claims the revision it serves,
+          re-checks it after the read, and publishes only on an exact match. Both halves are
+          worth reading closely, because the comparisons are narrower than they look:
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/SettingsService.cs</span><span>after</span></div>
+          <pre><code><span class="add">private void ClaimRevision(long revision)</span>
+<span class="add">{</span>
+<span class="add">    while (true)</span>
+<span class="add">    {</span>
+<span class="add">        var current = Interlocked.Read(ref _latestRevision);</span>
+<span class="add">        if (revision &lt;= current) return;            </span><span class="cmt">// an equal revision does NOT re-claim</span>
+<span class="add">        if (Interlocked.CompareExchange(ref _latestRevision, revision, current) == current) return;</span>
+<span class="add">    }</span>
+<span class="add">}</span>
+
+<span class="cmt">// ... inside the reload, after the store read ...</span>
+<span class="add">if (Interlocked.Read(ref _latestRevision) != revision)</span>
+<span class="add">{</span>
+<span class="add">    _log.Debug($"Discarding stale settings load for {profileId} (revision {revision})");</span>
+<span class="add">    return;</span>
+<span class="add">}</span></code></pre>
+        </div>
+
+        <p>
+          The publish check is <code>!=</code>, not <code>&lt;</code>. It asks one question:
+          "is the revision I claimed still the latest anyone claimed?" A load can only fail
+          it by being overtaken, because its own claim already raised the counter to at least
+          its own number. Stating it as an equality makes the invariant the code is really
+          asserting visible at the site.
+        </p>
+      </section>
+
+      <!-- ===================== LAB B ===================== -->
+      <section id="lab-b">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab B</span>
+            <h3>The revision gate</h3>
+            <p class="sub">
+              Two transitions in flight, finishing in the order you choose. Pinned by
+              <code>SettingsReloadRaceTests.A_settings_reload_that_lost_the_race_does_not_publish_over_the_newer_one</code>
+              and <code>The_later_of_two_settings_transitions_wins_whatever_order_they_finish_in</code>.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="controls">
+              <span class="ctl-label">World</span>
+              <div class="seg" id="labBWorld">
+                <button type="button" data-b-world="before" data-tone="bad" aria-pressed="true">Before: no revision</button>
+                <button type="button" data-b-world="after" data-tone="good" aria-pressed="false">After: revision gate</button>
+              </div>
+              <span class="ctl-label">Finishes last</span>
+              <div class="seg" id="labBOrder">
+                <button type="button" data-b-order="older" aria-pressed="true">PvE, the older one</button>
+                <button type="button" data-b-order="newer" aria-pressed="false">Season, the newer one</button>
+              </div>
+              <button class="btn is-primary" id="labBStep" type="button">Step</button>
+              <button class="btn" id="labBReset" type="button">Reset</button>
+            </div>
+
+            <div class="lanes">
+              <div class="lane" data-profile="pve">
+                <p class="lane-head"><span>Transition 1 &rarr; PvE Zone</span><span class="rev">revision 4</span></p>
+                <div class="steps" id="labBStepsA"></div>
+              </div>
+              <div class="lane" data-profile="season">
+                <p class="lane-head"><span>Transition 2 &rarr; PvP Season</span><span class="rev">revision 5</span></p>
+                <div class="steps" id="labBStepsB"></div>
+              </div>
+            </div>
+
+            <div class="state-grid">
+              <div class="stat"><p class="k">Latest claimed revision</p><p class="v" id="labBLatest">0</p></div>
+              <div class="stat"><p class="k">Selection shows</p><p class="v" id="labBSelection" data-tone="season">PvP Season</p></div>
+              <div class="stat"><p class="k">Settings cache holds</p><p class="v" id="labBCache">(startup)</p></div>
+            </div>
+
+            <div class="verdict" id="labBVerdict"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 4 ===================== -->
+      <section id="ch4">
+        <div class="chapter-head">
+          <span class="chapter-num">04</span>
+          <div>
+            <h2>The correction that overwrites</h2>
+            <p class="kicker">
+              A wrong number on screen is a display bug. A wrong number the player then
+              corrects is a data loss, and it is silent on both ends.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Here is the sequence the PRD is built around. The settings on screen are a mixture,
+          or a stale complete set. The player notices that their level says 32 when it should
+          say 22, and fixes it. The setter runs:
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/SettingsService.cs</span><span>before</span></div>
+          <pre><code><span class="del">private void SaveProfileSetting(string key, string value)</span>
+<span class="del">    =&gt; _userDataDb.SetProfileSetting(ProfileService.Instance.ActiveProfileId, key, value);</span></code></pre>
+        </div>
+
+        <p>
+          The write goes to the profile that is <em>selected</em>, which in the collision
+          window is not the profile whose number was on screen. The player has just taken a
+          value they read off profile A, decided it was wrong, and overwritten profile B's
+          correct value with their correction. Nothing warns them, and afterwards the edit is
+          indistinguishable from a deliberate one, which is why
+          <code>fix-profile-settings-race.md</code> also declines to repair historical damage:
+          there is nothing to key a repair on.
+        </p>
+
+        <div class="note">
+          <p class="note-label">The doctrine was already written down</p>
+          <p>
+            <code>ProfileAttributionSourceTests</code> allowlisted exactly four selection
+            reads in this file, and its own failure message states the rule the codebase had
+            adopted everywhere else: <em>the partition must arrive as a parameter or on the
+            snapshot the change was derived from</em>. The Non-Goals of
+            <code>docs/decisions/feature-complete-profile-reset.spec.md</code> named this gap
+            explicitly and deferred it as SPA-1 territory, with the question "what would give
+            the cache an identity worth guarding?" left open. This change is the answer, and
+            three of those four allowlist entries are deleted by it.
+          </p>
+        </div>
+
+        <p>
+          So the read defect and the write defect are one defect wearing two hats: the cache
+          had no identity of its own, so both the loader and the writer had to ask a global
+          question, and both got an answer that was true at some moment other than the one
+          they needed it for.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 5 ===================== -->
+      <section id="ch5">
+        <div class="chapter-head">
+          <span class="chapter-num">05</span>
+          <div>
+            <h2>The snapshot</h2>
+            <p class="kicker">
+              One immutable value carrying the eight settings, the profile they belong to,
+              and the transition they were loaded for. The shape ProgressSnapshot already
+              proved in part 1.
+            </p>
+          </div>
+        </div>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/Settings/ProfileSettingsSnapshot.cs</span><span>new</span></div>
+          <pre><code><span class="add">internal sealed record ProfileSettingsSnapshot(</span>
+<span class="add">    string ProfileId,</span>
+<span class="add">    long Revision,</span>
+<span class="add">    int? PlayerLevel,</span>
+<span class="add">    double? ScavRep,</span>
+<span class="add">    bool? ShowLevelLockedQuests,</span>
+<span class="add">    int? DspDecodeCount,</span>
+<span class="add">    string? PlayerFaction,</span>
+<span class="add">    bool? HasEodEdition,</span>
+<span class="add">    bool? HasUnheardEdition,</span>
+<span class="add">    int? PrestigeLevel)</span>
+<span class="add">{</span>
+<span class="add">    internal static ProfileSettingsSnapshot Defaults(string profileId, long revision)</span>
+<span class="add">        =&gt; new(profileId, revision, null, null, null, null, null, null, null, null);</span>
+
+<span class="add">    internal int PlayerLevelOrDefault =&gt; PlayerLevel ?? SettingsService.DefaultPlayerLevel;</span>
+<span class="cmt">    // ... six more OrDefault members ...</span>
+<span class="add">}</span></code></pre>
+        </div>
+
+        <p>
+          The eight nullable fields in <code>SettingsService</code> collapse into one volatile
+          reference to this record. Nullable is load-bearing: <code>null</code> means "this
+          profile has no row for that key", which is what makes the property answer its
+          default. That "null means default" rule used to live in each of the eight getters
+          and would now have needed a second copy wherever the changed events are raised from
+          a snapshot, so it moved onto the record as the <code>OrDefault</code> members and
+          has exactly one home.
+        </p>
+        <p>
+          <code>PlayerFaction</code> deliberately has no <code>OrDefault</code>. Null there is
+          a real value, "no faction chosen", not a missing one.
+        </p>
+
+        <h3>The load</h3>
+        <p>
+          <code>UserDataDbService</code> gains a synchronous <code>LoadProfileSettings</code>
+          that reads one profile's rows in a single query. It replaces an
+          <code>async</code> twin that had existed with zero callers, rather than sitting
+          beside it as a second copy. Synchronous, because the caller must have the values
+          when it returns: the property getters answer from them mid-startup, and the reset
+          hook runs as a plain <code>Action</code>.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/SettingsService.cs</span><span>after</span></div>
+          <pre><code><span class="add">private void ReloadForProfile(string profileId, long revision, bool notify)</span>
+<span class="add">{</span>
+<span class="add">    ClaimRevision(revision);</span>
+
+<span class="cmt">    // Null means the read failed, which is also what _lastLoadFailed records: one query</span>
+<span class="cmt">    // per reload, so there is no half-read state to represent.</span>
+<span class="add">    Dictionary&lt;string, string&gt;? values = null;</span>
+<span class="add">    try { values = _userDataDb.LoadProfileSettings(profileId); }</span>
+<span class="add">    catch (Exception ex) { _log.Error($"Failed to load profile settings for {profileId}: {ex.Message}"); }</span>
+
+<span class="add">    if (Interlocked.Read(ref _latestRevision) != revision) { </span><span class="cmt">/* discard */</span><span class="add"> return; }</span>
+
+<span class="add">    _lastLoadFailed = values == null;</span>
+
+<span class="add">    var snapshot = values == null</span>
+<span class="add">        ? ProfileSettingsSnapshot.Defaults(profileId, revision)</span>
+<span class="add">        : SnapshotOf(profileId, revision, values);</span>
+<span class="add">    ProfileSettings = snapshot;</span>
+
+<span class="add">    if (notify) RaiseProfileSettingsChanged(snapshot);</span>
+<span class="add">}</span></code></pre>
+        </div>
+
+        <p>
+          Three details in that block earn their place. The failure path publishes the
+          <strong>new</strong> profile's defaults rather than keeping the previous values,
+          because keeping them would be the original defect with better manners: one
+          profile's level and editions displayed under another profile's name (PRD R5). The
+          flag is set before the publish so a throwing subscriber cannot leave it stale. And
+          the seven changed events are raised from the captured <code>snapshot</code> rather
+          than re-read per event, so a publish landing mid-fan-out cannot make one event carry
+          a value from a different profile.
+        </p>
+
+        <div class="note">
+          <p class="note-label">A cost the spec states plainly</p>
+          <p>
+            Failure granularity coarsens. Eight reads used to fail one at a time, nulling one
+            field each; one query means a read failure defaults all eight. In practice the
+            store fails per connection rather than per key, so the eight failed together
+            anyway, and per-key <em>parse</em> failures keep their per-key fallback. That last
+            part is pinned by
+            <code>An_unparsable_row_falls_back_to_its_default_and_leaves_its_neighbours_alone</code>.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 6 ===================== -->
+      <section id="ch6">
+        <div class="chapter-head">
+          <span class="chapter-num">06</span>
+          <div>
+            <h2>Writes follow the snapshot</h2>
+            <p class="kicker">
+              Once the cache has an identity, the write has a destination that does not
+              depend on what happened between the player reading a number and changing it.
+            </p>
+          </div>
+        </div>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/SettingsService.cs</span><span>after</span></div>
+          <pre><code><span class="add">private bool UpdateProfileSetting(</span>
+<span class="add">    Func&lt;ProfileSettingsSnapshot, ProfileSettingsSnapshot?&gt; update, string key, string value)</span>
+<span class="add">{</span>
+<span class="cmt">    // Captured before the derivation, and the only profile named below: the value the</span>
+<span class="cmt">    // player just corrected was read off THIS snapshot.</span>
+<span class="add">    var origin = ProfileSettings;</span>
+
+<span class="add">    var next = update(origin);</span>
+<span class="add">    if (next == null) return false;          </span><span class="cmt">// value already current: no write, no event</span>
+
+<span class="add">    var published = TryPublish(origin, next, update);</span>
+
+<span class="add">    SaveProfileSetting(origin.ProfileId, key, value);</span>
+<span class="add">    return published;</span>
+<span class="add">}</span></code></pre>
+        </div>
+
+        <p>
+          <code>TryPublish</code> is a compare-and-swap loop in the shape of
+          <code>QuestProgressService.Mutate</code>. If another publisher wins the swap, the
+          update is re-derived against whatever is now live and retried. If what is now live
+          names a <em>different profile</em>, re-application stops: grafting one profile's
+          edited value onto another profile's snapshot is the defect itself, in miniature.
+        </p>
+        <p>
+          The write below the loop runs either way, and that asymmetry is deliberate rather
+          than sloppy. A reload that overtook this edit read the store <em>before</em> this
+          write, so the row being written is still the row the player was editing; it will be
+          there when that profile is next loaded. Dropping the write as well would discard a
+          correction the player made on purpose. What is dropped is only the in-memory graft,
+          and with it the changed event, because announcing the new value would push it at
+          pages currently showing a different profile.
+        </p>
+
+        <h3>The guards that had to be preserved exactly</h3>
+        <p>
+          Each of the eight setters had its own "value differs" test, and two of them are
+          sharper than they look. Both survive verbatim in the new lambdas:
+        </p>
+        <ul>
+          <li>
+            <code>ScavRep</code> compares against the <strong>effective</strong> value
+            (<code>s.ScavRepOrDefault</code>), so setting an unstored profile's scav rep to
+            the default still writes nothing, exactly as before.
+          </li>
+          <li>
+            <code>HasEodEdition</code> compares against the <strong>nullable</strong> value
+            (<code>s.HasEodEdition == value</code>). An unstored edition is not the same as a
+            stored false, so the player's first "no, I do not own it" is still written and
+            announced. Comparing the <code>OrDefault</code> value here would have swallowed
+            it, and no test would have noticed.
+          </li>
+        </ul>
+
+        <h3>The reset hook joins its siblings</h3>
+        <p>
+          <code>HandleProfileReset</code> was the only reset hook that compared the reset
+          target against the ambient selection, and its own doc comment gave the honest
+          reason: the selection <em>was</em> the cache's identity, so there was nothing else
+          to compare with. With a snapshot there is.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/SettingsService.cs</span><span>before / after</span></div>
+          <pre><code><span class="del">if (!string.Equals(profileId, ProfileService.Instance.ActiveProfileId, StringComparison.Ordinal))</span>
+<span class="del">    return;</span>
+<span class="del">ReloadProfileSettingsAndNotify();</span>
+
+<span class="add">var current = ProfileSettings;</span>
+<span class="add">if (!string.Equals(profileId, current.ProfileId, StringComparison.Ordinal))</span>
+<span class="add">    return;</span>
+<span class="cmt">// The snapshot's own revision, not a fresh one: a reset announces no transition.</span>
+<span class="add">ReloadForProfile(profileId, current.Revision, notify: true);</span></code></pre>
+        </div>
+
+        <p>
+          Passing the snapshot's own revision is what makes an intervening transition win: if
+          one landed while the hook was reading, the guard inside discards this publish, which
+          is correct because that transition's reload also reads post-reset rows. The hook
+          stays synchronous, because <code>ProfileResetService.RunRefreshHooks</code> calls it
+          as a plain <code>Action</code> and expects the cache current when it returns.
+        </p>
+      </section>
+
+      <!-- ===================== LAB C ===================== -->
+      <section id="lab-c">
+        <div class="lab">
+          <div class="lab-head">
+            <span class="lab-tag">Lab C</span>
+            <h3>Where the edit lands</h3>
+            <p class="sub">
+              The snapshot holds PvP Season while the selection has already moved to PvE.
+              The player corrects the level to 51. Pinned by
+              <code>SettingsReloadRaceTests.An_edit_is_stored_in_the_profile_whose_value_was_on_screen</code>,
+              the test that fails on the pre-change code.
+            </p>
+          </div>
+          <div class="lab-body">
+            <div class="controls">
+              <span class="ctl-label">World</span>
+              <div class="seg" id="labCWorld">
+                <button type="button" data-c-world="before" data-tone="bad" aria-pressed="true">Before: ambient selection</button>
+                <button type="button" data-c-world="after" data-tone="good" aria-pressed="false">After: snapshot's profile</button>
+              </div>
+              <span class="ctl-label">The PvE reload publishes</span>
+              <div class="seg" id="labCWhen">
+                <button type="button" data-c-when="never" aria-pressed="true">not yet</button>
+                <button type="button" data-c-when="mid" aria-pressed="false">between derive and swap</button>
+              </div>
+            </div>
+
+            <div class="parts">
+              <div class="part" data-profile="season" id="labCPartSeason">
+                <p class="pk">PvP Season, stored level</p>
+                <p class="pv" id="labCSeasonVal">32</p>
+                <p class="pn" id="labCSeasonNote">the value that was on screen</p>
+              </div>
+              <div class="part" data-profile="pve" id="labCPartPve">
+                <p class="pk">PvE Zone, stored level</p>
+                <p class="pv" id="labCPveVal">22</p>
+                <p class="pn" id="labCPveNote">correct, and never displayed</p>
+              </div>
+            </div>
+
+            <div class="state-grid">
+              <div class="stat"><p class="k">Write target</p><p class="v" id="labCTarget">season</p></div>
+              <div class="stat"><p class="k">In-memory graft</p><p class="v" id="labCGraft">applied</p></div>
+              <div class="stat"><p class="k">Changed event</p><p class="v" id="labCEvent">raised</p></div>
+            </div>
+
+            <div class="verdict" id="labCVerdict"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 7 ===================== -->
+      <section id="ch7">
+        <div class="chapter-head">
+          <span class="chapter-num">07</span>
+          <div>
+            <h2>Healing, and what stayed as it was</h2>
+            <p class="kicker">
+              Two states can survive a guard, and one event keeps arriving on its own. The
+              rest of the surface is deliberately untouched.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          A guard that discards a losing reload can leave the snapshot naming a profile the
+          selection no longer shows, and a failed read leaves the player looking at level 15
+          and no editions. Both used to be curable only by switching profile by hand. EFT
+          re-logs the session mode every time the player opens the profile screen, which
+          arrives as a provenance-only re-confirmation, and that is the one event that keeps
+          coming without the player doing anything. So it is where the self-healing lives:
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/SettingsService.cs</span><span>after</span></div>
+          <pre><code><span class="add">if (!e.ProfileChanged &amp;&amp; !_lastLoadFailed &amp;&amp;</span>
+<span class="add">    string.Equals(ProfileSettings.ProfileId, profileId, StringComparison.Ordinal))</span>
+<span class="add">    return;</span>
+
+<span class="add">ReloadForProfile(profileId, e.Revision, notify: true);</span></code></pre>
+        </div>
+
+        <p>
+          All three conditions have to hold for the skip, which is why this is not a plain
+          <code>if (!e.ProfileChanged) return;</code>. The same shape guards
+          <code>QuestProgressService.OnActiveProfileChanged</code>. The skip is also the one
+          fan-out reduction the change makes on purpose: a re-confirmation that needs no
+          healing no longer re-reads identical rows to raise seven events and refresh three
+          pages. Three tests hold the truth table down:
+          <code>A_re_confirmation_that_needs_no_healing_does_not_reload</code>,
+          <code>A_re_confirmation_heals_a_snapshot_left_naming_another_profile</code>, and
+          <code>A_failed_load_publishes_the_new_profiles_defaults_and_heals_on_a_re_confirmation</code>.
+        </p>
+
+        <h3>What stayed as it was</h3>
+        <ul>
+          <li>
+            <strong>The public surface.</strong> Eight properties, seven changed events,
+            <code>HandleProfileReset</code>. No page or consumer is edited by this PR.
+          </li>
+          <li>
+            <strong>All seven events fire on every published reload</strong>, in the same
+            order, whether or not the value differs. Raising only real changes would make
+            pages refresh less often, which is a UI-timing change tangled into a correctness
+            fix, and <code>ProfileResetHooksTests</code> pins the full sequence as the reset
+            contract.
+          </li>
+          <li>
+            <strong>The reload stays synchronous.</strong> The three progress services reload
+            fire-and-forget; this one cannot, because its getters must answer coherently
+            mid-startup and the reset hook needs the cache current when it returns. The guard
+            does not depend on asynchrony: it exists because two handler threads interleave.
+          </li>
+          <li>
+            <strong>ClaimRevision is duplicated a fourth time, deliberately.</strong>
+            Extracting it would edit three already-guarded services for no behaviour change.
+            THR-1 in <code>docs/assessments/2026-08-code-health.md</code> is the cache
+            unification that would absorb it, and the spec records the direction under which
+            this copy becomes a pure move.
+          </li>
+          <li>
+            <strong>ShowLevelLockedQuests rides along unchanged.</strong> It is stored, cached
+            and saved, and read by nothing outside this service and the legacy JSON migration.
+            Deleting a stored user setting is a product decision, not a concurrency fix, so it
+            stays as the eighth snapshot field.
+          </li>
+          <li>
+            <strong>The selector's own display lag, and historical damage.</strong> The
+            highlight is painted from a queued callback and can briefly show the losing side
+            of two switches; no stored data is at stake and it stays out. A value an earlier
+            collision caused a player to overwrite cannot be told from a deliberate edit, so
+            nothing is reconstructed.
+          </li>
+        </ul>
+
+        <h3>The enforcement moved with the code</h3>
+        <p>
+          <code>ProfileAttributionSourceTests</code> fails on <em>leftover</em> allowlist
+          entries as well as on new selection reads, so deleting the code forced the list to
+          shrink in the same commit. What remains for this file is two entries: the
+          constructor's subscription, and one <code>CurrentTransition</code> read in
+          <code>LoadSettings</code>, which is the single load with no
+          <code>ActiveProfileChanged</code> to learn its profile from.
+          <code>ProfileResetHooksTests</code> now seeds a snapshot instead of eight private
+          fields, and seeds it for a synthetic profile id that the ambient selection can never
+          equal, so the hook's new identity source is the only thing those tests can be
+          passing on.
+        </p>
+      </section>
+
+      <!-- ===================== QUIZ ===================== -->
+      <section id="quiz">
+        <div class="chapter-head">
+          <span class="chapter-num">08</span>
+          <div>
+            <h2>Comprehension gate</h2>
+            <p class="kicker">
+              Reading is not understanding. Eight questions, all of which need the reasoning
+              rather than the vocabulary. The approval checklist below unlocks when all eight
+              are right; wrong answers explain themselves so you can go back and re-read.
+            </p>
+          </div>
+        </div>
+
+        <div class="quiz-intro">
+          <div class="quiz-score" id="quizScore">0/8</div>
+          <div>
+            <strong>This gate is a speed regulator, not a formality.</strong>
+            <p style="margin:4px 0 0;color:#c2c2c2;">
+              A reviewer who approves this diff without being able to answer questions 2 and
+              5 has not reviewed it: those two are where the change accepts a cost on purpose.
+              Answer, read the explanation either way, and revise as you go.
+            </p>
+          </div>
+        </div>
+
+        <div id="quizList"></div>
+
+        <div class="gate is-locked" id="gate">
+          <h3 id="gateTitle">Approval checklist: locked</h3>
+          <p id="gateBody">Answer all eight questions correctly to unlock the reviewer checklist.</p>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          Sources: <code>docs/decisions/fix-profile-settings-race.md</code> (R1, R2, R5) and
+          <code>.spec.md</code>, SPA-2 of
+          <code>docs/assessments/2026-08-seasonal-profile-amplified-issues.md</code>, and the
+          SPA-1 deferral recorded in
+          <code>docs/decisions/feature-complete-profile-reset.spec.md</code>. Part 1
+          (<code>2026-08-profile-data-attribution-code-guide.html</code>) covers the snapshot
+          shape this change reuses. The labs reimplement the decision logic faithfully but are
+          illustrations, not the shipped code; the shipped behaviour is pinned by
+          <code>SettingsReloadRaceTests</code> (the revision gate, atomic publication, write
+          attribution, the failure publish and its heal),
+          <code>ProfileResetHooksTests</code> (the reset hook's identity and the seven-event
+          order) and <code>ProfileAttributionSourceTests</code> (the selection reads that must
+          stay deleted). The true eight-read tear is not driven end to end by any test:
+          reproducing it would mean flipping the process-wide <code>ProfileService</code>
+          singleton mid-load, which the suite deliberately never does, so the race tests assert
+          at the guard seam, as the sibling suites do.
+        </p>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+
+    function bindSegment(root, attr, onPick) {
+      var buttons = Array.prototype.slice.call(root.querySelectorAll("[" + attr + "]"));
+      buttons.forEach(function (b) {
+        b.addEventListener("click", function () {
+          buttons.forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+          onPick(b.getAttribute(attr));
+        });
+      });
+    }
+
+    function say(node, tone, title, body) {
+      node.setAttribute("data-tone", tone);
+      node.innerHTML = "";
+      node.appendChild(el("b", null, title));
+      node.appendChild(document.createTextNode(body));
+    }
+
+    /* ================= Lab A: the eight-read window ================= */
+
+    // The eight profile-scoped keys, in the order LoadProfileSettings used to read them.
+    var A_KEYS = [
+      "app.playerLevel",
+      "app.scavRep",
+      "app.showLevelLockedQuests",
+      "app.dspDecodeCount",
+      "app.playerFaction",
+      "app.hasEodEdition",
+      "app.hasUnheardEdition",
+      "app.prestigeLevel"
+    ];
+
+    var A_VALUES = {
+      season: ["32", "5.5", "False", "3", "bear", "True", "True", "4"],
+      pve: ["22", "-2", "True", "1", "usec", "False", "False", "0"]
+    };
+
+    var A_LABEL = { season: "season", pve: "pve" };
+
+    var A = { world: "before", switchAt: 3 };
+
+    var aReads = document.getElementById("labAReads");
+    var aSwitch = document.getElementById("labASwitch");
+    var aSwitchRead = document.getElementById("labASwitchRead");
+    var aReadCount = document.getElementById("labAReadCount");
+    var aOwners = document.getElementById("labAOwners");
+    var aIdentity = document.getElementById("labAIdentity");
+    var aVerdict = document.getElementById("labAVerdict");
+
+    function aRow(index, label, key, owner, boundary) {
+      var row = el("div", "read-row" + (boundary ? " is-boundary" : ""));
+      row.setAttribute("data-owner", owner);
+      row.appendChild(el("span", "rn", label));
+      row.appendChild(el("span", "rk", key));
+      row.appendChild(el("span", "rv", A_VALUES[owner][index]));
+      row.appendChild(el("span", "ro", A_LABEL[owner]));
+      return row;
+    }
+
+    function aPaint() {
+      aReads.innerHTML = "";
+      aSwitchRead.textContent = A.switchAt === 0
+        ? "before read 1"
+        : "after read " + A.switchAt;
+
+      if (A.world === "before") {
+        // Eight independent reads, each re-resolving the selection at its own call time.
+        for (var i = 0; i < 8; i++) {
+          var owner = i < A.switchAt ? "season" : "pve";
+          aReads.appendChild(aRow(i, "read " + (i + 1), A_KEYS[i], owner, i + 1 === A.switchAt));
+        }
+        var torn = A.switchAt > 0 && A.switchAt < 8;
+        aReadCount.textContent = "8";
+        aOwners.textContent = torn ? "2" : "1";
+        aOwners.setAttribute("data-tone", torn ? "bad" : "good");
+        aIdentity.textContent = "(none)";
+        aIdentity.setAttribute("data-tone", "bad");
+
+        if (torn) {
+          say(aVerdict, "bad", "Torn across two profiles.",
+            "Keys 1 to " + A.switchAt + " hold PvP Season's values and the rest hold PvE Zone's. " +
+            "No field names which profile the cache holds, so nothing here can detect the mixture, " +
+            "and nothing clears it until the next switch. Meanwhile the quest and item lists are " +
+            "filtered by both profiles at once.");
+        } else {
+          say(aVerdict, "bad", "Coherent this time, by luck.",
+            "The switch missed every gap, so all eight values happen to come from one profile. " +
+            "That is the same code taking a different interleaving: move the slider one step and " +
+            "the cache tears. Nothing in the design made this outcome more likely than the other.");
+        }
+        return;
+      }
+
+      // One bulk query, for the profile the reload was started for. There is no gap between
+      // reads for the switch to land in, so the slider can only decide whether the switch
+      // preceded the single read.
+      var single = A.switchAt === 0 ? "pve" : "season";
+      for (var k = 0; k < 8; k++) {
+        aReads.appendChild(aRow(k, k === 0 ? "read 1" : "", A_KEYS[k], single, false));
+      }
+      aReadCount.textContent = "1";
+      aOwners.textContent = "1";
+      aOwners.setAttribute("data-tone", "good");
+      aIdentity.textContent = single;
+      aIdentity.setAttribute("data-tone", single);
+
+      say(aVerdict, "good", "One query, one profile, one publish.",
+        "All eight values come from the same SELECT and are published as a single reference, " +
+        "so the slider has nothing to land between: there is no interleaving of this reload that " +
+        "produces a mixture. The snapshot also names the profile it holds (" + single + "), which " +
+        "is what lets the reset hook and every write ask the cache who it belongs to. The other " +
+        "reload still exists and still wants to publish; which of them wins is Lab B.");
+    }
+
+    bindSegment(document.getElementById("labAWorld"), "data-a-world", function (v) {
+      A.world = v;
+      aPaint();
+    });
+
+    aSwitch.addEventListener("input", function () {
+      A.switchAt = parseInt(aSwitch.value, 10);
+      aPaint();
+    });
+
+    aPaint();
+
+    /* ================= Lab B: the revision gate ================= */
+
+    // Transition 1 goes to PvE at revision 4; transition 2 goes to PvP Season at revision 5.
+    // Both are announced (and therefore claim) in that order; only the FINISH order varies.
+    var B_STEPS = ["announce", "claim", "read", "check", "publish"];
+
+    var B = { world: "before", order: "older", step: 0 };
+
+    var bStepsA = document.getElementById("labBStepsA");
+    var bStepsB = document.getElementById("labBStepsB");
+    var bLatest = document.getElementById("labBLatest");
+    var bCache = document.getElementById("labBCache");
+    var bVerdict = document.getElementById("labBVerdict");
+    var bStepBtn = document.getElementById("labBStep");
+    var bResetBtn = document.getElementById("labBReset");
+
+    // The shipped gate, copied: a claim only raises the counter, and a publish requires an
+    // exact match against it.
+    function bClaim(latest, revision) { return revision <= latest ? latest : revision; }
+    function bMayPublish(latest, revision) { return latest === revision; }
+
+    // The five-step timeline, in the order the two lanes reach each step. Steps 0 and 1 are
+    // the two announcements (each claims immediately); step 2 is "both reads complete"; steps
+    // 3 and 4 are the two publish checks, in the chosen finish order.
+    function bModel() {
+      var latest = 0;
+      var lane = { pve: -1, season: -1 };
+      var cache = "(startup)";
+      var cacheOwner = null;
+      var killed = null;
+
+      if (B.step >= 1) { latest = bClaim(latest, 4); lane.pve = 1; }
+      if (B.step >= 2) { latest = bClaim(latest, 5); lane.season = 1; }
+      if (B.step >= 3) { lane.pve = 2; lane.season = 2; }
+
+      var first = B.order === "older" ? "season" : "pve";
+      var last = B.order === "older" ? "pve" : "season";
+      var rev = { pve: 4, season: 5 };
+      var name = { pve: "PvE Zone", season: "PvP Season" };
+
+      function resolve(who) {
+        lane[who] = 3;
+        var ok = B.world === "before" || bMayPublish(latest, rev[who]);
+        if (ok) {
+          lane[who] = 4;
+          cache = name[who];
+          cacheOwner = who;
+        } else {
+          lane[who] = -2;
+          killed = who;
+        }
+      }
+
+      if (B.step >= 4) resolve(first);
+      if (B.step >= 5) resolve(last);
+
+      return { latest: latest, lane: lane, cache: cache, cacheOwner: cacheOwner, killed: killed, last: last };
+    }
+
+    // state: -1 not started, 0..4 the step this lane has reached, -2 discarded at its check.
+    function bRenderLane(node, state) {
+      node.innerHTML = "";
+      B_STEPS.forEach(function (label, i) {
+        var cls = "step";
+        var text = label;
+        if (state === -2) {
+          // The lane ran all the way to its publish check; the check is what killed it, so
+          // every step before it stands and the publish itself is the red one.
+          if (i < 4) cls += " is-done";
+          else { cls += " is-kill"; text = "discarded"; }
+        } else if (state >= 0) {
+          if (i < state) cls += " is-done";
+          else if (i === state) cls += (state === 4 ? " is-win" : " is-now");
+        }
+        node.appendChild(el("span", cls, text));
+      });
+    }
+
+    function bPaint() {
+      var m = bModel();
+      bRenderLane(bStepsA, m.lane.pve);
+      bRenderLane(bStepsB, m.lane.season);
+
+      bLatest.textContent = B.world === "before" ? "(no counter)" : String(m.latest);
+      bLatest.setAttribute("data-tone", B.world === "before" ? "bad" : "good");
+      bCache.textContent = m.cache;
+      if (m.cacheOwner) bCache.setAttribute("data-tone", m.cacheOwner === "season" ? "season" : "pve");
+      else bCache.removeAttribute("data-tone");
+
+      bStepBtn.disabled = B.step >= 5;
+
+      if (B.step < 5) {
+        say(bVerdict, "", "Step " + B.step + " of 5.",
+          B.step === 0
+            ? "Nothing has been announced yet. The player is on PvP Season; a log event is about to claim PvE, and the player is about to click back."
+            : "Keep stepping. Both transitions claim in announcement order; only the finish order below changes.");
+        bVerdict.removeAttribute("data-tone");
+        return;
+      }
+
+      if (B.world === "before") {
+        if (m.last === "pve") {
+          say(bVerdict, "bad", "Inverted: the older transition published last.",
+            "Every value in the cache belongs to PvE Zone, and the selection says PvP Season. " +
+            "There is no mixture to spot, which is what makes this shape worse than the tear: " +
+            "the state is indistinguishable from a correct load, and it survives until the next " +
+            "switch. A bulk query would not have helped at all.");
+        } else {
+          say(bVerdict, "bad", "Correct this time, and only by ordering.",
+            "The newer transition happened to finish last, so the right values are loaded. " +
+            "Flip the finish order and the same code parks PvE's values under a Season selection. " +
+            "Nothing in the before world makes this outcome the likely one.");
+        }
+        return;
+      }
+
+      say(bVerdict, "good", "The later transition wins whatever the finish order.",
+        "_latestRevision is 5, so the PvE reload's post-read check (4 != 5) discards it without " +
+        "publishing and without raising any of the seven changed events, whether it finishes " +
+        "first or last. The cache holds PvP Season, which is what the selection says. " +
+        "Note that the discarded reload still did its store read: the guard is about publication, " +
+        "not about avoiding work.");
+    }
+
+    bindSegment(document.getElementById("labBWorld"), "data-b-world", function (v) {
+      B.world = v;
+      bPaint();
+    });
+    bindSegment(document.getElementById("labBOrder"), "data-b-order", function (v) {
+      B.order = v;
+      bPaint();
+    });
+    bStepBtn.addEventListener("click", function () {
+      if (B.step < 5) B.step++;
+      bPaint();
+    });
+    bResetBtn.addEventListener("click", function () {
+      B.step = 0;
+      bPaint();
+    });
+
+    bPaint();
+
+    /* ================= Lab C: where the edit lands ================= */
+
+    var C = { world: "before", when: "never" };
+
+    var cSeasonVal = document.getElementById("labCSeasonVal");
+    var cPveVal = document.getElementById("labCPveVal");
+    var cSeasonNote = document.getElementById("labCSeasonNote");
+    var cPveNote = document.getElementById("labCPveNote");
+    var cPartSeason = document.getElementById("labCPartSeason");
+    var cPartPve = document.getElementById("labCPartPve");
+    var cTarget = document.getElementById("labCTarget");
+    var cGraft = document.getElementById("labCGraft");
+    var cEvent = document.getElementById("labCEvent");
+    var cVerdict = document.getElementById("labCVerdict");
+
+    function cPaint() {
+      // The snapshot on screen belongs to PvP Season (level 32); the selection has already
+      // moved to PvE Zone, whose stored level is 22. The player corrects 32 to 51.
+      var target = C.world === "before" ? "pve" : "season";
+
+      // The graft only survives when no reload for another profile won the swap first; the
+      // shipped loop stops re-applying when the live snapshot names a different profile.
+      var graftDropped = C.world === "after" && C.when === "mid";
+
+      cSeasonVal.textContent = target === "season" ? "51" : "32";
+      cPveVal.textContent = target === "pve" ? "51" : "22";
+
+      cPartSeason.className = "part" + (target === "season" ? " is-ok" : "");
+      cPartPve.className = "part" + (target === "pve" ? " is-hit" : "");
+
+      cSeasonNote.textContent = target === "season"
+        ? "corrected: the value the player was actually looking at"
+        : "still 32, still wrong, and the player believes they fixed it";
+      cPveNote.textContent = target === "pve"
+        ? "overwritten with a correction derived from another profile's number"
+        : "untouched";
+
+      cTarget.textContent = target === "pve" ? "pve (selected)" : "season (snapshot)";
+      cTarget.setAttribute("data-tone", target === "pve" ? "bad" : "good");
+
+      cGraft.textContent = graftDropped ? "dropped" : "applied";
+      cGraft.setAttribute("data-tone", graftDropped ? "bad" : "good");
+
+      cEvent.textContent = graftDropped ? "suppressed" : "raised";
+      cEvent.removeAttribute("data-tone");
+
+      if (C.world === "before") {
+        say(cVerdict, "bad", "The correction landed in a profile the player never saw.",
+          "SaveProfileSetting resolved ProfileService.Instance.ActiveProfileId at write time, and " +
+          "in the collision window that is PvE, not the profile whose 32 was on screen. PvE's " +
+          "correct 22 is gone, Season's wrong 32 stays, and afterwards the write is " +
+          "indistinguishable from a deliberate edit. That is why the PRD declines to repair " +
+          "historical damage: there is nothing to key a repair on.");
+        return;
+      }
+
+      if (graftDropped) {
+        say(cVerdict, "good", "Graft dropped, write kept, and that asymmetry is the point.",
+          "The PvE reload won the compare-and-swap, so re-applying would graft a Season value onto " +
+          "a PvE snapshot, which is the defect in miniature; the loop stops and the changed event " +
+          "is suppressed so no page showing PvE is told the level is 51. The store write still " +
+          "runs against the snapshot's own profile, because that reload read the store BEFORE it, " +
+          "so the row is still the row the player was editing and it appears the next time Season " +
+          "loads. Dropping the write too would discard a correction made on purpose.");
+        return;
+      }
+
+      say(cVerdict, "good", "The edit is stored where it was read.",
+        "The write takes its profile from the snapshot the edit was derived from, so it lands in " +
+        "PvP Season no matter what the selection has become. Nothing on this path asks " +
+        "ProfileService which profile is selected, which is the rule " +
+        "ProfileAttributionSourceTests now enforces structurally for this file.");
+    }
+
+    bindSegment(document.getElementById("labCWorld"), "data-c-world", function (v) {
+      C.world = v;
+      cPaint();
+    });
+    bindSegment(document.getElementById("labCWhen"), "data-c-when", function (v) {
+      C.when = v;
+      cPaint();
+    });
+
+    cPaint();
+
+    /* ================= Comprehension gate ================= */
+
+    var QUESTIONS = [
+      {
+        q: "Replacing the eight per-key reads with one bulk query removes the tear. The spec rejected that as a complete fix anyway. What survives it?",
+        options: [
+          "The eight SQLite connections, which is a performance problem rather than a correctness one",
+          "The inversion: the event is raised outside the publisher's lock, so the handler for the OLDER transition can still finish last and publish a complete but stale set under the newer selection",
+          "Parse failures, which a single query cannot isolate per key",
+          "The reset hook, which reads the store on a different thread"
+        ],
+        answer: 1,
+        why: "A bulk query makes each reload internally coherent; it says nothing about WHICH reload publishes last. The revision is the part that answers that, which is why the fix is snapshot-plus-revision rather than just a better query. Lab B is exactly this: switch to the after world and the finish order stops mattering."
+      },
+      {
+        q: "The post-read guard is Interlocked.Read(ref _latestRevision) != revision. Why an equality test rather than a < or > comparison?",
+        options: [
+          "Interlocked.Read cannot be used inside a relational comparison",
+          "Revisions can wrap around, so ordering comparisons are unsafe",
+          "The load already claimed its own revision, so the counter can never be BELOW it; the only question left is whether anyone claimed a newer one, and == states that invariant directly at the site",
+          "It allows a reload with no revision (0) to publish unconditionally"
+        ],
+        answer: 2,
+        why: "ClaimRevision raises the counter to at least this load's number before the read, so afterwards latest >= revision always holds. Writing the guard as an equality says 'I am still the latest', which is the actual precondition for publishing, instead of a relational test that reads as if the other direction were reachable."
+      },
+      {
+        q: "When the bulk read throws, the reload publishes the NEW profile's defaults rather than keeping the values already in the cache. What is the argument for throwing away readable data?",
+        options: [
+          "Defaults are cheaper to compute than re-reading the previous snapshot",
+          "The previous values belong to a different profile, so keeping them is the original defect with better manners: one profile's level and editions displayed under another profile's name",
+          "WPF cannot bind to a snapshot whose values were loaded for a different revision",
+          "It guarantees the next reload will find the cache empty"
+        ],
+        answer: 1,
+        why: "The failure mode this change exists to remove is 'values shown under the wrong profile's name'. An unreadable store is no reason to reintroduce it. The three sibling services made the same call, and _lastLoadFailed makes the defaults publish recoverable on the next re-confirmation rather than permanent."
+      },
+      {
+        q: "An edit made in the collision window is stored in the profile whose value was on screen, even though the selection has already moved on. Why is that the right destination?",
+        options: [
+          "It is the profile with the older revision, and older revisions win writes",
+          "The number on screen is the evidence for what the player meant: they read it, judged it wrong, and corrected it. Saving into the newly selected profile would record a correction derived from one profile's numbers into another, which is the defect's own shape",
+          "Writing to the selected profile would violate the ProfileSettings primary key",
+          "The snapshot is immutable, so its ProfileId is the only value available at write time"
+        ],
+        answer: 1,
+        why: "The accepted cost is stated in the PRD: an edit made in that sliver of time can land in the profile the player just left. That is a far better failure than silently overwriting a correct value in a profile the player never looked at, and it is at least always a correction of the number that was actually displayed."
+      },
+      {
+        q: "TryPublish stops re-applying when the live snapshot names a different profile, yet UpdateProfileSetting still calls SaveProfileSetting afterwards. Why is keeping the write correct rather than a lost update?",
+        options: [
+          "The write is idempotent, so a duplicate is harmless",
+          "SaveProfileSetting swallows its exceptions, so a failed write costs nothing",
+          "The reload that overtook the edit read the store BEFORE this write, so the row being written is still the row the player was editing and it appears the next time that profile loads; only the in-memory graft, and with it the changed event, has to be dropped",
+          "The compare-and-swap already wrote the value to the store as part of the swap"
+        ],
+        answer: 2,
+        why: "The graft and the write have different reasons to exist. Grafting a Season value onto a PvE snapshot would be the defect in miniature, and announcing it would push the value at pages showing PvE. Persisting it costs nothing and preserves a correction the player made deliberately."
+      },
+      {
+        q: "HasEodEdition's guard compares s.HasEodEdition == value, where the snapshot field is bool? and value is bool. Why not compare the effective value, s.HasEodEditionOrDefault == value?",
+        options: [
+          "OrDefault members are internal and unreachable from the setter",
+          "Nullable comparison is faster because it skips the null coalescing",
+          "An unstored edition is not the same as a stored false: with the nullable comparison the player's first 'no, I do not own it' is still written and announced, and an OrDefault comparison would silently swallow it",
+          "The record's with-expression only accepts nullable operands"
+        ],
+        answer: 2,
+        why: "This is one of two per-property guards that had to survive verbatim, and it is the subtle one: null and false render identically but mean different things to the store. ScavRep is the mirror case, and it goes the OTHER way on purpose, comparing against the effective value so setting an unstored profile to the default still writes nothing."
+      },
+      {
+        q: "The reset hook used to compare its target against ProfileService.Instance.ActiveProfileId, and a doc comment defended that. Why was the defence sound then and wrong now?",
+        options: [
+          "It was never sound; the comment documented a known bug that this PR finally fixes",
+          "Every profile-scoped read resolved the selection at call time, so the selection genuinely WAS the cache's identity and there was nothing else to compare against; the snapshot gives the cache an identity of its own, which retires the premise along with the code that made it true",
+          "ProfileResetService used to run the hooks before the transaction committed, so only the selection was current",
+          "The hook was previously asynchronous, so a captured profile id could go stale mid-hook"
+        ],
+        answer: 1,
+        why: "That is exactly what feature-complete-profile-reset.spec.md deferred under SPA-1, with the open question 'what would give the cache an identity worth guarding?'. Nothing recorded there is reversed by this change; its premise is retired. The reset-hook tests now seed a synthetic profile id the ambient selection can never equal, so they cannot pass on the old comparison."
+      },
+      {
+        q: "The change makes provenance-only re-confirmations skip the reload, but only when three conditions all hold. Why is it not a plain if (!e.ProfileChanged) return;?",
+        options: [
+          "ProfileChanged is unreliable when two transitions are announced from different threads",
+          "The skip must also fire for real profile changes that name the loaded profile",
+          "A re-confirmation is the one event that keeps arriving without the player doing anything, so it is where self-healing belongs: it must still reload when the last load failed, or when the snapshot names a different profile than the event does, both of which are self-sustaining states a guard can leave behind",
+          "The revision must be claimed on every event, so the handler cannot return early"
+        ],
+        answer: 2,
+        why: "A discarded reload can leave the snapshot naming the wrong profile, and a failed read leaves the player on defaults. Neither heals on its own, and both used to need a manual profile switch. EFT re-logs the session mode on every profile-screen visit, which makes the re-confirmation the natural repair point. The same shape guards QuestProgressService."
+      }
+    ];
+
+    var quizList = document.getElementById("quizList");
+    var answered = new Array(QUESTIONS.length).fill(null);
+
+    QUESTIONS.forEach(function (item, qi) {
+      var card = el("div", "q");
+      card.id = "q" + (qi + 1);
+
+      var head = el("div", "q-head");
+      head.appendChild(el("span", "q-num", String(qi + 1).padStart(2, "0")));
+      head.appendChild(el("p", "q-text", item.q));
+      card.appendChild(head);
+
+      var why = el("div", "q-why");
+
+      var opts = el("div", "q-opts");
+      item.options.forEach(function (text, oi) {
+        var label = el("label", "opt");
+        var input = document.createElement("input");
+        input.type = "radio";
+        input.name = "q" + qi;
+        input.value = String(oi);
+        label.appendChild(input);
+        label.appendChild(el("span", null, text));
+        opts.appendChild(label);
+
+        input.addEventListener("change", function () {
+          answered[qi] = oi;
+          var correct = oi === item.answer;
+          card.setAttribute("data-state", correct ? "right" : "wrong");
+
+          Array.prototype.forEach.call(opts.children, function (child, ci) {
+            child.classList.remove("is-right", "is-wrong");
+            if (ci === item.answer && (correct || ci === oi)) child.classList.add("is-right");
+            if (ci === oi && !correct) child.classList.add("is-wrong");
+          });
+
+          why.innerHTML = "";
+          var p = el("p");
+          var word = el("span", "verdict-word", correct ? "Correct. " : "Not quite. ");
+          p.appendChild(word);
+          p.appendChild(document.createTextNode(item.why));
+          why.appendChild(p);
+
+          updateGate();
+        });
+      });
+      card.appendChild(opts);
+      card.appendChild(why);
+
+      quizList.appendChild(card);
+    });
+
+    var gate = document.getElementById("gate");
+    var gateTitle = document.getElementById("gateTitle");
+    var gateBody = document.getElementById("gateBody");
+    var quizScore = document.getElementById("quizScore");
+    var railLabel = document.getElementById("railGateLabel");
+    var railHint = document.getElementById("railGateHint");
+    var railBar = document.getElementById("railGateBar");
+
+    var CHECKLIST = [
+      "OnActiveProfileChanged carries e.Profile and e.Revision into the reload; no path re-resolves the selection except the allowlisted CurrentTransition read in LoadSettings.",
+      "ClaimRevision runs before the store read and the post-read check is an exact != against _latestRevision; a discarded load publishes nothing and raises nothing.",
+      "The failure path publishes ProfileSettingsSnapshot.Defaults for the NEW profile and sets _lastLoadFailed before the publish, not after.",
+      "Every write persists under origin.ProfileId, and TryPublish stops re-applying once the live snapshot names another profile.",
+      "The per-property guards survive verbatim: ScavRep against the effective value, the two editions against the nullable value.",
+      "HandleProfileReset compares against the snapshot's ProfileId, passes the snapshot's own revision, and stays synchronous.",
+      "All seven changed events still fire per published reload, in the pinned order, raised from the captured snapshot rather than re-read per event.",
+      "The ProfileAttributionSourceTests allowlist for SettingsService is down to two entries, and ProfileResetHooksTests seeds a snapshot rather than eight private fields."
+    ];
+
+    function updateGate() {
+      var correct = 0;
+      QUESTIONS.forEach(function (item, i) { if (answered[i] === item.answer) correct++; });
+
+      quizScore.textContent = correct + "/" + QUESTIONS.length;
+      railHint.textContent = correct + " of " + QUESTIONS.length + " correct";
+      railBar.style.width = (100 * correct / QUESTIONS.length) + "%";
+
+      if (correct === QUESTIONS.length) {
+        railLabel.textContent = "Gate open";
+        gate.className = "gate is-open";
+        gateTitle.textContent = "Approval checklist: unlocked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Eight of eight. You have the model; now check the diff against it. Walk these before approving:"));
+        var ul = el("ul");
+        CHECKLIST.forEach(function (line) { ul.appendChild(el("li", null, line)); });
+        gateBody.appendChild(ul);
+        var pre = el("pre", "approval",
+          "Reviewed the profile settings race fix on PR #43 against docs/2026-08-profile-settings-race-code-guide.html\n" +
+          "Comprehension gate: 8/8\n" +
+          "Checklist walked: revision claim and exact-match check, atomic snapshot publish, " +
+          "defaults-on-failure plus heal, snapshot-attributed writes, preserved per-property guards, " +
+          "reset hook identity, seven-event order, allowlist shrink");
+        gateBody.appendChild(pre);
+      } else {
+        railLabel.textContent = "Gate locked";
+        gate.className = "gate is-locked";
+        gateTitle.textContent = "Approval checklist: locked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Answer all eight questions correctly to unlock the reviewer checklist. " +
+          correct + " of " + QUESTIONS.length + " so far; wrong answers explain themselves, so re-read and revise."));
+      }
+    }
+
+    updateGate();
+  })();
+  </script>
+</body>
+</html>

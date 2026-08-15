@@ -58,6 +58,12 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
   포커스, 대상 프로필 이름 강조, 테마 브러시 통일)을 다룹니다. 키보드 상태
   머신과 포맷 슬롯 렌더러를 조작해 보는 인터랙티브 랩 2개와 퀴즈 게이트를
   포함합니다 (PR #41)
+- [2026-08-profile-settings-race-code-guide.html](2026-08-profile-settings-race-code-guide.html):
+  코드 가이드 6부. 프로필 설정 캐시가 전환 가드 없이 여덟 번의 개별 읽기로
+  채워지던 문제(SPA-2)와 스냅샷 기반 수정을 다룹니다. 여덟 번 읽기 사이로
+  전환이 끼어드는 순간, 리비전 게이트가 뒤늦은 리로드를 버리는 과정, 편집이
+  어느 프로필에 저장되는지를 조작해 보는 인터랙티브 랩 3개와 퀴즈 게이트를
+  포함합니다 (PR #43)
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
   마커 API 분석
 
