@@ -787,7 +787,7 @@
         </p>
         <ol>
           <li>the handler takes the event's own <code>Profile</code> and <code>Revision</code>, never a fresh lookup;</li>
-          <li><code>ClaimRevision</code> lifts the latest-known revision to this one;</li>
+          <li><code>RevisionGate.Claim</code> lifts the latest-known revision to this one;</li>
           <li>the store read happens off to the side, touching no cache;</li>
           <li>the revision is re-checked <em>after</em> the read;</li>
           <li>a stale result is discarded rather than published.</li>
@@ -943,13 +943,14 @@
 
         <div class="code">
           <div class="code-head"><span>TarkovHelper/Services/SettingsService.cs</span><span>after</span></div>
-          <pre><code><span class="add">private void ClaimRevision(long revision)</span>
+          <pre><code><span class="cmt">// RevisionGate.cs, shared by all four reloading services</span>
+<span class="add">internal static void Claim(ref long latest, long revision)</span>
 <span class="add">{</span>
 <span class="add">    while (true)</span>
 <span class="add">    {</span>
-<span class="add">        var current = Interlocked.Read(ref _latestRevision);</span>
+<span class="add">        var current = Interlocked.Read(ref latest);</span>
 <span class="add">        if (revision &lt;= current) return;            </span><span class="cmt">// an equal revision does NOT re-claim</span>
-<span class="add">        if (Interlocked.CompareExchange(ref _latestRevision, revision, current) == current) return;</span>
+<span class="add">        if (Interlocked.CompareExchange(ref latest, revision, current) == current) return;</span>
 <span class="add">    }</span>
 <span class="add">}</span>
 
@@ -1141,7 +1142,7 @@
           <div class="code-head"><span>TarkovHelper/Services/SettingsService.cs</span><span>after</span></div>
           <pre><code><span class="add">private void ReloadForProfile(string profileId, long revision, bool notify)</span>
 <span class="add">{</span>
-<span class="add">    ClaimRevision(revision);</span>
+<span class="add">    RevisionGate.Claim(ref _latestRevision, revision);</span>
 
 <span class="cmt">    // Null means the read failed, which is also what _lastLoadFailed records: one query</span>
 <span class="cmt">    // per reload, so there is no half-read state to represent.</span>
@@ -1343,8 +1344,8 @@
           <div>
             <h2>Healing, and what stayed as it was</h2>
             <p class="kicker">
-              Two states can survive a guard, and one event keeps arriving on its own. The
-              rest of the surface is deliberately untouched.
+              Two states can survive a guard, and one event repairs them when it happens to
+              arrive. The rest of the surface is deliberately untouched.
             </p>
           </div>
         </div>
@@ -1352,10 +1353,10 @@
         <p>
           A guard that discards a losing reload can leave the snapshot naming a profile the
           selection no longer shows, and a failed read leaves the player looking at level 15
-          and no editions. Both used to be curable only by switching profile by hand. EFT
-          re-logs the session mode every time the player opens the profile screen, which
-          arrives as a provenance-only re-confirmation, and that is the one event that keeps
-          coming without the player doing anything. So it is where the self-healing lives:
+          and no editions. Both used to be curable only by switching profile by hand. The one
+          event that can arrive without the player doing anything is a provenance-only
+          re-confirmation, raised when the same profile stops being a click and starts being
+          log evidence, or the other way round. So that is where the self-healing lives:
         </p>
 
         <div class="code">
@@ -1379,6 +1380,16 @@
           <code>A_failed_load_publishes_the_new_profiles_defaults_and_heals_on_a_re_confirmation</code>.
         </p>
 
+        <p>
+          How often does that healing event actually arrive?
+          <code>ProfileService.SetActiveProfile</code> early-returns on identical
+          (profile, provenance) evidence and raises nothing, so a re-confirmation arrives once
+          per provenance FLIP, not once per profile-screen visit. That cuts both ways: the
+          fan-out saved is modest, and the healing is not general. A load that fails during an
+          automatic switch has no further flip coming, so it sits on defaults until the player
+          picks a profile by hand.
+        </p>
+
         <h3>What stayed as it was</h3>
         <ul>
           <li>
@@ -1399,11 +1410,12 @@
             does not depend on asynchrony: it exists because two handler threads interleave.
           </li>
           <li>
-            <strong>ClaimRevision is duplicated a fourth time, deliberately.</strong>
-            Extracting it would edit three already-guarded services for no behaviour change.
-            THR-1 in <code>docs/assessments/2026-08-code-health.md</code> is the cache
-            unification that would absorb it, and the spec records the direction under which
-            this copy becomes a pure move.
+            <strong>The revision gate is shared, and only the gate.</strong>
+            <code>ClaimRevision</code> had reached four byte-identical copies; they are now
+            one <code>RevisionGate.Claim(ref long, long)</code>. THR-1 in
+            <code>docs/assessments/2026-08-code-health.md</code> is the wider cache
+            unification, which stays unstarted: the per-service reload flows keep their own
+            shapes, because their differences are real.
           </li>
           <li>
             <strong>ShowLevelLockedQuests rides along unchanged.</strong> It is stored, cached
@@ -1879,7 +1891,7 @@
           "It allows a reload with no revision (0) to publish unconditionally"
         ],
         answer: 2,
-        why: "ClaimRevision raises the counter to at least this load's number before the read, so afterwards latest >= revision always holds. Writing the guard as an equality says 'I am still the latest', which is the actual precondition for publishing, instead of a relational test that reads as if the other direction were reachable."
+        why: "RevisionGate.Claim raises the counter to at least this load's number before the read, so afterwards latest >= revision always holds. Writing the guard as an equality says 'I am still the latest', which is the actual precondition for publishing, instead of a relational test that reads as if the other direction were reachable."
       },
       {
         q: "When the bulk read throws, the reload publishes the NEW profile's defaults rather than keeping the values already in the cache. What is the argument for throwing away readable data?",
@@ -1890,7 +1902,7 @@
           "It guarantees the next reload will find the cache empty"
         ],
         answer: 1,
-        why: "The failure mode this change exists to remove is 'values shown under the wrong profile's name'. An unreadable store is no reason to reintroduce it. The three sibling services made the same call, and _lastLoadFailed makes the defaults publish recoverable on the next re-confirmation rather than permanent."
+        why: "The failure mode this change exists to remove is 'values shown under the wrong profile's name'. An unreadable store is no reason to reintroduce it. The three sibling services made the same call, and _lastLoadFailed makes the defaults publish repairable by a later re-confirmation rather than permanent by construction, though chapter 7 has the caveat on when one actually arrives."
       },
       {
         q: "An edit made in the collision window is stored in the profile whose value was on screen, even though the selection has already moved on. Why is that the right destination?",
@@ -1941,11 +1953,11 @@
         options: [
           "ProfileChanged is unreliable when two transitions are announced from different threads",
           "The skip must also fire for real profile changes that name the loaded profile",
-          "A re-confirmation is the one event that keeps arriving without the player doing anything, so it is where self-healing belongs: it must still reload when the last load failed, or when the snapshot names a different profile than the event does, both of which are self-sustaining states a guard can leave behind",
+          "A re-confirmation is the one event that can arrive without the player doing anything, so it is where self-healing belongs: it must still reload when the last load failed, or when the snapshot names a different profile than the event does, both of which are self-sustaining states a guard can leave behind",
           "The revision must be claimed on every event, so the handler cannot return early"
         ],
         answer: 2,
-        why: "A discarded reload can leave the snapshot naming the wrong profile, and a failed read leaves the player on defaults. Neither heals on its own, and both used to need a manual profile switch. EFT re-logs the session mode on every profile-screen visit, which makes the re-confirmation the natural repair point. The same shape guards QuestProgressService."
+        why: "A discarded reload can leave the snapshot naming the wrong profile, and a failed read leaves the player on defaults. Neither heals on its own, and both used to need a manual profile switch. A provenance-only re-confirmation is the only event that can arrive with no click behind it, which makes it the natural repair point. Note what it is not: ProfileService.SetActiveProfile drops identical (profile, provenance) evidence without raising anything, so one arrives per provenance flip rather than per profile-screen visit, and a load that fails during an automatic switch has no flip coming. The same shape guards QuestProgressService."
       }
     ];
 
@@ -2011,7 +2023,7 @@
 
     var CHECKLIST = [
       "OnActiveProfileChanged carries e.Profile and e.Revision into the reload; no path re-resolves the selection except the allowlisted CurrentTransition read in LoadSettings.",
-      "ClaimRevision runs before the store read and the post-read check is an exact != against _latestRevision; a discarded load publishes nothing and raises nothing.",
+      "RevisionGate.Claim runs before the store read and the post-read check is an exact != against _latestRevision; a discarded load publishes nothing and raises nothing.",
       "The failure path publishes ProfileSettingsSnapshot.Defaults for the NEW profile and sets _lastLoadFailed before the publish, not after.",
       "Every write persists under origin.ProfileId, and TryPublish stops re-applying once the live snapshot names another profile.",
       "The per-property guards survive verbatim: ScavRep against the effective value, the two editions against the nullable value.",

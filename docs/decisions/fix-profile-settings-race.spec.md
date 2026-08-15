@@ -35,9 +35,9 @@ touches `SettingsService` and the store method it needs; the future
 unification of the four caches is recorded under Technical Decisions but not
 started.
 
-**Extracting the shared revision gate.** `ClaimRevision` exists identically in
-three services and this change adds a fourth copy on purpose; see Technical
-Decisions.
+**Converting the four services to a shared reload framework (THR-1).** Only the
+revision gate itself is now shared, as `RevisionGate`; see Technical Decisions.
+The per-service reload flows keep their own shapes.
 
 **`MainWindow.OnActiveProfileChanged`.** The header repaint has no revision
 guard and can briefly render the losing transition. It holds no data, a
@@ -66,7 +66,7 @@ subscriber in either order.
 The event has five subscribers: `QuestProgressService`,
 `HideoutProgressService`, `ItemInventoryService`, `SettingsService`, and
 `MainWindow`. The first three share one guard shape: the handler passes the
-event's own `Profile` and `Revision` into the reload, `ClaimRevision` lifts
+event's own `Profile` and `Revision` into the reload, `RevisionGate.Claim` lifts
 the latest-known revision, the DB read happens off to the side, the revision
 is re-checked after the read, and a stale result is discarded instead of
 published. Publication is atomic per service: `QuestProgressService` swaps an
@@ -160,8 +160,8 @@ re-confirmation is skipped unless the snapshot needs healing: reload when
 `e.ProfileChanged` is true, when the last load failed, or when the snapshot's
 `ProfileId` differs from the event's profile.
 
-The reload itself: `ClaimRevision(e.Revision)` (a fourth copy of the CAS
-loop), one bulk read for `ProfileService.GetProfileId(e.Profile)`, then a
+The reload itself: `RevisionGate.Claim(ref _latestRevision, e.Revision)` (the
+shared CAS loop), one bulk read for `ProfileService.GetProfileId(e.Profile)`, then a
 re-check that the claimed revision is still the latest; a stale result is
 discarded without publishing or raising events. A current result is published
 by swapping the snapshot reference and then raising all seven changed events
@@ -291,21 +291,37 @@ UI-timing behavior change (pages refresh less often) tangled into a
 correctness fix, and `ProfileResetHooksTests` pins the full sequence as the
 reset contract. The one fan-out reduction this change does make is upstream
 and mirrors `QuestProgressService`: a provenance-only re-confirmation that
-needs no healing skips the reload entirely, so EFT's habit of re-logging the
-session mode on every profile-screen visit stops triggering seven events and
-three page refreshes for nothing.
+needs no healing skips the reload entirely, so it stops triggering a reload,
+seven events and three page refreshes for nothing.
 
-### The revision gate is duplicated a fourth time, deliberately
+The saving is small, and the guard is small to match.
+`ProfileService.SetActiveProfile` early-returns on identical
+(profile, provenance) evidence and raises nothing, so an `ActiveProfileChanged`
+with `ProfileChanged == false` arrives once per provenance FLIP (manual to
+auto-detected or back), not once per profile-screen visit. The same fact
+bounds the self-heal this guard leaves in place: a load that fails during an
+automatic switch has no further flip coming, so it stays on defaults until the
+player picks a profile by hand.
 
-`ClaimRevision` now exists in four services. Extracting the small shared type
-was declined here because this change's scope is `SettingsService` only;
-touching the three guarded services, even mechanically, widens review for no
-behavior change. The recorded direction for the THR-1 follow-up: keep the
-immutable snapshot as the shared state model, extract only the revision gate
-as a small common type, and do not build a generic reload framework over the
-per-service flows, whose differences (notify flags, half-failures, debounced
-saves) are real. Under that follow-up, this service's guard becomes a pure
-move.
+### The revision gate is extracted, and only the gate
+
+`ClaimRevision` had reached four byte-identical copies once this change added
+its own. They are now one `internal static` helper, `RevisionGate.Claim(ref
+long latest, long revision)`, called by `SettingsService`,
+`QuestProgressService`, `HideoutProgressService` and `ItemInventoryService`.
+The extraction was first declined as out of scope and then taken during review,
+on the grounds that the copy count would otherwise keep growing and the target
+shape was already settled here.
+
+The gate stays a static helper over a caller-owned `long` rather than a type
+owning the counter, because each service's post-read check reads
+`_latestRevision` directly through `Interlocked.Read`; hiding the field would
+push that half through an accessor for no added safety.
+
+This is the whole of the THR-1 direction that applies now: keep the immutable
+snapshot as the shared state model, share only the revision gate, and do not
+build a generic reload framework over the per-service flows, whose differences
+(notify flags, half-failures, debounced saves) are real.
 
 ### The dead setting stays in the snapshot
 
@@ -313,7 +329,9 @@ move.
 outside `SettingsService` and the legacy JSON migration. It rides along as
 the eighth snapshot field. Dropping it mid-fix would delete a stored user
 setting inside a concurrency change; the removal question is recorded in the
-sibling PRD's Non-Goals and stays separate.
+sibling PRD's Non-Goals and stays separate. It is now also tracked as
+https://github.com/josephjang/TarkovHelper/issues/45 and cross-referenced from
+the property itself, so the deferral is discoverable without reading this spec.
 
 ## Test Strategy
 

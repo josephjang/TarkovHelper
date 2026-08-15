@@ -1,9 +1,10 @@
 using System.Diagnostics;
 using System.IO;
-using Microsoft.Data.Sqlite;
+using System.Text.RegularExpressions;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
 using TarkovHelper.Services.Settings;
+using static TarkovHelper.Tests.SettingsServiceTestSupport;
 
 namespace TarkovHelper.Tests;
 
@@ -12,8 +13,9 @@ namespace TarkovHelper.Tests;
 /// (feature-complete-profile-reset.spec.md): each cache clears only when it holds the reset
 /// profile's data, the settings cache reloads only when the reset target is the profile its
 /// snapshot holds, the fence drops log events that are not after the watermark, hand entry is
-/// never fenced, pending debounced saves are discarded per profile, and the survivor list stays
-/// a subset of the profile-scoped keys.
+/// never fenced, pending debounced saves are discarded per profile, the survivor list stays a
+/// subset of the profile-scoped keys, and every profile-scoped key is carried by the settings
+/// snapshot.
 /// </summary>
 public sealed class ProfileResetHooksTests : IDisposable
 {
@@ -22,25 +24,14 @@ public sealed class ProfileResetHooksTests : IDisposable
     private static string IdOf(AppProfile profile) => ProfileService.GetProfileId(profile);
 
     /// <summary>
-    /// Temp home for the real-SQLite stores the settings hook needs (it reloads through the
-    /// store, so a fake would prove nothing about the reload). The store creates the directory
-    /// on its first write, so a test that never builds one leaves nothing behind.
+    /// Temp home for the real-SQLite stores the settings hook needs: it reloads through the
+    /// store, so a fake would prove nothing about the reload.
     /// </summary>
-    private readonly string _storeRoot = Path.Combine(
-        Path.GetTempPath(), "tarkovhelper-hooks-" + Guid.NewGuid().ToString("N"));
+    private readonly TempStoreRoot _stores = new("hooks");
 
-    public void Dispose()
-    {
-        if (!Directory.Exists(_storeRoot)) return;
+    public void Dispose() => _stores.Dispose();
 
-        SqliteConnection.ClearAllPools();
-        try { Directory.Delete(_storeRoot, recursive: true); }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-    }
-
-    private UserDataDbService NewStore()
-        => new(Path.Combine(_storeRoot, Guid.NewGuid().ToString("N") + ".db"));
+    private UserDataDbService NewStore() => _stores.NewStore();
 
     private static async Task WaitUntil(Func<bool> condition, string what)
     {
@@ -384,6 +375,71 @@ public sealed class ProfileResetHooksTests : IDisposable
         Assert.Equal(1, changed);
     }
 
+    // The legacy import writes item rows straight to the store, and this cache reloads only in
+    // its constructor and on a profile switch - so it kept rendering the pre-import quantities,
+    // and AdjustFirQuantity persists cached + delta ABSOLUTELY, which means one nudge of a
+    // spinner wrote the pre-import number back over the imported row.
+    //
+    // The reload that already existed cannot serve: ReloadForProfileAsync FLUSHES FIRST, and a
+    // pending entry holds exactly that pre-import quantity, so it would clobber the import before
+    // reading it back. This one does not flush; the importer flushes before it writes instead.
+    [Fact]
+    public async Task An_external_import_refreshes_the_cache_without_flushing_pre_import_quantities()
+    {
+        var store = NewStore();
+        var loaded = "loaded-" + Guid.NewGuid().ToString("N");
+
+        // What the player was looking at, with a debounced save still queued for it.
+        var inventory = new ItemInventoryData();
+        inventory.Items["salewa"] = new ItemInventory { ItemNormalizedName = "salewa", FirQuantity = 3 };
+        var pending = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["salewa"] = loaded,
+        };
+        var service = NewInventoryService(loaded, pending, inventory, store);
+
+        // The import, behind the service's back.
+        await store.SaveItemInventoryAsync("salewa", 11, 0, loaded);
+
+        var changed = 0;
+        service.InventoryChanged += (_, _) => changed++;
+
+        await service.ReloadAfterExternalWriteAsync(loaded);
+
+        // The cache answers the imported quantity...
+        Assert.Equal(11, service.GetFirQuantity("salewa"));
+        Assert.Equal(1, changed);
+        // ...and the imported row survived: nothing wrote the cached 3 back on the way past.
+        Assert.Equal(11, (await store.LoadItemInventoryAsync(loaded))["salewa"].FirQuantity);
+    }
+
+    // The same guard the three reset hooks carry: rows written for a profile this cache does not
+    // hold are none of its business, and reloading anyway would swap another profile's quantities
+    // in under the loaded profile's name.
+    [Fact]
+    public async Task An_external_import_into_another_profile_leaves_this_cache_alone()
+    {
+        var store = NewStore();
+        var loaded = "loaded-" + Guid.NewGuid().ToString("N");
+        var other = "other-" + Guid.NewGuid().ToString("N");
+
+        var inventory = new ItemInventoryData();
+        inventory.Items["salewa"] = new ItemInventory { ItemNormalizedName = "salewa", FirQuantity = 3 };
+        var service = NewInventoryService(loaded, new Dictionary<string, string>(), inventory, store);
+
+        // A row for the LOADED profile too, differing from the cache: any reload at all would be
+        // visible below, so "unchanged" cannot mean "the reload ran and found the same numbers".
+        await store.SaveItemInventoryAsync("salewa", 11, 0, loaded);
+
+        var changed = 0;
+        service.InventoryChanged += (_, _) => changed++;
+
+        await service.ReloadAfterExternalWriteAsync(other);
+
+        Assert.Equal(3, service.GetFirQuantity("salewa"));
+        Assert.Equal(0, changed);
+    }
+
     #endregion
 
     #region Hideout: the loaded-profile guard
@@ -524,50 +580,14 @@ public sealed class ProfileResetHooksTests : IDisposable
     private readonly string _otherProfileId = "other-" + Guid.NewGuid().ToString("N");
 
     /// <summary>
-    /// A SettingsService with no constructor run: the real one loads every setting and
-    /// subscribes to ProfileService. Only the store, the "already loaded" flag and the snapshot
-    /// are seeded, so the property getters answer from the cache this test controls rather than
-    /// re-entering LoadSettings and its migrations.
+    /// A SettingsService with no constructor run (see
+    /// <see cref="SettingsServiceTestSupport.NewService"/>), holding the values a completed reset
+    /// has just made stale under <see cref="_loadedProfileId"/>. The seed's revision 0 matches the
+    /// untouched <c>_latestRevision</c> it is built with, which is the state a reset hook
+    /// publishes against.
     /// </summary>
     private SettingsService NewSettingsService(UserDataDbService store)
-    {
-        var service = TestReflection.Uninitialized<SettingsService>();
-        TestReflection.SetPrivateField(service, "_userDataDb", store);
-        TestReflection.SetPrivateField(service, "_settingsLoaded", true);
-        TestReflection.SetPrivateField(service, "_profileSettings", StaleSnapshot(_loadedProfileId));
-        return service;
-    }
-
-    /// <summary>
-    /// The values a completed reset has just made stale, as one snapshot for
-    /// <paramref name="profileId"/>. Revision 0 matches the untouched <c>_latestRevision</c> of
-    /// an uninitialized service, which is the state a reset hook publishes against.
-    /// </summary>
-    private static ProfileSettingsSnapshot StaleSnapshot(string profileId) => new(
-        profileId,
-        Revision: 0,
-        PlayerLevel: 42,
-        ScavRep: 5.5,
-        ShowLevelLockedQuests: false,
-        DspDecodeCount: 3,
-        PlayerFaction: "bear",
-        HasEodEdition: true,
-        HasUnheardEdition: true,
-        PrestigeLevel: 4);
-
-    /// <summary>Records every profile-scoped changed event in the order it is raised.</summary>
-    private static List<(string Name, object? Value)> RecordSettingEvents(SettingsService service)
-    {
-        var events = new List<(string Name, object? Value)>();
-        service.PlayerLevelChanged += (_, v) => events.Add(("PlayerLevel", v));
-        service.ScavRepChanged += (_, v) => events.Add(("ScavRep", v));
-        service.DspDecodeCountChanged += (_, v) => events.Add(("DspDecodeCount", v));
-        service.PlayerFactionChanged += (_, v) => events.Add(("PlayerFaction", v));
-        service.HasEodEditionChanged += (_, v) => events.Add(("HasEodEdition", v));
-        service.HasUnheardEditionChanged += (_, v) => events.Add(("HasUnheardEdition", v));
-        service.PrestigeLevelChanged += (_, v) => events.Add(("PrestigeLevel", v));
-        return events;
-    }
+        => NewService(Seeded(_loadedProfileId), store: store);
 
     [Fact]
     public async Task The_settings_hook_reloads_the_cache_when_the_reset_target_is_the_loaded_profile()
@@ -578,7 +598,7 @@ public sealed class ProfileResetHooksTests : IDisposable
         await store.SetProfileSettingAsync(_loadedProfileId, "app.hasEodEdition", "True");
 
         var service = NewSettingsService(store);
-        var events = RecordSettingEvents(service);
+        var events = RecordEvents(service);
 
         service.HandleProfileReset(_loadedProfileId);
 
@@ -611,6 +631,77 @@ public sealed class ProfileResetHooksTests : IDisposable
         }, events);
     }
 
+    // A reset is not a transition, so the transition counter must not be able to veto it. It
+    // used to: the hook reloaded under the SNAPSHOT's revision, and any transition that had
+    // claimed a newer one without publishing yet made the reload discard its own publish. The
+    // reset transaction has already committed at this point, so the player would be left with a
+    // wiped profile and a settings panel still showing the level, karma and faction it wiped.
+    [Fact]
+    public async Task The_settings_hook_reloads_even_when_a_newer_transition_has_been_claimed()
+    {
+        var store = NewStore();
+        await store.SetProfileSettingAsync(_loadedProfileId, "app.hasEodEdition", "True");
+
+        var service = NewSettingsService(store);
+        // A transition announced but not yet published: its revision is claimed, the snapshot
+        // still carries revision 0.
+        TestReflection.SetPrivateField(service, "_latestRevision", 7L);
+        var events = RecordEvents(service);
+
+        service.HandleProfileReset(_loadedProfileId);
+
+        Assert.Equal(SettingsService.DefaultPlayerLevel, service.PlayerLevel);
+        Assert.Equal(SettingsService.DefaultScavRep, service.ScavRep);
+        Assert.Null(service.PlayerFaction);
+        Assert.True(service.HasEodEdition);
+        Assert.Equal(_loadedProfileId, service.ProfileSettings.ProfileId);
+        Assert.Equal(AllChangedEvents, events.Select(e => e.Name));
+
+        // The republished snapshot carries the seed's OWN revision forward, not the 7 the pending
+        // transition claimed. Snapshot.Revision is provenance - which transition these values were
+        // read for - and nothing gates on it, so "repairing" it by stamping _latestRevision here
+        // would make the field name a transition whose rows were never read.
+        Assert.Equal(0L, service.ProfileSettings.Revision);
+    }
+
+    // What DOES stop the hook publishing: the cache no longer holds the profile that was reset.
+    // Asserted in the window a check made outside the publish gate could not see, by suspending
+    // the hook one statement short of its swap and moving the cache while it waits.
+    [Fact]
+    public async Task The_settings_hook_publishes_nothing_when_a_transition_moved_the_cache_first()
+    {
+        var store = NewStore();
+        await store.SetProfileSettingAsync(IdOf(AppProfile.PveZone), "app.playerLevel", "7");
+        var service = NewSettingsService(store);
+        var events = RecordEvents(service);
+        var gate = PublishGate();
+
+        Task hook;
+        Monitor.Enter(gate);
+        try
+        {
+            hook = Task.Run(() => service.HandleProfileReset(_loadedProfileId));
+            Thread.Sleep(200);
+
+            Assert.False(hook.IsCompleted, "the settings reset hook published outside the gate");
+
+            // The cache moves to another profile while the hook waits. Its rows are that
+            // profile's business now, and this reset never touched them.
+            service.ReloadForProfile(AppProfile.PveZone, revision: 1);
+        }
+        finally
+        {
+            Monitor.Exit(gate);
+        }
+
+        await hook;
+
+        Assert.Equal(IdOf(AppProfile.PveZone), service.ProfileSettings.ProfileId);
+        Assert.Equal(7, service.PlayerLevel);
+        // Seven events, from the transition alone: the hook added none.
+        Assert.Equal(7, events.Count);
+    }
+
     [Fact]
     public async Task The_settings_hook_ignores_a_reset_of_a_profile_the_cache_does_not_hold()
     {
@@ -621,7 +712,7 @@ public sealed class ProfileResetHooksTests : IDisposable
         await store.SetProfileSettingAsync(_loadedProfileId, "app.playerLevel", "7");
 
         var service = NewSettingsService(store);
-        var events = RecordSettingEvents(service);
+        var events = RecordEvents(service);
 
         service.HandleProfileReset(_otherProfileId);
 
@@ -633,7 +724,7 @@ public sealed class ProfileResetHooksTests : IDisposable
 
     #endregion
 
-    #region Survivor classification
+    #region Profile key classification and coverage
 
     // Deletion is the default: a future profile key must be wiped unless someone deliberately
     // adds it to the survivor list, and the survivor list can only name keys that are actually
@@ -649,6 +740,230 @@ public sealed class ProfileResetHooksTests : IDisposable
         Assert.Equal(
             new[] { "app.hasEodEdition", "app.hasUnheardEdition" },
             SettingsService.ProfileKeysSurvivingReset);
+    }
+
+    // ProfileSpecificKeys and the snapshot's value fields are two hand-maintained lists of the
+    // same eight settings, and no compiler check connects them: the key array is read only by the
+    // one-time UserSettings migration, while the load parses each key by name into its own field.
+    // A field added without its key, or a key added without its parse, compiles and passes every
+    // other test - and the setting then silently resets to its default on every profile switch,
+    // because the load rebuilds the whole snapshot and leaves the unparsed field null. The two
+    // guards below are the connection: a bijection between the keys and the value fields, and a
+    // round trip proving each key really does reach the field it names.
+
+    /// <summary>
+    /// The snapshot's VALUE properties: every primary-constructor parameter except the two that
+    /// describe the snapshot itself rather than a setting. Taken from the constructor rather than
+    /// from a list written out here, so a field added to the record is picked up with no test
+    /// edit at all, which is what makes the guards below catch the omission they exist for.
+    /// </summary>
+    private static IReadOnlyList<System.Reflection.PropertyInfo> SnapshotValueProperties()
+    {
+        var ctor = Assert.Single(typeof(ProfileSettingsSnapshot).GetConstructors());
+        return ctor.GetParameters()
+            .Where(p => p.Name is not (nameof(ProfileSettingsSnapshot.ProfileId)
+                                       or nameof(ProfileSettingsSnapshot.Revision)))
+            .Select(p => SnapshotProperty(p.Name!))
+            .ToList();
+    }
+
+    private static System.Reflection.PropertyInfo SnapshotProperty(string name)
+    {
+        var property = typeof(ProfileSettingsSnapshot).GetProperty(name);
+        Assert.True(property != null, $"ProfileSettingsSnapshot has no property '{name}'");
+        return property!;
+    }
+
+    /// <summary>
+    /// The snapshot property a profile key fills, by the naming convention all eight follow:
+    /// "app." plus the property name with a lower-cased first letter. Derived rather than
+    /// tabulated so a new key needs no edit here, and asserted rather than assumed so a key that
+    /// breaks the convention fails loudly instead of dropping out of the coverage below.
+    /// </summary>
+    private static string SnapshotPropertyNameOf(string key)
+    {
+        Assert.StartsWith("app.", key);
+        var name = key["app.".Length..];
+        Assert.NotEqual(string.Empty, name);
+        return char.ToUpperInvariant(name[0]) + name[1..];
+    }
+
+    /// <summary>
+    /// A stored value for <paramref name="property"/> that parses to something non-null, chosen
+    /// by the field's type so a newly added field is covered without a table to update. Every
+    /// value is in range, so the load's clamps cannot turn one into a null.
+    /// </summary>
+    private static string NonNullRowFor(System.Reflection.PropertyInfo property)
+        => (Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType) switch
+        {
+            var t when t == typeof(int) => "3",
+            var t when t == typeof(double) => "-2.5",
+            var t when t == typeof(bool) => "False",
+            var t when t == typeof(string) => "bear",
+            var t => throw new Xunit.Sdk.XunitException(
+                $"ProfileSettingsSnapshot.{property.Name} is a {t.Name}, which this guard has no " +
+                "stored form for; add one so the key coverage keeps covering it"),
+        };
+
+    [Fact]
+    public void The_profile_specific_keys_and_the_snapshot_value_fields_are_one_to_one()
+    {
+        Assert.Equal(
+            SnapshotValueProperties().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal),
+            SettingsService.ProfileSpecificKeys
+                .Select(SnapshotPropertyNameOf)
+                .OrderBy(n => n, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Records that one event fired, whatever its <c>EventHandler&lt;T&gt;</c> payload type is.
+    /// The generic <see cref="Record{T}"/> is what lets a delegate be built for an event whose
+    /// payload the test does not name, which is the point: the events are discovered by
+    /// reflection so a NEW one is covered without editing this file.
+    /// </summary>
+    private sealed class EventFiredRecorder
+    {
+        private readonly string _name;
+        private readonly List<string> _fired;
+
+        internal EventFiredRecorder(string name, List<string> fired)
+        {
+            _name = name;
+            _fired = fired;
+        }
+
+        public void Record<T>(object? sender, T value) => _fired.Add(_name);
+    }
+
+    // The third hand-maintained list of the same settings, and the one no other guard reaches:
+    // RaiseProfileSettingsChanged announces each value with a line written out by hand. A setting
+    // added with a key, a record field, a parse, a setter and an event but WITHOUT its announce
+    // line passes every test above - and then silently fails to refresh the UI on every profile
+    // switch and every reset, which is the exact class of bug this whole change exists to remove.
+    // Derived from the record's own fields rather than from a list here, so the new setting is
+    // covered the moment it is declared.
+    [Fact]
+    public async Task Every_snapshot_value_that_has_a_changed_event_is_announced_by_a_published_reload()
+    {
+        var store = NewStore();
+        var target = IdOf(AppProfile.PveZone);
+        foreach (var key in SettingsService.ProfileSpecificKeys)
+        {
+            await store.SetProfileSettingAsync(
+                target, key, NonNullRowFor(SnapshotProperty(SnapshotPropertyNameOf(key))));
+        }
+
+        var service = NewSettingsService(store);
+        var fired = new List<string>();
+        var expected = new List<string>();
+
+        foreach (var property in SnapshotValueProperties())
+        {
+            // ShowLevelLockedQuests deliberately has none: the quest list re-reads it rather than
+            // being pushed at. A value with no event is simply not this guard's business.
+            var changed = typeof(SettingsService).GetEvent(property.Name + "Changed");
+            if (changed == null) continue;
+
+            expected.Add(changed.Name);
+            var payload = changed.EventHandlerType!.GetGenericArguments()[0];
+            var record = typeof(EventFiredRecorder)
+                .GetMethod(nameof(EventFiredRecorder.Record))!
+                .MakeGenericMethod(payload);
+            changed.AddEventHandler(
+                service,
+                Delegate.CreateDelegate(
+                    changed.EventHandlerType!, new EventFiredRecorder(changed.Name, fired), record));
+        }
+
+        // Guards the discovery: an empty expectation would make the comparison below vacuous.
+        Assert.True(expected.Count >= 7, $"only found {expected.Count} profile-scoped changed events");
+
+        service.ReloadForProfile(AppProfile.PveZone, revision: 1);
+
+        // The reload really published (the seeded snapshot names another profile entirely), so a
+        // missing event below is the fan-out's doing and not a skipped publish.
+        Assert.Equal(target, service.ProfileSettings.ProfileId);
+        Assert.Equal(
+            expected.OrderBy(name => name, StringComparer.Ordinal),
+            fired.OrderBy(name => name, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The contiguous <c>//</c> comment block immediately above the first line of
+    /// <paramref name="relativePath"/> containing <paramref name="anchor"/>.
+    /// </summary>
+    private static string CommentAbove(string relativePath, string anchor)
+    {
+        var lines = File.ReadAllLines(Path.Combine(
+            TestRepo.Root(), relativePath.Replace('/', Path.DirectorySeparatorChar)));
+
+        var index = Array.FindIndex(lines, line => line.Contains(anchor, StringComparison.Ordinal));
+        Assert.True(index >= 0, $"no line containing '{anchor}' was found in {relativePath}");
+
+        var block = new List<string>();
+        for (var i = index - 1; i >= 0 && lines[i].TrimStart().StartsWith("//", StringComparison.Ordinal); i--)
+        {
+            block.Insert(0, lines[i]);
+        }
+
+        Assert.True(block.Count > 0, $"'{anchor}' in {relativePath} has no comment block above it");
+        return string.Join("\n", block);
+    }
+
+    // The comment above the eight key constants exists to say why they are internal, by naming
+    // who reads them from outside. It named the wrong readers: it claimed ConfigMigrationService
+    // copies three of them BY VALUE against a test that pins the copies, and that
+    // ProfileSpecificKeys is what reaches the reset. None of the three is true - the importer
+    // references the constants, no such pin test exists, and the reset takes the sibling array.
+    // A comment about the code is load bearing only while it agrees with the code, so the facts
+    // and the sentence that states them are asserted together.
+    [Fact]
+    public void The_profile_key_constants_are_named_by_their_readers_rather_than_copied()
+    {
+        var importer = File.ReadAllText(Path.Combine(
+            TestRepo.Root(), "TarkovHelper", "Services", "ConfigMigrationService.cs"));
+        var resetService = File.ReadAllText(Path.Combine(
+            TestRepo.Root(), "TarkovHelper", "Services", "ProfileResetService.cs"));
+
+        // Referenced, never re-declared: a local copy is what silently drifts from the writer.
+        Assert.DoesNotMatch(new Regex(@"const\s+string\s+Key\w+"), importer);
+        Assert.True(
+            Regex.Matches(importer, @"SettingsService\.Key\w+").Select(m => m.Value).Distinct().Count() >= 5,
+            "the legacy import no longer names the settings keys by their constants");
+
+        // The reset's list is the survivor allowlist, not the full profile-key array.
+        Assert.Contains("SettingsService.ProfileKeysSurvivingReset", resetService);
+        Assert.DoesNotContain("SettingsService.ProfileSpecificKeys", resetService);
+
+        var comment = CommentAbove(
+            "TarkovHelper/Services/SettingsService.cs", "internal const string KeyPlayerLevel");
+        Assert.DoesNotContain("copies", comment);
+        Assert.Contains("ProfileKeysSurvivingReset", comment);
+    }
+
+    [Fact]
+    public async Task Every_profile_specific_key_is_parsed_back_into_its_snapshot_field()
+    {
+        var store = NewStore();
+        var target = IdOf(AppProfile.PveZone);
+        foreach (var key in SettingsService.ProfileSpecificKeys)
+        {
+            await store.SetProfileSettingAsync(
+                target, key, NonNullRowFor(SnapshotProperty(SnapshotPropertyNameOf(key))));
+        }
+
+        var service = NewSettingsService(store);
+        service.ReloadForProfile(AppProfile.PveZone, revision: 1);
+
+        // The reload really published (the seeded snapshot names another profile entirely), so a
+        // null below is the load's doing and not a skipped publish.
+        var snapshot = service.ProfileSettings;
+        Assert.Equal(target, snapshot.ProfileId);
+        Assert.All(SnapshotValueProperties(), property =>
+            Assert.True(
+                property.GetValue(snapshot) != null,
+                $"ProfileSettingsSnapshot.{property.Name} stayed null although its row was stored; " +
+                "the load parses no key into it"));
     }
 
     #endregion

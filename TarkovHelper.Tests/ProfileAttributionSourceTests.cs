@@ -108,6 +108,15 @@ public sealed class ProfileAttributionSourceTests
             new AllowedRead("LoadSettings", "var (profile, revision) = ProfileService.Instance.CurrentTransition;",
                 "Startup load: the one load with no ActiveProfileChanged to learn the profile from."),
         }),
+
+        // The legacy import. It carries writes for all four kinds of progress (quests, hideout,
+        // inventory and three of the profile-scoped settings), and every one of them belongs to
+        // the PvP partition by definition: the config it reads predates profiles entirely, so
+        // there is nothing else it could describe. That target is named by the static
+        // ProfileService.PvpProfileId, which is a constant and not a selection read, so this list
+        // is empty and must stay empty - an import that consulted the selection instead would
+        // silently file a returning player's whole legacy profile under PvE or the season.
+        ("TarkovHelper/Services/ConfigMigrationService.cs", Array.Empty<AllowedRead>()),
     };
 
     [Fact]

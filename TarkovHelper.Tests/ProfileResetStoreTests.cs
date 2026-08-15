@@ -17,24 +17,18 @@ public sealed class ProfileResetStoreTests : IDisposable
     private const string Season = "season";
     private const string Pve = "pve";
 
-    private readonly string _root = Path.Combine(
-        Path.GetTempPath(), "tarkovhelper-reset-" + Guid.NewGuid().ToString("N"));
+    private readonly TempStoreRoot _stores = new("reset");
 
-    public ProfileResetStoreTests()
-    {
-        Directory.CreateDirectory(_root);
-    }
+    public void Dispose() => _stores.Dispose();
 
-    public void Dispose()
-    {
-        SqliteConnection.ClearAllPools();
-        try { Directory.Delete(_root, recursive: true); }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-    }
+    private UserDataDbService NewStore() => _stores.NewStore();
 
-    private UserDataDbService NewStore()
-        => new(Path.Combine(_root, Guid.NewGuid().ToString("N") + ".db"));
+    /// <summary>
+    /// A database path with no store built around it yet, for the cases that have to write the
+    /// file themselves (a pre-upgrade schema) or hand it to more than one service at once.
+    /// </summary>
+    private string NewStorePath()
+        => Path.Combine(_stores.Root, Guid.NewGuid().ToString("N") + ".db");
 
     /// <summary>Seeds one profile's rows across every table a reset touches.</summary>
     private static async Task SeedProfileAsync(UserDataDbService store, string profileId)
@@ -241,7 +235,7 @@ public sealed class ProfileResetStoreTests : IDisposable
     [Fact]
     public async Task A_pre_upgrade_database_gains_the_owner_column_with_existing_rows_as_legacy()
     {
-        var dbPath = Path.Combine(_root, Guid.NewGuid().ToString("N") + ".db");
+        var dbPath = NewStorePath();
         await CreatePreUpgradeDatabaseAsync(dbPath);
 
         var store = new UserDataDbService(dbPath);
@@ -268,7 +262,7 @@ public sealed class ProfileResetStoreTests : IDisposable
     [Fact]
     public async Task Concurrent_initialization_of_a_pre_upgrade_database_migrates_once_without_error()
     {
-        var dbPath = Path.Combine(_root, Guid.NewGuid().ToString("N") + ".db");
+        var dbPath = NewStorePath();
 
         // A database from the previous release: every other table already current, only the raid
         // owner column missing. That is the shape that makes the race real - initialization has
@@ -336,7 +330,7 @@ public sealed class ProfileResetStoreTests : IDisposable
     [Fact]
     public async Task A_rollback_that_cannot_run_is_swallowed_so_the_original_failure_survives()
     {
-        var dbPath = Path.Combine(_root, Guid.NewGuid().ToString("N") + ".db");
+        var dbPath = NewStorePath();
         await using var connection = new SqliteConnection($"Data Source={dbPath}");
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();

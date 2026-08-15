@@ -1411,27 +1411,6 @@ public sealed class UserDataDbService : IQuestProgressStore
     }
 
     /// <summary>
-    /// 동기 버전: 프로필별 설정 값 조회 (초기화 시 사용)
-    /// </summary>
-    public string? GetProfileSetting(string profileId, string key)
-    {
-        // InitializeAsync is idempotent and has its own synchronized fast path, so there is no
-        // unsynchronized flag read out here.
-        InitializeAsync().GetAwaiter().GetResult();
-
-        var connectionString = $"Data Source={_databasePath};Mode=ReadOnly";
-        using var connection = new SqliteConnection(connectionString);
-        connection.Open();
-
-        var sql = "SELECT Value FROM ProfileSettings WHERE ProfileId = @profileId AND Key = @key";
-        using var cmd = new SqliteCommand(sql, connection);
-        cmd.Parameters.AddWithValue("@profileId", profileId);
-        cmd.Parameters.AddWithValue("@key", key);
-
-        return cmd.ExecuteScalar() as string;
-    }
-
-    /// <summary>
     /// 동기 버전: 프로필별 설정 값 저장 (초기화 시 사용)
     /// </summary>
     public void SetProfileSetting(string profileId, string key, string value)
@@ -1461,11 +1440,11 @@ public sealed class UserDataDbService : IQuestProgressStore
     /// 동기 버전: 한 프로필의 모든 설정을 한 번의 쿼리로 조회
     /// <para>
     /// One query and one connection, not one per key. <c>SettingsService</c> publishes its eight
-    /// profile-scoped values as a single immutable snapshot, and eight sequential
-    /// <see cref="GetProfileSetting"/> calls would leave a window between each pair wide enough
-    /// for a profile switch to land in, tearing the snapshot across two profiles. Synchronous
-    /// because its caller must have the values in hand when it returns: the property getters
-    /// answer from them mid-startup, and the reset hook runs as a plain <c>Action</c>.
+    /// profile-scoped values as a single immutable snapshot, and eight sequential single-key
+    /// reads would leave a window between each pair wide enough for a profile switch to land in,
+    /// tearing the snapshot across two profiles. Synchronous because its caller must have the
+    /// values in hand when it returns: the property getters answer from them mid-startup, and
+    /// the reset hook runs as a plain <c>Action</c>.
     /// See docs/decisions/fix-profile-settings-race.spec.md.
     /// </para>
     /// </summary>
@@ -1475,7 +1454,12 @@ public sealed class UserDataDbService : IQuestProgressStore
         // unsynchronized flag read out here.
         InitializeAsync().GetAwaiter().GetResult();
 
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Ordinal, which is the collation the storage itself matches under: ProfileSettings has
+        // no COLLATE NOCASE, so (ProfileId, Key) treats "app.playerLevel" and "app.PlayerLevel"
+        // as two legal rows and the per-key SELECT this replaced returned only the exact key.
+        // A case-insensitive dictionary would collapse the pair last-row-wins, letting row order
+        // decide the value and giving a hand-edited row an effect it never used to have.
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
 
         var connectionString = $"Data Source={_databasePath};Mode=ReadOnly";
         using var connection = new SqliteConnection(connectionString);

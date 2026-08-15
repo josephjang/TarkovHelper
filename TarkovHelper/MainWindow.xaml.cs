@@ -41,6 +41,11 @@ public partial class MainWindow : Window
     private bool _isLoading;
     private bool _isUpdatingProfileUI;
 
+    // Raised while the profile drawer's controls are being written FROM the settings service, so
+    // an assignment that wakes a handler cannot be mistaken for a player edit. See
+    // SuppressSettingsEcho for what that costs when it is missing.
+    private bool _isUpdatingSettingsUI;
+
     // 시작 로딩(_isLoading) 중 눌린 탭: 로딩이 끝나면 Window_Loaded가 재생한다
     private object? _pendingTabDuringLoad;
     private QuestListPage? _questListPage;
@@ -860,6 +865,46 @@ public partial class MainWindow : Window
 
     #endregion
 
+    #region Settings Echo Suppression
+
+    /// <summary>
+    /// Marks the profile drawer's controls as being written BY the settings service for the life
+    /// of the returned scope, so any handler those writes wake writes nothing back.
+    /// <para>
+    /// Assigning <c>CheckBox.IsChecked</c> raises Checked/Unchecked exactly as a click does, and
+    /// <see cref="ChkEdition_Changed"/> cannot tell the two apart by itself. Without this guard a
+    /// settings load that could not read the store published that profile's DEFAULTS, the
+    /// HasEodEditionChanged(false) that follows unchecked the box, and the echo wrote False over
+    /// the player's stored Edge of Darkness flag - permanently, and with no player action at all.
+    /// </para>
+    /// <para>
+    /// <c>_isLoading</c> is not this guard: it is raised only for the startup pass in
+    /// Window_Loaded, while these events also arrive long afterwards (profile switch, profile
+    /// reset, settings self-heal). Every Update*UI method below opens this scope, so a control
+    /// added to one of them is covered without anyone remembering to. The scope RESTORES the
+    /// previous value instead of clearing it, so a nested update cannot lower a guard its caller
+    /// raised.
+    /// </para>
+    /// </summary>
+    private SettingsEchoSuppression SuppressSettingsEcho() => new(this);
+
+    private readonly struct SettingsEchoSuppression : IDisposable
+    {
+        private readonly MainWindow _window;
+        private readonly bool _wasUpdating;
+
+        public SettingsEchoSuppression(MainWindow window)
+        {
+            _window = window;
+            _wasUpdating = window._isUpdatingSettingsUI;
+            window._isUpdatingSettingsUI = true;
+        }
+
+        public void Dispose() => _window._isUpdatingSettingsUI = _wasUpdating;
+    }
+
+    #endregion
+
     #region Player Level
 
     /// <summary>
@@ -867,6 +912,8 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdatePlayerLevelUI()
     {
+        using var echoGuard = SuppressSettingsEcho();
+
         var level = _settingsService.PlayerLevel;
         TxtPlayerLevel.Text = level.ToString();
         TxtProfileChipLevel.Text = $"{_loc.HeaderLevelShort} {level}";
@@ -893,17 +940,16 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handle player level change from settings service
+    /// Handle player level change from settings service.
+    /// <para>
+    /// Updates this window's own controls and nothing else. The quest list subscribes to the same
+    /// seven settings events itself and collapses the whole burst into ONE refresh; pushing a
+    /// refresh from here as well ran that full pass once per event, off-tab included.
+    /// </para>
     /// </summary>
     private void OnPlayerLevelChanged(object? sender, int newLevel)
     {
-        Dispatcher.Invoke(() =>
-        {
-            UpdatePlayerLevelUI();
-
-            // Refresh quest list if visible
-            _questListPage?.RefreshDisplay();
-        });
+        Dispatcher.Invoke(UpdatePlayerLevelUI);
     }
 
     /// <summary>
@@ -943,13 +989,21 @@ public partial class MainWindow : Window
         {
             // Clamp to valid range
             level = Math.Clamp(level, SettingsService.MinPlayerLevel, SettingsService.MaxPlayerLevel);
-            _settingsService.PlayerLevel = level;
+
+            // Only a value that DIFFERS from what the service reports is a player edit. This box
+            // can be losing focus over text the service itself wrote into it (a profile switch or
+            // a failed load repaints the drawer while the caret sits here), and the echo guard is
+            // already down by then, so equality is what tells the two apart.
+            if (level != _settingsService.PlayerLevel)
+            {
+                _settingsService.PlayerLevel = level;
+            }
         }
-        else
-        {
-            // Reset to current value if invalid
-            TxtPlayerLevel.Text = _settingsService.PlayerLevel.ToString();
-        }
+
+        // Always repaint from the service: unparsable text ("abc") must not be left in the box, and
+        // an out-of-range entry ("999") must show the clamped value that was actually applied - the
+        // setter raises no event when the clamp lands on the value already held.
+        UpdatePlayerLevelUI();
     }
 
     #endregion
@@ -961,6 +1015,8 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdateScavRepUI()
     {
+        using var echoGuard = SuppressSettingsEcho();
+
         var scavRep = _settingsService.ScavRep;
         TxtScavRep.Text = scavRep.ToString("0.0");
 
@@ -986,17 +1042,12 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handle Scav Rep change from settings service
+    /// Handle Scav Rep change from settings service. Window controls only; the quest list refreshes
+    /// itself once per burst (see <see cref="OnPlayerLevelChanged"/>).
     /// </summary>
     private void OnScavRepChanged(object? sender, double newScavRep)
     {
-        Dispatcher.Invoke(() =>
-        {
-            UpdateScavRepUI();
-
-            // Refresh quest list if visible
-            _questListPage?.RefreshDisplay();
-        });
+        Dispatcher.Invoke(UpdateScavRepUI);
     }
 
     /// <summary>
@@ -1057,13 +1108,18 @@ public partial class MainWindow : Window
         {
             // Clamp to valid range and round to 1 decimal place
             scavRep = Math.Round(Math.Clamp(scavRep, SettingsService.MinScavRep, SettingsService.MaxScavRep), 1);
-            _settingsService.ScavRep = scavRep;
+
+            // Same reasoning as the player level box: a value equal to the one the service reports
+            // is the service's own repaint coming back, not an edit. Half a step is the tolerance,
+            // since every real edit moves by at least one step.
+            if (Math.Abs(scavRep - _settingsService.ScavRep) >= SettingsService.ScavRepStep / 2)
+            {
+                _settingsService.ScavRep = scavRep;
+            }
         }
-        else
-        {
-            // Reset to current value if invalid
-            TxtScavRep.Text = _settingsService.ScavRep.ToString("0.0");
-        }
+
+        // Always repaint from the service, for the invalid and the clamped entry alike.
+        UpdateScavRepUI();
     }
 
     #endregion
@@ -1075,6 +1131,8 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdateDspDecodeUI()
     {
+        using var echoGuard = SuppressSettingsEcho();
+
         var dspCount = _settingsService.DspDecodeCount;
 
         // Reset all buttons to default style
@@ -1103,17 +1161,12 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handle DSP Decode Count change from settings service
+    /// Handle DSP Decode Count change from settings service. Window controls only; the quest list
+    /// refreshes itself once per burst (see <see cref="OnPlayerLevelChanged"/>).
     /// </summary>
     private void OnDspDecodeCountChanged(object? sender, int newCount)
     {
-        Dispatcher.Invoke(() =>
-        {
-            UpdateDspDecodeUI();
-
-            // Refresh quest list if visible
-            _questListPage?.RefreshDisplay();
-        });
+        Dispatcher.Invoke(UpdateDspDecodeUI);
     }
 
     #endregion
@@ -1121,20 +1174,25 @@ public partial class MainWindow : Window
     #region Edition Settings
 
     /// <summary>
-    /// Update Edition UI checkboxes
+    /// Update Edition UI checkboxes. Both assignments raise Checked/Unchecked, which is why the
+    /// echo guard is not optional here (see <see cref="SuppressSettingsEcho"/>).
     /// </summary>
     private void UpdateEditionUI()
     {
+        using var echoGuard = SuppressSettingsEcho();
+
         ChkEodEdition.IsChecked = _settingsService.HasEodEdition;
         ChkUnheardEdition.IsChecked = _settingsService.HasUnheardEdition;
     }
 
     /// <summary>
-    /// Handle edition checkbox change
+    /// Handle edition checkbox change. Writes back only for a real player toggle: an assignment
+    /// made by <see cref="UpdateEditionUI"/> raises this same event, and treating that echo as an
+    /// edit overwrote the stored flag with whatever the service had just published.
     /// </summary>
     private void ChkEdition_Changed(object sender, RoutedEventArgs e)
     {
-        if (_isLoading) return;
+        if (_isLoading || _isUpdatingSettingsUI) return;
 
         if (sender == ChkEodEdition)
         {
@@ -1147,17 +1205,12 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handle edition change from settings service
+    /// Handle edition change from settings service. Window controls only; the quest list refreshes
+    /// itself once per burst (see <see cref="OnPlayerLevelChanged"/>).
     /// </summary>
     private void OnEditionChanged(object? sender, bool value)
     {
-        Dispatcher.Invoke(() =>
-        {
-            UpdateEditionUI();
-
-            // Refresh quest list if visible
-            _questListPage?.RefreshDisplay();
-        });
+        Dispatcher.Invoke(UpdateEditionUI);
     }
 
     #endregion
@@ -1169,6 +1222,8 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdatePrestigeLevelUI()
     {
+        using var echoGuard = SuppressSettingsEcho();
+
         var prestigeLevel = _settingsService.PrestigeLevel;
         TxtPrestigeLevel.Text = prestigeLevel.ToString();
 
@@ -1194,17 +1249,12 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handle prestige level change from settings service
+    /// Handle prestige level change from settings service. Window controls only; the quest list
+    /// refreshes itself once per burst (see <see cref="OnPlayerLevelChanged"/>).
     /// </summary>
     private void OnPrestigeLevelChanged(object? sender, int newLevel)
     {
-        Dispatcher.Invoke(() =>
-        {
-            UpdatePrestigeLevelUI();
-
-            // Refresh quest list if visible
-            _questListPage?.RefreshDisplay();
-        });
+        Dispatcher.Invoke(UpdatePrestigeLevelUI);
     }
 
     #endregion

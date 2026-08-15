@@ -410,7 +410,7 @@ namespace TarkovHelper.Services
         /// </summary>
         private async Task<bool> LoadProgressFromDbAsync(string profileId, long revision)
         {
-            ClaimRevision(revision);
+            RevisionGate.Claim(ref _latestRevision, revision);
 
             HideoutProgress loaded;
             try
@@ -445,17 +445,6 @@ namespace TarkovHelper.Services
                 _loadedProfileId = profileId;
             }
             return true;
-        }
-
-        /// <summary>Raises <see cref="_latestRevision"/> to <paramref name="revision"/> if it is newer.</summary>
-        private void ClaimRevision(long revision)
-        {
-            while (true)
-            {
-                var current = Interlocked.Read(ref _latestRevision);
-                if (revision <= current) return;
-                if (Interlocked.CompareExchange(ref _latestRevision, revision, current) == current) return;
-            }
         }
 
         #endregion

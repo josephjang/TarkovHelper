@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using TarkovHelper.Models;
 using TarkovHelper.Services.Logging;
+using TarkovHelper.Services.Settings;
 
 namespace TarkovHelper.Services
 {
@@ -310,14 +311,24 @@ namespace TarkovHelper.Services
         /// <summary>
         /// Get quest status for a task
         /// </summary>
-        public QuestStatus GetStatus(TarkovTask task) => GetStatus(task, Snapshot);
+        public QuestStatus GetStatus(TarkovTask task)
+            => GetStatus(task, Snapshot, SettingsService.Instance.ProfileSettings);
 
         /// <summary>
-        /// Status against an explicitly captured snapshot. Every recursive step of the
-        /// prerequisite walk carries the same one, so a profile switch landing mid-walk cannot
-        /// produce a status derived half from one profile's rows and half from another's.
+        /// Status against two explicitly captured snapshots: the recorded progress and the
+        /// profile-scoped player settings the six requirement gates read. Every recursive step of
+        /// the prerequisite walk carries the same pair, so a profile switch landing mid-walk
+        /// cannot produce a status derived half from one profile and half from another.
+        /// <para>
+        /// The settings half matters as much as the progress half and used to be missing: the six
+        /// gates below each re-entered <c>SettingsService.Instance</c> for their own value, so a
+        /// publish between two of them mixed one profile's editions with another's level - the
+        /// tearing <see cref="ProfileSettingsSnapshot"/> exists to make unobservable, reappearing
+        /// in its largest consumer. See <c>QuestStatusSettingsSnapshotTests</c>.
+        /// </para>
         /// </summary>
-        private QuestStatus GetStatus(TarkovTask task, ProgressSnapshot snapshot)
+        internal QuestStatus GetStatus(
+            TarkovTask task, ProgressSnapshot snapshot, ProfileSettingsSnapshot settings)
         {
             var taskId = task.Ids?.FirstOrDefault();
             var taskKey = taskId ?? task.NormalizedName;
@@ -350,31 +361,31 @@ namespace TarkovHelper.Services
             try
             {
                 // Check edition requirements first (Unavailable takes precedence)
-                if (!IsEditionRequirementMet(task))
+                if (!IsEditionRequirementMet(task, settings))
                     return QuestStatus.Unavailable;
 
                 // Check prestige level requirement (also Unavailable)
-                if (!IsPrestigeLevelRequirementMet(task))
+                if (!IsPrestigeLevelRequirementMet(task, settings))
                     return QuestStatus.Unavailable;
 
                 // Check faction requirement (Unavailable if player chose different faction)
-                if (!IsFactionRequirementMet(task))
+                if (!IsFactionRequirementMet(task, settings))
                     return QuestStatus.Unavailable;
 
                 // Check DSP Decode Count requirement (Locked, not Unavailable)
-                if (!IsDspRequirementMet(task))
+                if (!IsDspRequirementMet(task, settings))
                     return QuestStatus.Locked;
 
                 // Check prerequisites
-                if (!ArePrerequisitesMet(task, snapshot))
+                if (!ArePrerequisitesMet(task, snapshot, settings))
                     return QuestStatus.Locked;
 
                 // Check level requirement
-                if (!IsLevelRequirementMet(task))
+                if (!IsLevelRequirementMet(task, settings))
                     return QuestStatus.LevelLocked;
 
                 // Check Scav Karma requirement
-                if (!IsScavKarmaRequirementMet(task))
+                if (!IsScavKarmaRequirementMet(task, settings))
                     return QuestStatus.LevelLocked;  // Use LevelLocked status for karma-locked quests too
 
                 return QuestStatus.Active;
@@ -393,25 +404,31 @@ namespace TarkovHelper.Services
         /// Check if player level meets quest requirement
         /// </summary>
         public bool IsLevelRequirementMet(TarkovTask task)
+            => IsLevelRequirementMet(task, SettingsService.Instance.ProfileSettings);
+
+        internal static bool IsLevelRequirementMet(TarkovTask task, ProfileSettingsSnapshot settings)
         {
             // If no level requirement, always met
             if (!task.RequiredLevel.HasValue || task.RequiredLevel.Value <= 0)
                 return true;
 
-            var playerLevel = SettingsService.Instance.PlayerLevel;
-            return playerLevel >= task.RequiredLevel.Value;
+            return settings.PlayerLevelOrDefault >= task.RequiredLevel.Value;
         }
 
         /// <summary>
         /// Check if Scav Karma (Fence reputation) meets quest requirement
         /// </summary>
         public bool IsScavKarmaRequirementMet(TarkovTask task)
+            => IsScavKarmaRequirementMet(task, SettingsService.Instance.ProfileSettings);
+
+        internal static bool IsScavKarmaRequirementMet(
+            TarkovTask task, ProfileSettingsSnapshot settings)
         {
             // If no karma requirement, always met
             if (!task.RequiredScavKarma.HasValue)
                 return true;
 
-            var playerScavRep = SettingsService.Instance.ScavRep;
+            var playerScavRep = settings.ScavRepOrDefault;
             var requiredKarma = task.RequiredScavKarma.Value;
 
             // Negative requirement means player karma must be <= that value (bad karma quests)
@@ -431,8 +448,11 @@ namespace TarkovHelper.Services
         /// Returns false if quest is unavailable due to edition restrictions
         /// </summary>
         public bool IsEditionRequirementMet(TarkovTask task)
+            => IsEditionRequirementMet(task, SettingsService.Instance.ProfileSettings);
+
+        internal static bool IsEditionRequirementMet(
+            TarkovTask task, ProfileSettingsSnapshot settings)
         {
-            var settings = SettingsService.Instance;
 
             // Check required edition (EOD and Unheard are independent)
             if (!string.IsNullOrEmpty(task.RequiredEdition))
@@ -442,13 +462,13 @@ namespace TarkovHelper.Services
                 // EOD edition requirement - only EOD checkbox matters
                 if (requiredEdition == "eod" || requiredEdition == "edge_of_darkness")
                 {
-                    if (!settings.HasEodEdition)
+                    if (!settings.HasEodEditionOrDefault)
                         return false;
                 }
                 // Unheard edition requirement - only Unheard checkbox matters
                 else if (requiredEdition == "unheard" || requiredEdition == "the_unheard")
                 {
-                    if (!settings.HasUnheardEdition)
+                    if (!settings.HasUnheardEditionOrDefault)
                         return false;
                 }
             }
@@ -461,13 +481,13 @@ namespace TarkovHelper.Services
                 // Excluded from EOD edition
                 if (excludedEdition == "eod" || excludedEdition == "edge_of_darkness")
                 {
-                    if (settings.HasEodEdition)
+                    if (settings.HasEodEditionOrDefault)
                         return false;
                 }
                 // Excluded from Unheard edition
                 else if (excludedEdition == "unheard" || excludedEdition == "the_unheard")
                 {
-                    if (settings.HasUnheardEdition)
+                    if (settings.HasUnheardEditionOrDefault)
                         return false;
                 }
             }
@@ -479,12 +499,16 @@ namespace TarkovHelper.Services
         /// Check if prestige level requirement is met for the quest
         /// </summary>
         public bool IsPrestigeLevelRequirementMet(TarkovTask task)
+            => IsPrestigeLevelRequirementMet(task, SettingsService.Instance.ProfileSettings);
+
+        internal static bool IsPrestigeLevelRequirementMet(
+            TarkovTask task, ProfileSettingsSnapshot settings)
         {
             // If no prestige level requirement, always met
             if (!task.RequiredPrestigeLevel.HasValue || task.RequiredPrestigeLevel.Value <= 0)
                 return true;
 
-            var playerPrestige = SettingsService.Instance.PrestigeLevel;
+            var playerPrestige = settings.PrestigeLevelOrDefault;
             return playerPrestige >= task.RequiredPrestigeLevel.Value;
         }
 
@@ -493,13 +517,18 @@ namespace TarkovHelper.Services
         /// Returns false if player chose a faction and quest is for the opposite faction
         /// </summary>
         public bool IsFactionRequirementMet(TarkovTask task)
+            => IsFactionRequirementMet(task, SettingsService.Instance.ProfileSettings);
+
+        internal static bool IsFactionRequirementMet(
+            TarkovTask task, ProfileSettingsSnapshot settings)
         {
             // If quest has no faction requirement, always available
             if (string.IsNullOrEmpty(task.Faction))
                 return true;
 
-            // Use SettingsService's existing faction check logic
-            return SettingsService.Instance.ShouldIncludeTask(task.Faction);
+            // The rule still belongs to SettingsService; only the faction it compares against
+            // comes from the captured snapshot now, instead of a fresh read of the live one.
+            return SettingsService.ShouldIncludeTask(task.Faction, settings.PlayerFaction);
         }
 
         /// <summary>
@@ -507,12 +536,15 @@ namespace TarkovHelper.Services
         /// Uses the RequiredDecodeCount field from the database.
         /// </summary>
         public bool IsDspRequirementMet(TarkovTask task)
+            => IsDspRequirementMet(task, SettingsService.Instance.ProfileSettings);
+
+        internal static bool IsDspRequirementMet(TarkovTask task, ProfileSettingsSnapshot settings)
         {
             // If no decode count requirement, always met
             if (!task.RequiredDecodeCount.HasValue)
                 return true;
 
-            var dspCount = SettingsService.Instance.DspDecodeCount;
+            var dspCount = settings.DspDecodeCountOrDefault;
 
             // RequiredDecodeCount specifies the exact DSP decode count needed
             return dspCount == task.RequiredDecodeCount.Value;
@@ -534,10 +566,15 @@ namespace TarkovHelper.Services
         /// Check if all prerequisites are met based on taskRequirements or legacy Previous field.
         /// Supports OR groups: GroupId = 0 means AND condition, GroupId > 0 means OR condition within the same group.
         /// </summary>
-        public bool ArePrerequisitesMet(TarkovTask task) => ArePrerequisitesMet(task, Snapshot);
+        public bool ArePrerequisitesMet(TarkovTask task)
+            => ArePrerequisitesMet(task, Snapshot, SettingsService.Instance.ProfileSettings);
 
-        /// <summary>Prerequisite check against an explicitly captured snapshot (see <see cref="GetStatus(TarkovTask, ProgressSnapshot)"/>).</summary>
-        private bool ArePrerequisitesMet(TarkovTask task, ProgressSnapshot snapshot)
+        /// <summary>
+        /// Prerequisite check against explicitly captured snapshots (see
+        /// <see cref="GetStatus(TarkovTask, ProgressSnapshot, ProfileSettingsSnapshot)"/>).
+        /// </summary>
+        private bool ArePrerequisitesMet(
+            TarkovTask task, ProgressSnapshot snapshot, ProfileSettingsSnapshot settings)
         {
             // Use taskRequirements if available (more accurate status conditions with OR group support)
             if (task.TaskRequirements != null && task.TaskRequirements.Count > 0)
@@ -558,7 +595,7 @@ namespace TarkovHelper.Services
                     if (reqTask == null)
                         continue;
 
-                    var reqStatus = GetStatus(reqTask, snapshot);
+                    var reqStatus = GetStatus(reqTask, snapshot, settings);
                     var satisfied = IsStatusSatisfied(reqStatus, req.Status);
                     if (!satisfied)
                         return false;
@@ -576,7 +613,7 @@ namespace TarkovHelper.Services
                         if (reqTask == null)
                             continue;
 
-                        var reqStatus = GetStatus(reqTask, snapshot);
+                        var reqStatus = GetStatus(reqTask, snapshot, settings);
                         var satisfied = IsStatusSatisfied(reqStatus, req.Status);
                         if (satisfied)
                         {
@@ -602,7 +639,7 @@ namespace TarkovHelper.Services
                 var prevTask = GetTask(prevName);
                 if (prevTask == null) continue;
 
-                var prevStatus = GetStatus(prevTask, snapshot);
+                var prevStatus = GetStatus(prevTask, snapshot, settings);
                 if (prevStatus != QuestStatus.Done)
                     return false;
             }
@@ -1695,13 +1732,15 @@ namespace TarkovHelper.Services
         {
             int locked = 0, active = 0, done = 0, failed = 0, levelLocked = 0, unavailable = 0;
 
-            // One snapshot for the whole tally: per-task captures would let a profile switch
-            // land mid-loop and produce counts that sum two different profiles.
+            // One progress snapshot AND one settings snapshot for the whole tally: per-task
+            // captures would let a profile switch land mid-loop and produce counts that sum two
+            // different profiles, on either side.
             var snapshot = Snapshot;
+            var settings = SettingsService.Instance.ProfileSettings;
 
             foreach (var task in _allTasks)
             {
-                var status = GetStatus(task, snapshot);
+                var status = GetStatus(task, snapshot, settings);
                 switch (status)
                 {
                     case QuestStatus.Locked: locked++; break;
@@ -1921,7 +1960,7 @@ namespace TarkovHelper.Services
         private async Task ReloadForProfileAsync(AppProfile profile, long revision, bool notify)
         {
             var profileId = ProfileService.GetProfileId(profile);
-            ClaimRevision(revision);
+            RevisionGate.Claim(ref _latestRevision, revision);
 
             // Each half gets its own catch. Publishing both together is a statement about
             // ATOMICITY (a reader must never see one profile's quests beside another's
@@ -1978,17 +2017,6 @@ namespace TarkovHelper.Services
             catch (Exception ex)
             {
                 _log.Error($"Publishing reloaded progress for {profileId} failed", ex);
-            }
-        }
-
-        /// <summary>Raises <see cref="_latestRevision"/> to <paramref name="revision"/> if it is newer.</summary>
-        private void ClaimRevision(long revision)
-        {
-            while (true)
-            {
-                var current = Interlocked.Read(ref _latestRevision);
-                if (revision <= current) return;
-                if (Interlocked.CompareExchange(ref _latestRevision, revision, current) == current) return;
             }
         }
 
