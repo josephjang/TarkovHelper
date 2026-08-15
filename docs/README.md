@@ -64,6 +64,12 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
   전환이 끼어드는 순간, 리비전 게이트가 뒤늦은 리로드를 버리는 과정, 편집이
   어느 프로필에 저장되는지를 조작해 보는 인터랙티브 랩 3개와 퀴즈 게이트를
   포함합니다 (PR #43)
+- [2026-08-profile-settings-race-deep-review-guide.html](2026-08-profile-settings-race-deep-review-guide.html):
+  코드 가이드 7부. 프로필 설정 경합 수정(6부)을 딥 리뷰가 다시 훑어 찾은 결함들과
+  수정을 다룹니다. 실패한 로드가 체크박스 에코를 타고 저장된 Edge of Darkness
+  플래그를 지우던 연쇄, 퍼블리시 게이트 밖에서 돌던 일곱 이벤트 팬아웃, 카운터
+  하나로는 설명할 수 없던 편집 구간, 손으로 고친 행을 그대로 받아들이던 대량
+  읽기를 조작해 보는 인터랙티브 랩 4개와 퀴즈 게이트를 포함합니다 (PR #46)
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
   마커 API 분석
 
