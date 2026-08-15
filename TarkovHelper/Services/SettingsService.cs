@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using TarkovHelper.Debug;
+using TarkovHelper.Models;
 using TarkovHelper.Services.Logging;
 using TarkovHelper.Services.Settings;
 
@@ -68,20 +69,52 @@ public class SettingsService
     private bool _settingsLoaded;
     private string? _detectionMethod;
 
-    // Cached values
+    // Cached global values (UserSettings table). Each of these is per install, so none of them
+    // needs a partition, a revision or a publish order; the profile-scoped values below do.
     private string? _logFolderPath;
     private bool? _logMonitoringEnabled;
-    private int? _playerLevel;
-    private double? _scavRep;
-    private bool? _showLevelLockedQuests;
     private bool? _hideWipeWarning;
     private int? _syncDaysRange;
     private double? _baseFontSize;
-    private int? _dspDecodeCount;
-    private string? _playerFaction;
-    private bool? _hasEodEdition;
-    private bool? _hasUnheardEdition;
-    private int? _prestigeLevel;
+
+    /// <summary>
+    /// The profile-scoped values (ProfileSettings table) and the profile they belong to, as one
+    /// immutable value that is only ever replaced whole. Never null once
+    /// <see cref="LoadSettings"/> has run, which every path into it guarantees; see
+    /// <see cref="ProfileSettings"/>.
+    /// </summary>
+    private ProfileSettingsSnapshot _profileSettings = null!;
+
+    /// <summary>
+    /// The highest transition revision a reload has been started for. A reload that finishes
+    /// after a newer one was requested discards its result instead of publishing the profile the
+    /// user has already switched away from.
+    /// </summary>
+    private long _latestRevision;
+
+    /// <summary>
+    /// True when the load that produced the current snapshot could not read the store and
+    /// published that profile's defaults in their place. It is what makes the defaults publish
+    /// recoverable: see <see cref="OnActiveProfileChanged"/>.
+    /// </summary>
+    private volatile bool _lastLoadFailed;
+
+    /// <summary>
+    /// The live profile-scoped snapshot. Reading it is what makes the lazy load unskippable: a
+    /// caller can only observe a snapshot that exists, so no consumer has to repeat the
+    /// "settings loaded yet?" question. Production publishes only through
+    /// <see cref="ReloadForProfile(string, long, bool)"/> and <see cref="UpdateProfileSetting"/>;
+    /// tests seed the field directly because <c>GetUninitializedObject</c> skips the constructor.
+    /// </summary>
+    internal ProfileSettingsSnapshot ProfileSettings
+    {
+        get
+        {
+            if (!_settingsLoaded) LoadSettings();
+            return Volatile.Read(ref _profileSettings);
+        }
+        set => Volatile.Write(ref _profileSettings, value);
+    }
 
     // Map cached values moved to MapSettings service
 
@@ -107,48 +140,167 @@ public class SettingsService
     /// </summary>
     private void OnActiveProfileChanged(object? sender, ProfileChangedEventArgs e)
     {
-        ReloadProfileSettingsAndNotify();
+        var profileId = ProfileService.GetProfileId(e.Profile);
+
+        // A provenance-only re-confirmation (EFT re-logs the session mode every time the player
+        // opens the profile screen) normally names the profile the snapshot already holds.
+        // Reloading it would re-read identical rows and re-raise seven events for nothing, so
+        // the usual answer is "do nothing".
+        //
+        // Two states make it worth reloading anyway, and they are why this is not a plain
+        // "if (!e.ProfileChanged) return":
+        //  - the last load failed, so the catch in ReloadForProfile published defaults and the
+        //    player is looking at level 15 and no editions;
+        //  - the snapshot names a different profile than this event does, which a reload that
+        //    lost its race can leave behind.
+        // Both used to be curable only by switching profile by hand. A re-confirmation is the
+        // one event that keeps arriving on its own, so it is where self-healing belongs. The
+        // same shape guards QuestProgressService.OnActiveProfileChanged.
+        if (!e.ProfileChanged && !_lastLoadFailed &&
+            string.Equals(ProfileSettings.ProfileId, profileId, StringComparison.Ordinal))
+            return;
+
+        ReloadForProfile(profileId, e.Revision, notify: true);
     }
 
     /// <summary>
     /// The in-memory consequence of a committed profile reset: when the reset target is the
-    /// active profile, the cached level, scav rep, faction, prestige, DSP count and editions
-    /// are stale (their rows were just deleted, editions excepted), so reload them and re-raise
-    /// the changed events exactly as a profile switch would. A reset of a profile that is not
-    /// active touches no cached value here, so nothing needs reloading. Called by
-    /// <see cref="ProfileResetService"/> strictly AFTER the store transaction commits.
+    /// profile whose values are cached, the cached level, scav rep, faction, prestige, DSP count
+    /// and editions are stale (their rows were just deleted, editions excepted), so reload them
+    /// and re-raise the changed events exactly as a profile switch would. A reset of any other
+    /// profile touches no cached value here, so nothing needs reloading. Called by
+    /// <see cref="ProfileResetService"/> strictly AFTER the store transaction commits, which is
+    /// why the reload below reads post-reset rows.
     /// <para>
-    /// This is the only reset hook that compares the target against the SELECTED profile instead
-    /// of against a captured loaded-profile field, and that is deliberate: every profile-scoped
-    /// read in this service goes through <see cref="GetProfileSetting"/>, which resolves the
-    /// selection at call time, so the selection IS the identity of the cached values and there is
-    /// no other identity to guard against. The read below is synchronous, on the thread that calls
-    /// the hook, before any reload. Giving the cache an identity of its own would mean carrying an
-    /// explicit profile id through the whole get/save pair, which is SPA-1 work; see the
-    /// "SettingsService profile ownership" note under Non-Goals in
-    /// docs/decisions/feature-complete-profile-reset.spec.md.
+    /// The comparison is against the SNAPSHOT's profile id, like the three sibling hooks compare
+    /// against their captured loaded-profile identity. It used to compare against the ambient
+    /// selection, because back then every profile-scoped read resolved the selection at call time
+    /// and the selection was therefore the only identity the cache had. That premise is what
+    /// docs/decisions/fix-profile-settings-race.spec.md removed.
+    /// </para>
+    /// <para>
+    /// Synchronous, and it must stay so: the hook runs as a plain <c>Action</c> from
+    /// <c>ProfileResetService.RunRefreshHooks</c>, whose contract is that the cache is current
+    /// when the hook returns.
     /// </para>
     /// </summary>
     public void HandleProfileReset(string profileId)
     {
-        if (!string.Equals(profileId, ProfileService.Instance.ActiveProfileId, StringComparison.Ordinal))
+        var current = ProfileSettings;
+        if (!string.Equals(profileId, current.ProfileId, StringComparison.Ordinal))
             return;
 
-        ReloadProfileSettingsAndNotify();
+        // The snapshot's own revision, not a fresh one: a reset announces no transition. If a
+        // transition landed while this hook was reading, the revision guard inside discards this
+        // publish and lets that transition win, which is correct because its own reload also
+        // reads post-reset rows.
+        ReloadForProfile(profileId, current.Revision, notify: true);
     }
 
-    /// <summary>Reloads the active profile's settings and re-raises every profile-scoped changed event.</summary>
-    private void ReloadProfileSettingsAndNotify()
-    {
-        LoadProfileSettings();
+    /// <summary>
+    /// Reloads <paramref name="profile"/>'s settings for the transition numbered
+    /// <paramref name="revision"/> and re-raises every profile-scoped changed event.
+    /// <para>
+    /// Internal rather than public because the only production caller is
+    /// <see cref="OnActiveProfileChanged"/>; the race tests drive it directly, the way
+    /// <c>ProfileReloadRaceTests</c> drives the sibling services' reloads.
+    /// </para>
+    /// </summary>
+    internal void ReloadForProfile(AppProfile profile, long revision)
+        => ReloadForProfile(ProfileService.GetProfileId(profile), revision, notify: true);
 
-        PlayerLevelChanged?.Invoke(this, PlayerLevel);
-        ScavRepChanged?.Invoke(this, ScavRep);
-        DspDecodeCountChanged?.Invoke(this, DspDecodeCount);
-        PlayerFactionChanged?.Invoke(this, PlayerFaction);
-        HasEodEditionChanged?.Invoke(this, HasEodEdition);
-        HasUnheardEditionChanged?.Invoke(this, HasUnheardEdition);
-        PrestigeLevelChanged?.Invoke(this, PrestigeLevel);
+    /// <summary>
+    /// The reload proper: read one profile's rows off to the side, then publish them as a single
+    /// snapshot only if no newer transition has been announced meanwhile.
+    /// <para>
+    /// An unreadable store publishes <paramref name="profileId"/>'s DEFAULTS and remembers the
+    /// failure, exactly as the three sibling services publish empty rows on failure: keeping the
+    /// previous values instead would show one profile's level and editions under another
+    /// profile's name, which is the very defect this guard exists to remove. The next
+    /// re-confirmation heals it through <see cref="_lastLoadFailed"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="notify">
+    /// False for the startup and lazy-load path only. That path runs inside a property read and,
+    /// on startup, with the dispatcher blocked; raising the seven events from there would reenter
+    /// pages that are still being built. Its callers redraw once they finish anyway, which is why
+    /// the pre-snapshot initial load never raised them either.
+    /// </param>
+    private void ReloadForProfile(string profileId, long revision, bool notify)
+    {
+        ClaimRevision(revision);
+
+        // Null means the read failed, which is also what _lastLoadFailed records: one query per
+        // reload, so there is no half-read state to represent.
+        Dictionary<string, string>? values = null;
+        try
+        {
+            values = _userDataDb.LoadProfileSettings(profileId);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to load profile settings for {profileId}: {ex.Message}");
+        }
+
+        if (Interlocked.Read(ref _latestRevision) != revision)
+        {
+            _log.Debug($"Discarding stale settings load for {profileId} (revision {revision})");
+            return;
+        }
+
+        // Set before the publish, so a throwing subscriber below cannot leave it stale.
+        _lastLoadFailed = values == null;
+
+        var snapshot = values == null
+            ? ProfileSettingsSnapshot.Defaults(profileId, revision)
+            : SnapshotOf(profileId, revision, values);
+        ProfileSettings = snapshot;
+
+        if (notify) RaiseProfileSettingsChanged(snapshot);
+    }
+
+    /// <summary>
+    /// Re-raises every profile-scoped changed event from one captured snapshot, in the order the
+    /// reset contract pins (<c>ProfileResetHooksTests</c>).
+    /// <para>
+    /// All seven fire on every published reload, whether or not the value differs. Raising only
+    /// actual changes would make pages refresh less often, which is a UI-timing change and not
+    /// this one's business. The snapshot is a parameter rather than re-read per event so a
+    /// publish landing mid-fan-out cannot make one event carry a value from another profile.
+    /// </para>
+    /// </summary>
+    private void RaiseProfileSettingsChanged(ProfileSettingsSnapshot snapshot)
+    {
+        PlayerLevelChanged?.Invoke(this, snapshot.PlayerLevelOrDefault);
+        ScavRepChanged?.Invoke(this, snapshot.ScavRepOrDefault);
+        DspDecodeCountChanged?.Invoke(this, snapshot.DspDecodeCountOrDefault);
+        PlayerFactionChanged?.Invoke(this, snapshot.PlayerFaction);
+        HasEodEditionChanged?.Invoke(this, snapshot.HasEodEditionOrDefault);
+        HasUnheardEditionChanged?.Invoke(this, snapshot.HasUnheardEditionOrDefault);
+        PrestigeLevelChanged?.Invoke(this, snapshot.PrestigeLevelOrDefault);
+    }
+
+    /// <summary>
+    /// Raises <see cref="_latestRevision"/> to <paramref name="revision"/> if it is newer.
+    /// <para>
+    /// The fourth copy of this loop in the solution (QuestProgressService, HideoutProgressService
+    /// and ItemInventoryService carry the others), and deliberately so: extracting the shared gate
+    /// would edit three already-guarded services for no behaviour change. The cache unification
+    /// that would absorb it is THR-1 in docs/assessments/2026-08-code-health.md, and
+    /// docs/decisions/fix-profile-settings-race.spec.md records the direction under which this
+    /// copy becomes a pure move: keep the immutable snapshot as the shared state model and
+    /// extract only this gate, rather than building a reload framework over per-service flows
+    /// whose differences are real.
+    /// </para>
+    /// </summary>
+    private void ClaimRevision(long revision)
+    {
+        while (true)
+        {
+            var current = Interlocked.Read(ref _latestRevision);
+            if (revision <= current) return;
+            if (Interlocked.CompareExchange(ref _latestRevision, revision, current) == current) return;
+        }
     }
 
     /// <summary>
@@ -192,18 +344,14 @@ public class SettingsService
     /// </summary>
     public int PlayerLevel
     {
-        get
-        {
-            if (!_settingsLoaded) LoadSettings();
-            return _playerLevel ?? DefaultPlayerLevel;
-        }
+        get => ProfileSettings.PlayerLevelOrDefault;
         set
         {
             var clampedValue = Math.Clamp(value, MinPlayerLevel, MaxPlayerLevel);
-            if (_playerLevel != clampedValue)
+            if (UpdateProfileSetting(
+                    s => s.PlayerLevel == clampedValue ? null : s with { PlayerLevel = clampedValue },
+                    KeyPlayerLevel, clampedValue.ToString()))
             {
-                _playerLevel = clampedValue;
-                SaveProfileSetting(KeyPlayerLevel, clampedValue.ToString());
                 PlayerLevelChanged?.Invoke(this, clampedValue);
             }
         }
@@ -214,16 +362,12 @@ public class SettingsService
     /// </summary>
     public bool ShowLevelLockedQuests
     {
-        get
-        {
-            if (!_settingsLoaded) LoadSettings();
-            return _showLevelLockedQuests ?? true;
-        }
-        set
-        {
-            _showLevelLockedQuests = value;
-            SaveProfileSetting(KeyShowLevelLockedQuests, value.ToString());
-        }
+        get => ProfileSettings.ShowLevelLockedQuestsOrDefault;
+        // No "value differs" guard, unlike the seven properties around it: this one has never
+        // had one, and it raises no changed event, so an unconditional write is the whole of
+        // its observable behaviour.
+        set => UpdateProfileSetting(
+            s => s with { ShowLevelLockedQuests = value }, KeyShowLevelLockedQuests, value.ToString());
     }
 
     /// <summary>
@@ -231,18 +375,18 @@ public class SettingsService
     /// </summary>
     public double ScavRep
     {
-        get
-        {
-            if (!_settingsLoaded) LoadSettings();
-            return _scavRep ?? DefaultScavRep;
-        }
+        get => ProfileSettings.ScavRepOrDefault;
         set
         {
             var clampedValue = Math.Round(Math.Clamp(value, MinScavRep, MaxScavRep), 1);
-            if (Math.Abs((_scavRep ?? DefaultScavRep) - clampedValue) > 0.01)
+            // Compared against the EFFECTIVE value, so setting an unstored profile's scav rep to
+            // the default writes nothing, as it always has.
+            if (UpdateProfileSetting(
+                    s => Math.Abs(s.ScavRepOrDefault - clampedValue) > 0.01
+                        ? s with { ScavRep = clampedValue }
+                        : null,
+                    KeyScavRep, clampedValue.ToString()))
             {
-                _scavRep = clampedValue;
-                SaveProfileSetting(KeyScavRep, clampedValue.ToString());
                 ScavRepChanged?.Invoke(this, clampedValue);
             }
         }
@@ -378,18 +522,14 @@ public class SettingsService
     /// </summary>
     public int DspDecodeCount
     {
-        get
-        {
-            if (!_settingsLoaded) LoadSettings();
-            return _dspDecodeCount ?? DefaultDspDecodeCount;
-        }
+        get => ProfileSettings.DspDecodeCountOrDefault;
         set
         {
             var clampedValue = Math.Clamp(value, MinDspDecodeCount, MaxDspDecodeCount);
-            if (_dspDecodeCount != clampedValue)
+            if (UpdateProfileSetting(
+                    s => s.DspDecodeCount == clampedValue ? null : s with { DspDecodeCount = clampedValue },
+                    KeyDspDecodeCount, clampedValue.ToString()))
             {
-                _dspDecodeCount = clampedValue;
-                SaveProfileSetting(KeyDspDecodeCount, clampedValue.ToString());
                 DspDecodeCountChanged?.Invoke(this, clampedValue);
             }
         }
@@ -400,18 +540,14 @@ public class SettingsService
     /// </summary>
     public string? PlayerFaction
     {
-        get
-        {
-            if (!_settingsLoaded) LoadSettings();
-            return _playerFaction;
-        }
+        get => ProfileSettings.PlayerFaction;
         set
         {
             var normalizedValue = string.IsNullOrEmpty(value) ? null : value.ToLowerInvariant();
-            if (_playerFaction != normalizedValue)
+            if (UpdateProfileSetting(
+                    s => s.PlayerFaction == normalizedValue ? null : s with { PlayerFaction = normalizedValue },
+                    KeyPlayerFaction, normalizedValue ?? ""))
             {
-                _playerFaction = normalizedValue;
-                SaveProfileSetting(KeyPlayerFaction, normalizedValue ?? "");
                 PlayerFactionChanged?.Invoke(this, normalizedValue);
             }
         }
@@ -437,17 +573,16 @@ public class SettingsService
     /// </summary>
     public bool HasEodEdition
     {
-        get
-        {
-            if (!_settingsLoaded) LoadSettings();
-            return _hasEodEdition ?? false;
-        }
+        get => ProfileSettings.HasEodEditionOrDefault;
         set
         {
-            if (_hasEodEdition != value)
+            // Compared against the NULLABLE value, as before: an unstored edition is not the
+            // same as a stored false, so the first "no, I don't own it" is still written and
+            // announced rather than mistaken for a no-op.
+            if (UpdateProfileSetting(
+                    s => s.HasEodEdition == value ? null : s with { HasEodEdition = value },
+                    KeyHasEodEdition, value.ToString()))
             {
-                _hasEodEdition = value;
-                SaveProfileSetting(KeyHasEodEdition, value.ToString());
                 HasEodEditionChanged?.Invoke(this, value);
             }
         }
@@ -458,17 +593,13 @@ public class SettingsService
     /// </summary>
     public bool HasUnheardEdition
     {
-        get
-        {
-            if (!_settingsLoaded) LoadSettings();
-            return _hasUnheardEdition ?? false;
-        }
+        get => ProfileSettings.HasUnheardEditionOrDefault;
         set
         {
-            if (_hasUnheardEdition != value)
+            if (UpdateProfileSetting(
+                    s => s.HasUnheardEdition == value ? null : s with { HasUnheardEdition = value },
+                    KeyHasUnheardEdition, value.ToString()))
             {
-                _hasUnheardEdition = value;
-                SaveProfileSetting(KeyHasUnheardEdition, value.ToString());
                 HasUnheardEditionChanged?.Invoke(this, value);
             }
         }
@@ -479,18 +610,14 @@ public class SettingsService
     /// </summary>
     public int PrestigeLevel
     {
-        get
-        {
-            if (!_settingsLoaded) LoadSettings();
-            return _prestigeLevel ?? DefaultPrestigeLevel;
-        }
+        get => ProfileSettings.PrestigeLevelOrDefault;
         set
         {
             var clampedValue = Math.Clamp(value, MinPrestigeLevel, MaxPrestigeLevel);
-            if (_prestigeLevel != clampedValue)
+            if (UpdateProfileSetting(
+                    s => s.PrestigeLevel == clampedValue ? null : s with { PrestigeLevel = clampedValue },
+                    KeyPrestigeLevel, clampedValue.ToString()))
             {
-                _prestigeLevel = clampedValue;
-                SaveProfileSetting(KeyPrestigeLevel, clampedValue.ToString());
                 PrestigeLevelChanged?.Invoke(this, clampedValue);
             }
         }
@@ -798,32 +925,91 @@ public class SettingsService
     }
 
     /// <summary>
-    /// Save a profile-specific setting scoped to the active game mode.
+    /// Applies one profile-scoped edit: derives the next snapshot from the live one, publishes it
+    /// by compare-and-swap, and persists the new value under the ProfileId of the snapshot the
+    /// edit was derived from. That profile is the one whose value was on screen when the player
+    /// changed it, which is the only profile the correction can honestly be attributed to; the
+    /// ambient selection is never consulted, so an edit made in the moment around an automatic
+    /// switch can no longer overwrite a value the player never saw
+    /// (docs/decisions/fix-profile-settings-race.md, R2).
     /// </summary>
-    private void SaveProfileSetting(string key, string value)
+    /// <param name="update">
+    /// Pure: re-run on every compare-and-swap retry. Returns null when the snapshot already holds
+    /// the value, which skips both the publish and the write, exactly as the per-property
+    /// "value differs" guards did before the snapshot existed.
+    /// </param>
+    /// <param name="key">ProfileSettings key to persist under.</param>
+    /// <param name="value">Serialized value to persist.</param>
+    /// <returns>
+    /// True when the edit reached the live snapshot, which is when the caller raises its changed
+    /// event. False means either "nothing changed" or "a reload for another profile overtook this
+    /// edit"; in both cases announcing the new value would push it at pages that are showing a
+    /// different profile.
+    /// </returns>
+    private bool UpdateProfileSetting(
+        Func<ProfileSettingsSnapshot, ProfileSettingsSnapshot?> update, string key, string value)
     {
-        try
+        // Captured before the derivation, and the only profile named below: the value the player
+        // just corrected was read off THIS snapshot.
+        var origin = ProfileSettings;
+
+        var next = update(origin);
+        if (next == null) return false;
+
+        var published = TryPublish(origin, next, update);
+
+        // Persisted whether or not the graft landed. A reload that overtook this edit read the
+        // store before the write, so dropping the write too would lose a correction the player
+        // made deliberately, and the row it lands in is still the row they were editing.
+        SaveProfileSetting(origin.ProfileId, key, value);
+        return published;
+    }
+
+    /// <summary>
+    /// Publishes <paramref name="next"/> over the live snapshot, re-deriving through
+    /// <paramref name="update"/> whenever another publisher wins the swap.
+    /// <para>
+    /// Re-application stops as soon as the live snapshot names a profile other than
+    /// <paramref name="origin"/>'s: grafting one profile's edited value onto another profile's
+    /// values is the exact shape of the defect this change removes. A plain assignment would be
+    /// enough today, because edits arrive from the dispatcher, but nothing enforces that and a
+    /// lost update would be silent; the loop will almost never spin.
+    /// </para>
+    /// </summary>
+    private bool TryPublish(
+        ProfileSettingsSnapshot origin, ProfileSettingsSnapshot next,
+        Func<ProfileSettingsSnapshot, ProfileSettingsSnapshot?> update)
+    {
+        var current = origin;
+        while (true)
         {
-            _userDataDb.SetProfileSetting(ProfileService.Instance.ActiveProfileId, key, value);
-        }
-        catch (Exception ex)
-        {
-            _log.Error($"SaveProfileSetting failed: key={key}, error={ex.Message}");
+            var observed = Interlocked.CompareExchange(ref _profileSettings, next, current);
+            if (ReferenceEquals(observed, current)) return true;
+
+            current = observed;
+            if (!string.Equals(current.ProfileId, origin.ProfileId, StringComparison.Ordinal))
+                return false;
+
+            var retried = update(current);
+            if (retried == null) return false;
+            next = retried;
         }
     }
 
     /// <summary>
-    /// Read a profile-specific setting scoped to the active game mode.
+    /// Save a profile-specific setting into <paramref name="profileId"/>'s partition, which is
+    /// always the ProfileId of the snapshot the edit was derived from and never the selection at
+    /// the moment this runs.
     /// </summary>
-    private string? GetProfileSetting(string key)
+    private void SaveProfileSetting(string profileId, string key, string value)
     {
         try
         {
-            return _userDataDb.GetProfileSetting(ProfileService.Instance.ActiveProfileId, key);
+            _userDataDb.SetProfileSetting(profileId, key, value);
         }
-        catch
+        catch (Exception ex)
         {
-            return null;
+            _log.Error($"SaveProfileSetting failed: profile={profileId}, key={key}, error={ex.Message}");
         }
     }
 
@@ -855,6 +1041,13 @@ public class SettingsService
     {
         _settingsLoaded = true;
 
+        // The one allowlisted selection read left in this service (ProfileAttributionSourceTests):
+        // this is the only load with no ActiveProfileChanged to learn its profile from. The pair
+        // is read atomically because taken as two properties, a transition landing between them
+        // would pair the OLD profile with the NEW revision, and the guard in ReloadForProfile
+        // would see nothing wrong with publishing one profile's rows for the other's transition.
+        var (profile, revision) = ProfileService.Instance.CurrentTransition;
+
         try
         {
             // First check if JSON migration is needed
@@ -879,34 +1072,43 @@ public class SettingsService
             if (double.TryParse(_userDataDb.GetSetting(KeyBaseFontSize), out var fontSize))
                 _baseFontSize = fontSize;
 
-            // Load profile-specific settings from ProfileSettings (active game mode)
-            LoadProfileSettings();
-
             // Map settings are now loaded by MapSettings service
         }
         catch (Exception ex)
         {
             _log.Error($"Load failed: {ex.Message}");
         }
+
+        // Outside the try above, and never skipped: every profile-scoped getter reads the
+        // snapshot this publishes, so a global read or a migration that threw must not be able
+        // to leave it absent. The reload has its own catch, which publishes this profile's
+        // defaults if the store cannot be read at all.
+        ReloadForProfile(ProfileService.GetProfileId(profile), revision, notify: false);
     }
 
     /// <summary>
-    /// Load profile-specific settings for the active game mode from the ProfileSettings table.
-    /// Values absent for the active profile reset to null so the property defaults apply.
+    /// One profile's stored rows parsed into a snapshot, per key, with exactly the fallbacks the
+    /// eight separate reads used: an absent row and an unparsable one both leave the field null,
+    /// which is what makes the property answer its default.
     /// </summary>
-    private void LoadProfileSettings()
+    private static ProfileSettingsSnapshot SnapshotOf(
+        string profileId, long revision, IReadOnlyDictionary<string, string> values)
     {
-        _playerLevel = int.TryParse(GetProfileSetting(KeyPlayerLevel), out var level) ? level : null;
-        _scavRep = double.TryParse(GetProfileSetting(KeyScavRep), out var scavRep) ? scavRep : null;
-        _showLevelLockedQuests = bool.TryParse(GetProfileSetting(KeyShowLevelLockedQuests), out var showLocked) ? showLocked : null;
-        _dspDecodeCount = int.TryParse(GetProfileSetting(KeyDspDecodeCount), out var dspCount) ? dspCount : null;
+        string? Value(string key) => values.TryGetValue(key, out var stored) ? stored : null;
 
-        var faction = GetProfileSetting(KeyPlayerFaction);
-        _playerFaction = string.IsNullOrEmpty(faction) ? null : faction;
+        var faction = Value(KeyPlayerFaction);
 
-        _hasEodEdition = bool.TryParse(GetProfileSetting(KeyHasEodEdition), out var hasEod) ? hasEod : null;
-        _hasUnheardEdition = bool.TryParse(GetProfileSetting(KeyHasUnheardEdition), out var hasUnheard) ? hasUnheard : null;
-        _prestigeLevel = int.TryParse(GetProfileSetting(KeyPrestigeLevel), out var prestige) ? prestige : null;
+        return new ProfileSettingsSnapshot(
+            profileId,
+            revision,
+            PlayerLevel: int.TryParse(Value(KeyPlayerLevel), out var level) ? level : null,
+            ScavRep: double.TryParse(Value(KeyScavRep), out var scavRep) ? scavRep : null,
+            ShowLevelLockedQuests: bool.TryParse(Value(KeyShowLevelLockedQuests), out var showLocked) ? showLocked : null,
+            DspDecodeCount: int.TryParse(Value(KeyDspDecodeCount), out var dspCount) ? dspCount : null,
+            PlayerFaction: string.IsNullOrEmpty(faction) ? null : faction,
+            HasEodEdition: bool.TryParse(Value(KeyHasEodEdition), out var hasEod) ? hasEod : null,
+            HasUnheardEdition: bool.TryParse(Value(KeyHasUnheardEdition), out var hasUnheard) ? hasUnheard : null,
+            PrestigeLevel: int.TryParse(Value(KeyPrestigeLevel), out var prestige) ? prestige : null);
     }
 
     /// <summary>

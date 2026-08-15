@@ -3,16 +3,17 @@ using System.IO;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
+using TarkovHelper.Services.Settings;
 
 namespace TarkovHelper.Tests;
 
 /// <summary>
 /// Guards for the per-service reset hooks and the log-event fence
 /// (feature-complete-profile-reset.spec.md): each cache clears only when it holds the reset
-/// profile's data, the settings cache reloads only when the reset target is the selected
-/// profile, the fence drops log events that are not after the watermark, hand entry is never
-/// fenced, pending debounced saves are discarded per profile, and the survivor list stays a
-/// subset of the profile-scoped keys.
+/// profile's data, the settings cache reloads only when the reset target is the profile its
+/// snapshot holds, the fence drops log events that are not after the watermark, hand entry is
+/// never fenced, pending debounced saves are discarded per profile, and the survivor list stays
+/// a subset of the profile-scoped keys.
 /// </summary>
 public sealed class ProfileResetHooksTests : IDisposable
 {
@@ -509,48 +510,50 @@ public sealed class ProfileResetHooksTests : IDisposable
 
     #endregion
 
-    #region Settings: the ambient-selection hook
+    #region Settings: the loaded-profile hook
 
     /// <summary>
-    /// The profile SettingsService.HandleProfileReset treats as active. It is the only reset
-    /// hook that compares against the ambient selection rather than a captured
-    /// <c>_loadedProfileId</c>, so the test asks the same service the hook asks: nothing in
-    /// this suite switches the singleton (ProfileSwitchingTests builds its own instances), but
-    /// a hard-coded id would silently stop exercising both branches if anything ever did.
+    /// The profile the seeded snapshot holds. A synthetic id, so it can never coincide with the
+    /// ambient selection: the hook compares the reset target against the SNAPSHOT's profile id
+    /// now, and an id the selection cannot equal is what stops these tests from passing on the
+    /// old selection-based comparison.
     /// </summary>
-    private static string SelectedProfileId => ProfileService.Instance.ActiveProfileId;
+    private readonly string _loadedProfileId = "loaded-" + Guid.NewGuid().ToString("N");
 
-    /// <summary>Any profile that is not the selected one.</summary>
-    private static string UnselectedProfileId =>
-        SelectedProfileId == ProfileService.SeasonProfileId
-            ? ProfileService.PveProfileId
-            : ProfileService.SeasonProfileId;
+    /// <summary>Any profile the seeded snapshot does not hold.</summary>
+    private readonly string _otherProfileId = "other-" + Guid.NewGuid().ToString("N");
 
     /// <summary>
     /// A SettingsService with no constructor run: the real one loads every setting and
-    /// subscribes to ProfileService. Only the store and the "already loaded" flag are seeded,
-    /// so the property getters answer from the cache this test controls rather than re-entering
-    /// LoadSettings and its migrations.
+    /// subscribes to ProfileService. Only the store, the "already loaded" flag and the snapshot
+    /// are seeded, so the property getters answer from the cache this test controls rather than
+    /// re-entering LoadSettings and its migrations.
     /// </summary>
-    private static SettingsService NewSettingsService(UserDataDbService store)
+    private SettingsService NewSettingsService(UserDataDbService store)
     {
         var service = TestReflection.Uninitialized<SettingsService>();
         TestReflection.SetPrivateField(service, "_userDataDb", store);
         TestReflection.SetPrivateField(service, "_settingsLoaded", true);
+        TestReflection.SetPrivateField(service, "_profileSettings", StaleSnapshot(_loadedProfileId));
         return service;
     }
 
-    /// <summary>Fills the cache with the values a completed reset has just made stale.</summary>
-    private static void SeedStaleCache(SettingsService service)
-    {
-        TestReflection.SetPrivateField(service, "_playerLevel", 42);
-        TestReflection.SetPrivateField(service, "_scavRep", 5.5);
-        TestReflection.SetPrivateField(service, "_dspDecodeCount", 3);
-        TestReflection.SetPrivateField(service, "_playerFaction", "bear");
-        TestReflection.SetPrivateField(service, "_hasEodEdition", true);
-        TestReflection.SetPrivateField(service, "_hasUnheardEdition", true);
-        TestReflection.SetPrivateField(service, "_prestigeLevel", 4);
-    }
+    /// <summary>
+    /// The values a completed reset has just made stale, as one snapshot for
+    /// <paramref name="profileId"/>. Revision 0 matches the untouched <c>_latestRevision</c> of
+    /// an uninitialized service, which is the state a reset hook publishes against.
+    /// </summary>
+    private static ProfileSettingsSnapshot StaleSnapshot(string profileId) => new(
+        profileId,
+        Revision: 0,
+        PlayerLevel: 42,
+        ScavRep: 5.5,
+        ShowLevelLockedQuests: false,
+        DspDecodeCount: 3,
+        PlayerFaction: "bear",
+        HasEodEdition: true,
+        HasUnheardEdition: true,
+        PrestigeLevel: 4);
 
     /// <summary>Records every profile-scoped changed event in the order it is raised.</summary>
     private static List<(string Name, object? Value)> RecordSettingEvents(SettingsService service)
@@ -567,18 +570,17 @@ public sealed class ProfileResetHooksTests : IDisposable
     }
 
     [Fact]
-    public async Task The_settings_hook_reloads_the_cache_when_the_reset_target_is_selected()
+    public async Task The_settings_hook_reloads_the_cache_when_the_reset_target_is_the_loaded_profile()
     {
         var store = NewStore();
         // What the reset transaction leaves behind for the target: every profile row deleted
         // except the editions, which survive by design (ProfileKeysSurvivingReset).
-        await store.SetProfileSettingAsync(SelectedProfileId, "app.hasEodEdition", "True");
+        await store.SetProfileSettingAsync(_loadedProfileId, "app.hasEodEdition", "True");
 
         var service = NewSettingsService(store);
-        SeedStaleCache(service);
         var events = RecordSettingEvents(service);
 
-        service.HandleProfileReset(SelectedProfileId);
+        service.HandleProfileReset(_loadedProfileId);
 
         // The cache now answers from the post-reset rows: the deleted keys fall back to their
         // defaults, and the surviving edition row is read back as it stands.
@@ -589,6 +591,11 @@ public sealed class ProfileResetHooksTests : IDisposable
         Assert.Equal(SettingsService.DefaultPrestigeLevel, service.PrestigeLevel);
         Assert.True(service.HasEodEdition);
         Assert.False(service.HasUnheardEdition);
+        // The eighth value rides along with the seven that have events (it has none).
+        Assert.True(service.ShowLevelLockedQuests);
+
+        // The reload republished under the same profile, so a later reset of it still lands.
+        Assert.Equal(_loadedProfileId, service.ProfileSettings.ProfileId);
 
         // Every profile-scoped changed event is re-raised once, carrying the reloaded value:
         // the UI redraws from these, exactly as it does on a profile switch.
@@ -605,19 +612,18 @@ public sealed class ProfileResetHooksTests : IDisposable
     }
 
     [Fact]
-    public async Task The_settings_hook_ignores_a_reset_of_a_profile_that_is_not_selected()
+    public async Task The_settings_hook_ignores_a_reset_of_a_profile_the_cache_does_not_hold()
     {
         var store = NewStore();
-        // A row for the SELECTED profile that differs from the cache below, so any reload
+        // A row for the LOADED profile that differs from the seeded snapshot, so any reload
         // would be visible in the assertions. Another profile's reset must not trigger one:
-        // this cache holds the selection's values and none of them went stale.
-        await store.SetProfileSettingAsync(SelectedProfileId, "app.playerLevel", "7");
+        // this cache holds the loaded profile's values and none of them went stale.
+        await store.SetProfileSettingAsync(_loadedProfileId, "app.playerLevel", "7");
 
         var service = NewSettingsService(store);
-        SeedStaleCache(service);
         var events = RecordSettingEvents(service);
 
-        service.HandleProfileReset(UnselectedProfileId);
+        service.HandleProfileReset(_otherProfileId);
 
         Assert.Equal(42, service.PlayerLevel);
         Assert.Equal("bear", service.PlayerFaction);
