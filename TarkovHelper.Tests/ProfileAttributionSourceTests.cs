@@ -92,26 +92,21 @@ public sealed class ProfileAttributionSourceTests
                 "Startup load: the one load with no ActiveProfileChanged to learn the profile from."),
         }),
 
-        // Per-profile settings are hand entry only (level, scav rep, faction, prestige, DSP
-        // count, editions), so the selection IS the evidence for these writes, and the reset
-        // deletes exactly the rows they write. Listed for the same reason the two services
-        // above are: the dangerous shape - a selection read taken inside a deferred body - is
-        // the same one, and this file is the only reset hook that consults the selection at
-        // all instead of a captured _loadedProfileId. Every read below is synchronous with
-        // the store call it feeds, which is what keeps a switch from redirecting the row.
+        // Per-profile settings (level, scav rep, faction, prestige, DSP count, editions) are
+        // hand entry only, but "hand entry" does not make the SELECTION the right partition:
+        // the player edits the number that is on screen, and an automatic switch can move the
+        // selection ahead of it. So the eight values live in a ProfileSettingsSnapshot that
+        // carries its own profile id, writes follow that id, and the reset hook compares
+        // against it like the three hooks above compare against their _loadedProfileId. The
+        // three reads this file used to be allowed (HandleProfileReset, SaveProfileSetting,
+        // GetProfileSetting) are gone with the code that needed them; see
+        // docs/decisions/fix-profile-settings-race.spec.md.
         ("TarkovHelper/Services/SettingsService.cs", new[]
         {
             new AllowedRead("SettingsService", "ProfileService.Instance.ActiveProfileChanged +=",
-                "Constructor: subscribes to transitions so the cache reloads on a switch."),
-            new AllowedRead("HandleProfileReset",
-                "string.Equals(profileId, ProfileService.Instance.ActiveProfileId, StringComparison.Ordinal)",
-                "Reset hook: the cache holds the SELECTED profile's values, so the selection " +
-                "is what decides whether the reset made them stale. Read synchronously, on the " +
-                "thread that calls the hook, before any reload."),
-            new AllowedRead("SaveProfileSetting", "_userDataDb.SetProfileSetting(ProfileService.Instance.ActiveProfileId, key, value);",
-                "Hand-entered setting: resolved in the same synchronous call as the write."),
-            new AllowedRead("GetProfileSetting", "return _userDataDb.GetProfileSetting(ProfileService.Instance.ActiveProfileId, key);",
-                "Read of the selected profile's own row; no deferral between lookup and query."),
+                "Constructor: subscribes to transitions, carrying the event's own profile and revision."),
+            new AllowedRead("LoadSettings", "var (profile, revision) = ProfileService.Instance.CurrentTransition;",
+                "Startup load: the one load with no ActiveProfileChanged to learn the profile from."),
         }),
     };
 

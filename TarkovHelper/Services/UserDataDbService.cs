@@ -1392,32 +1392,6 @@ public sealed class UserDataDbService : IQuestProgressStore
     }
 
     /// <summary>
-    /// 프로필별 모든 설정 로드
-    /// </summary>
-    public async Task<Dictionary<string, string>> LoadProfileSettingsAsync(string profileId)
-    {
-        await InitializeAsync();
-
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        var connectionString = $"Data Source={_databasePath};Mode=ReadOnly";
-        await using var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync();
-
-        var sql = "SELECT Key, Value FROM ProfileSettings WHERE ProfileId = @profileId";
-        await using var cmd = new SqliteCommand(sql, connection);
-        cmd.Parameters.AddWithValue("@profileId", profileId);
-        await using var reader = await cmd.ExecuteReaderAsync();
-
-        while (await reader.ReadAsync())
-        {
-            result[reader.GetString(0)] = reader.GetString(1);
-        }
-
-        return result;
-    }
-
-    /// <summary>
     /// 프로필별 설정 값 삭제
     /// </summary>
     public async Task DeleteProfileSettingAsync(string profileId, string key)
@@ -1481,6 +1455,43 @@ public sealed class UserDataDbService : IQuestProgressStore
         cmd.Parameters.AddWithValue("@value", value);
 
         cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 동기 버전: 한 프로필의 모든 설정을 한 번의 쿼리로 조회
+    /// <para>
+    /// One query and one connection, not one per key. <c>SettingsService</c> publishes its eight
+    /// profile-scoped values as a single immutable snapshot, and eight sequential
+    /// <see cref="GetProfileSetting"/> calls would leave a window between each pair wide enough
+    /// for a profile switch to land in, tearing the snapshot across two profiles. Synchronous
+    /// because its caller must have the values in hand when it returns: the property getters
+    /// answer from them mid-startup, and the reset hook runs as a plain <c>Action</c>.
+    /// See docs/decisions/fix-profile-settings-race.spec.md.
+    /// </para>
+    /// </summary>
+    public Dictionary<string, string> LoadProfileSettings(string profileId)
+    {
+        // InitializeAsync is idempotent and has its own synchronized fast path, so there is no
+        // unsynchronized flag read out here.
+        InitializeAsync().GetAwaiter().GetResult();
+
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var connectionString = $"Data Source={_databasePath};Mode=ReadOnly";
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+
+        var sql = "SELECT Key, Value FROM ProfileSettings WHERE ProfileId = @profileId";
+        using var cmd = new SqliteCommand(sql, connection);
+        cmd.Parameters.AddWithValue("@profileId", profileId);
+        using var reader = cmd.ExecuteReader();
+
+        while (reader.Read())
+        {
+            result[reader.GetString(0)] = reader.GetString(1);
+        }
+
+        return result;
     }
 
     #endregion
