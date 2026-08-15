@@ -53,6 +53,11 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
   코드 가이드 4부. 프로필 완전 초기화 딥 리뷰가 찾은 결함들과 수정을 다룹니다.
   멈춘 쓰기와 배수 타임아웃, 리셋이 볼 수 없던 대기 중 저장, 첫 실행 마이그레이션
   경합을 조작해 보는 인터랙티브 랩 3개와 퀴즈 게이트를 포함합니다 (PR #42)
+- [2026-08-reset-dialog-ux-review-guide.html](2026-08-reset-dialog-ux-review-guide.html):
+  코드 가이드 5부. 초기화 다이얼로그 UX 리뷰가 찾은 세 가지 개선(키보드 기본
+  포커스, 대상 프로필 이름 강조, 테마 브러시 통일)을 다룹니다. 키보드 상태
+  머신과 포맷 슬롯 렌더러를 조작해 보는 인터랙티브 랩 2개와 퀴즈 게이트를
+  포함합니다 (PR #41)
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
   마커 API 분석
 
