@@ -961,6 +961,11 @@ public class SettingsService
         // Persisted whether or not the graft landed. A reload that overtook this edit read the
         // store before the write, so dropping the write too would lose a correction the player
         // made deliberately, and the row it lands in is still the row they were editing.
+        //
+        // The publish runs first, so a reload for the SAME profile finishing between the two
+        // steps leaves the snapshot a moment behind the store. The value is durable either way
+        // and the next reload reconciles; closing the gap would mean holding a lock across the
+        // store read and the publish, which is the discipline this shape exists to avoid.
         SaveProfileSetting(origin.ProfileId, key, value);
         return published;
     }

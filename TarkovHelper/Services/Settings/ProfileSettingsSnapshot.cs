@@ -27,8 +27,11 @@ namespace TarkovHelper.Services.Settings;
 /// <param name="ShowLevelLockedQuests">Stored level-locked quest visibility, or null when unset.</param>
 /// <param name="DspDecodeCount">Stored DSP decode count, or null when unset.</param>
 /// <param name="PlayerFaction">
-/// Stored faction ("bear"/"usec"), already normalized to lower case. Null means "no faction
-/// chosen", which is a real value here rather than a missing one, so it has no default below.
+/// Stored faction ("bear"/"usec"), taken from the row as it stands. The setter lower-cases what
+/// it writes, but the legacy JSON migration does not, so casing is not guaranteed and every
+/// comparison against it (<see cref="SettingsService.ShouldIncludeTask"/>) is case-insensitive.
+/// Null means "no faction chosen", which is a real value here rather than a missing one, so it
+/// has no default below.
 /// </param>
 /// <param name="HasEodEdition">Stored Edge of Darkness ownership, or null when unset.</param>
 /// <param name="HasUnheardEdition">Stored The Unheard ownership, or null when unset.</param>
