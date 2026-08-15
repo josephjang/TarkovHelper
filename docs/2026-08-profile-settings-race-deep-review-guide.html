@@ -663,17 +663,17 @@
   <div class="shell">
     <nav class="rail" aria-label="Guide contents">
       <p class="rail-title">Curriculum</p>
-      <a href="#ch1"><span class="n">01</span><span>What part 6 left standing</span></a>
-      <a href="#ch2"><span class="n">02</span><span>The write nobody made</span></a>
+      <a href="#ch1"><span class="n">01</span><span>What part 6 left</span></a>
+      <a href="#ch2"><span class="n">02</span><span>The write that no person made</span></a>
       <a href="#lab-a" class="is-lab"><span class="n">LAB</span><span>The echo chain</span></a>
       <a href="#ch3"><span class="n">03</span><span>The fan-out outside the gate</span></a>
-      <a href="#lab-b" class="is-lab"><span class="n">LAB</span><span>The liveness re-check</span></a>
-      <a href="#ch4"><span class="n">04</span><span>Two counters, opposite orders</span></a>
+      <a href="#lab-b" class="is-lab"><span class="n">LAB</span><span>The check at each announce</span></a>
+      <a href="#ch4"><span class="n">04</span><span>Two counters, opposite sequences</span></a>
       <a href="#lab-c" class="is-lab"><span class="n">LAB</span><span>The edit window</span></a>
-      <a href="#ch5"><span class="n">05</span><span>What a store can hand back</span></a>
+      <a href="#ch5"><span class="n">05</span><span>What a store can give back</span></a>
       <a href="#lab-d" class="is-lab"><span class="n">LAB</span><span>The bulk read</span></a>
       <a href="#ch6"><span class="n">06</span><span>Seven events, one refresh</span></a>
-      <a href="#ch7"><span class="n">07</span><span>The rest of the sweep</span></a>
+      <a href="#ch7"><span class="n">07</span><span>The other corrections</span></a>
       <a href="#quiz"><span class="n">08</span><span>Comprehension gate</span></a>
       <div class="rail-gate">
         <strong id="railGateLabel">Gate locked</strong>
@@ -684,34 +684,33 @@
 
     <main>
       <p class="eyebrow">PR #46 &middot; Code guide, part 7</p>
-      <h1>The setting that erased itself</h1>
+      <h1>The setting that the software deleted</h1>
       <p class="lede">
         Part 6 made the profile settings cache one immutable snapshot behind a revision gate,
-        and the tests passed. A deep review then found that the worst remaining defect needed
-        no player action at all: a settings load that could not reach the store published that
-        profile's defaults, the unchecked box that followed raised the same event a click
-        raises, and the echo wrote <code>False</code> over the player's stored Edge of Darkness
-        flag permanently. Four labs let you drive the echo chain, the fan-out that ran outside
-        the publish gate, the edit window one counter could not describe, and the row set a
-        hand-edited database can hand back.
+        and all the tests passed. A deep review then found a defect that the player cannot
+        prevent. A settings load cannot read the store, so it publishes the default values of
+        that profile. The drawer then clears the Edge of Darkness checkbox, which sends the
+        same event as a click. The handler writes <code>False</code> to the store, and you
+        cannot get the flag again. Four labs let you operate the echo chain, the fan-out, the
+        edit window, and the bulk read.
       </p>
       <p class="lede" style="color:var(--muted);font-size:16px;">
-        Part 7 of the profile series, and the deep-review companion to part 6
-        (<code>2026-08-profile-settings-race-code-guide.html</code>, PR #43), the way part 2
-        follows part 1 and part 4 follows part 3. Companion to
-        <code>docs/decisions/fix-profile-settings-race.spec.md</code>, whose Technical
-        Decisions and Non-Goals this change rewrites in place, and to the retirement note it
-        adds to <code>docs/decisions/feature-complete-profile-reset.spec.md</code>.
+        This is part 7 of the profile series. It is the deep-review guide for part 6
+        (<code>2026-08-profile-settings-race-code-guide.html</code>, PR #43). Part 2 has the
+        same relation to part 1, and part 4 to part 3. Two decision documents relate to this
+        guide. This change rewrites the Technical Decisions and the Non-Goals in
+        <code>docs/decisions/fix-profile-settings-race.spec.md</code>. It also adds a note to
+        <code>docs/decisions/feature-complete-profile-reset.spec.md</code>.
       </p>
 
       <div class="note">
-        <p class="note-label">The whole change in one sentence</p>
+        <p class="note-label">The whole change</p>
         <p>
-          Every announce re-checks that the snapshot it is announcing is still the one the cache
-          holds, a second counter closes the window in which a load could republish rows an edit
-          had already replaced, the settings drawer marks its own repaints so their events cannot
-          be mistaken for a player's click, the seven-event burst collapses into one refresh per
-          page instead of thirty-five, and the legacy import fails per value rather than per run.
+          This change makes five corrections. Each announce asks again if the cache still holds
+          its snapshot. A second counter closes the window in which a load can publish rows that
+          an edit already replaced. The settings drawer marks its own repaints, so the handlers
+          do not read those events as a click. The seven events cause one refresh in each page,
+          and not thirty-five. The legacy import fails for one value, and not for the full run.
         </p>
       </div>
 
@@ -720,53 +719,59 @@
         <div class="chapter-head">
           <span class="chapter-num">01</span>
           <div>
-            <h2>What part 6 left standing</h2>
+            <h2>What part 6 left</h2>
             <p class="kicker">
-              The snapshot, the revision gate and the publish gate all survive this change
-              unaltered. What the review audited is the space between them, and everything
-              downstream of the events they raise.
+              This change does not alter the snapshot, the revision gate or the publish gate.
+              The review examined the space between them, and the code that reads the events
+              that they send.
             </p>
           </div>
         </div>
 
         <p>
-          Part 6 replaced eight per-key reads against an ambient "which profile is selected?"
-          with one <code>ProfileSettingsSnapshot</code>: eight values, the profile they belong
-          to, and the revision of the transition they were loaded for, published by a single
-          reference swap under <code>_publishGate</code>. A reload claims its revision through
-          the gate, reads the store off to the side, re-checks under the gate that it is still
-          the latest, and discards itself if it is not.
+          Part 6 removed eight reads that each asked which profile the player selected. One
+          <code>ProfileSettingsSnapshot</code> replaced them. The snapshot holds eight values,
+          the profile that owns them, and the revision of the transition. One reference swap
+          under <code>_publishGate</code> publishes it.
         </p>
         <p>
-          That is a complete answer to one question: <em>which reload owns the cache</em>. It is
-          not an answer to three others, and the deep review is largely a list of those three.
+          A reload claims its revision at the gate, and then reads the store to one side. It
+          asks again at the gate if its revision is still the newest. If the revision is not the
+          newest, the reload discards its own result.
+        </p>
+        <p>
+          This is a full answer to one question: <em>which reload owns the cache</em>. It is not
+          an answer to three other questions. The deep review is mostly a list of those three.
         </p>
         <ul>
           <li>
-            <strong>What happens after the publish.</strong> The publish is gated. The seven
-            changed events raised from it are not, and cannot be: the subscribers marshal onto
-            the dispatcher and call back into this service, so holding the gate across them
-            would invite reentrancy and a dispatcher deadlock. Chapter 3.
+            <strong>What occurs after the publish.</strong> The gate controls the publish. The
+            gate cannot control the seven events that follow. The subscribers move to the
+            dispatcher and then call this service again. Therefore the gate would cause
+            reentrancy and a deadlock. Refer to chapter 3.
           </li>
           <li>
-            <strong>What the store looked like while the rows were read.</strong> The revision
-            gate orders reloads against each other. It says nothing about an edit the player
-            typed in the middle of one. Chapter 4.
+            <strong>What the store contained during the read.</strong> The revision gate puts
+            the reloads in sequence. It tells you nothing about an edit that the player made
+            during a reload. Refer to chapter 4.
           </li>
           <li>
             <strong>What the subscribers do with the events.</strong> The settings drawer writes
-            them into controls whose own change handlers write back. Chapter 2, and it is the
-            one that destroys data.
+            the values into controls. The change handlers of those controls then write back.
+            Refer to chapter 2. This one destroys data.
           </li>
         </ul>
         <p>
-          Two structural cleanups ride along and are worth naming here because they change how
-          the rest of the guide reads. <code>ClaimRevision</code> had reached four byte-identical
-          copies once part 6 added its own; it is now one <code>RevisionGate.Claim(ref long
-          latest, long revision)</code>, called by all four services. And the review takes the
-          THR-1 direction the part 6 spec recorded, but only the part of it that applies: share
-          the gate, not the reload flows, whose differences (notify flags, half-failures,
-          debounced saves) are real.
+          Two other changes are important, because they change the code that this guide shows.
+          Part 6 added a fourth copy of <code>ClaimRevision</code>, and all four copies were the
+          same. One helper, <code>RevisionGate.Claim(ref long latest, long revision)</code>,
+          replaces them. All four services call it.
+        </p>
+        <p>
+          The review also applies the THR-1 direction from the part 6 spec, but only in part.
+          The four services share the gate. They do not share the reload flows, because those
+          flows are different in ways that are real. The differences are the notify flags, the
+          half-failures and the debounced saves.
         </p>
 
         <div class="code">
@@ -786,11 +791,12 @@
         </div>
 
         <p>
-          It stays a static helper over a caller-owned <code>long</code> rather than a type
-          owning the counter, because each service's post-read check reads
-          <code>_latestRevision</code> directly through <code>Interlocked.Read</code>. Hiding
-          the field would push that half through an accessor for no added safety.
-          <code>RevisionGateTests</code> pins the monotonicity, including the concurrent case.
+          The helper is static, and the caller owns the <code>long</code>. A type that owns the
+          counter was the other option. Each service reads <code>_latestRevision</code> directly
+          with <code>Interlocked.Read</code> for its check after the store read. A type would
+          move that read into an accessor, and the code would not be more safe.
+          <code>RevisionGateTests</code> shows that the counter only increases, and it tests two
+          threads that claim at the same time.
         </p>
       </section>
 
@@ -799,29 +805,30 @@
         <div class="chapter-head">
           <span class="chapter-num">02</span>
           <div>
-            <h2>The write nobody made</h2>
+            <h2>The write that no person made</h2>
             <p class="kicker">
-              Assigning CheckBox.IsChecked raises Checked and Unchecked exactly as a click does.
-              The handler could not tell the two apart, and one of the two paths wrote to the
-              store.
+              A write to CheckBox.IsChecked sends Checked and Unchecked, and a click sends the
+              same two events. The handler could not identify the difference, and one of the two
+              conditions caused a write to the store.
             </p>
           </div>
         </div>
 
         <p>
-          Follow the chain. A settings load cannot reach the store, so it publishes that
-          profile's <code>Defaults</code> and records <code>_lastLoadFailed</code>. That is the
-          part 6 design and it is right: keeping the previous profile's values would show one
-          profile's editions under another profile's name. Defaults means
-          <code>HasEodEdition</code> is null, which <code>HasEodEditionOrDefault</code> answers
-          as <code>false</code>.
+          Examine the sequence. A settings load cannot read the store. Therefore it publishes
+          the <code>Defaults</code> of that profile and it sets <code>_lastLoadFailed</code>.
+          This is the part 6 design, and it is correct. If the cache kept the values of the
+          previous profile, the screen would show them with the name of a different profile. In
+          the default snapshot, <code>HasEodEdition</code> is null, and
+          <code>HasEodEditionOrDefault</code> gives <code>false</code>.
         </p>
         <p>
-          The fan-out raises <code>HasEodEditionChanged(false)</code>.
-          <code>MainWindow.OnEditionChanged</code> marshals onto the dispatcher and calls
-          <code>UpdateEditionUI</code>, which assigns <code>ChkEodEdition.IsChecked = false</code>.
-          WPF raises <code>Unchecked</code>. <code>ChkEdition_Changed</code> runs, sees a
-          checkbox that is not checked, and does what it does for a player click:
+          The fan-out sends <code>HasEodEditionChanged(false)</code>. Then
+          <code>MainWindow.OnEditionChanged</code> moves to the dispatcher and calls
+          <code>UpdateEditionUI</code>. That method writes
+          <code>ChkEodEdition.IsChecked = false</code>, and WPF sends <code>Unchecked</code>.
+          <code>ChkEdition_Changed</code> starts. It finds a checkbox that is clear, and it does
+          the procedure for a player click:
         </p>
 
         <div class="code">
@@ -844,18 +851,22 @@ private void ChkEdition_Changed(object sender, RoutedEventArgs e)
         <div class="note is-wrong">
           <p class="note-label">The cost</p>
           <p>
-            <code>_isLoading</code> is raised only for the startup pass in
-            <code>Window_Loaded</code>. These events also arrive long afterwards: a profile
-            switch, a profile reset, the settings self-heal. So outside startup the guard is
-            simply absent, the write lands, and the player's Edge of Darkness flag is gone from
-            the store. Not shown wrong until the next reload: <em>gone</em>. Nothing in the app
-            can recover it, and the player did not touch anything.
+            The code sets <code>_isLoading</code> only for the start-up pass in
+            <code>Window_Loaded</code>. But these events also occur much later. They occur at a
+            profile change, at a profile reset, and at the settings self-heal. Thus there is no
+            guard after start-up.
+          </p>
+          <p>
+            The write goes to the store, and the Edge of Darkness flag of the player is not
+            there any more. The screen is not only incorrect until the next reload. The value is
+            <em>deleted</em>. The application cannot get it again, and the player touched no
+            control.
           </p>
         </div>
 
         <p>
-          The fix is a scope, not a flag set and cleared by hand, and the distinction is the
-          whole point:
+          The correction is a scope, and not a flag that the code sets and clears by hand. This
+          difference is important:
         </p>
 
         <div class="code">
@@ -894,22 +905,22 @@ private void ChkEdition_Changed(object sender, RoutedEventArgs e)
         </div>
 
         <p>
-          All five repaint methods open the scope
-          (<code>UpdatePlayerLevelUI</code>, <code>UpdateScavRepUI</code>,
-          <code>UpdateDspDecodeCountUI</code>, <code>UpdateEditionUI</code>,
-          <code>UpdatePrestigeLevelUI</code>), so a control added to any of them is covered
-          without anyone remembering to.
+          All five repaint methods open the scope: <code>UpdatePlayerLevelUI</code>,
+          <code>UpdateScavRepUI</code>, <code>UpdateDspDecodeCountUI</code>,
+          <code>UpdateEditionUI</code> and <code>UpdatePrestigeLevelUI</code>. Thus the scope
+          protects each new control in these methods, and no person must remember to add a
+          guard. The test
           <code>RefreshCoalescerSchedulingTests.Settings_repaint_methods_suppress_the_echo</code>
-          pins that by reflection over the method list rather than by naming the five it knows
-          about today.
+          uses reflection on the list of methods. It does not use the names of the five methods
+          that exist today.
         </p>
 
-        <h3>The echo a flag cannot cover</h3>
+        <h3>The echo that a flag cannot stop</h3>
         <p>
-          One echo arrives after the scope has closed. The two drawer text boxes commit on
-          <code>LostFocus</code>, and the box can be losing focus over text the service itself
-          wrote into it while the caret sat there. By then the guard is down, so equality is the
-          only thing that can tell a player edit from a repaint:
+          One echo occurs after the scope closes. The two text boxes in the drawer apply their
+          value at <code>LostFocus</code>. The service can write text into a box while the caret
+          is in that box, and the box can then lose the focus. The guard is down at that moment.
+          Therefore only a comparison can tell you if the value is a player edit or a repaint:
         </p>
 
         <div class="code">
@@ -929,10 +940,10 @@ private void ChkEdition_Changed(object sender, RoutedEventArgs e)
 <span class="add">UpdatePlayerLevelUI();</span></code></pre>
         </div>
         <p>
-          The unconditional repaint is the subtler half. Type <code>999</code> into the level
-          box: the clamp turns it into 79, the setter finds 79 already stored and raises
-          nothing, and without the repaint the box would keep showing <code>999</code> as though
-          it had been accepted.
+          The repaint that always occurs is the less obvious half. Put <code>999</code> in the
+          level box. The clamp makes it 79. The setter finds that the store already holds 79,
+          so it sends no event. Without the repaint, the box continues to show <code>999</code>,
+          and the player thinks that the application accepted that value.
         </p>
       </section>
 
@@ -942,10 +953,10 @@ private void ChkEdition_Changed(object sender, RoutedEventArgs e)
           <span class="lab-tag">Lab A</span>
           <h3>The echo chain</h3>
           <p class="sub">
-            Shipped behaviour pinned by
+            These tests hold the released behaviour:
             <code>RefreshCoalescerSchedulingTests.Edition_checkbox_handler_ignores_a_programmatic_assignment</code>
-            and <code>Settings_repaint_methods_suppress_the_echo</code>. The store starts with the
-            player's real answer: Edge of Darkness owned.
+            and <code>Settings_repaint_methods_suppress_the_echo</code>. At the start, the store
+            holds the correct answer of the player: the player owns Edge of Darkness.
           </p>
         </div>
         <div class="lab-body">
@@ -953,8 +964,8 @@ private void ChkEdition_Changed(object sender, RoutedEventArgs e)
             <span class="ctl-label">Guard</span>
             <div class="seg" id="labAWorld">
               <button type="button" data-a-world="before" data-tone="bad" aria-pressed="true">no guard</button>
-              <button type="button" data-a-world="clear">clears on exit</button>
-              <button type="button" data-a-world="shipped" data-tone="good">restores on exit</button>
+              <button type="button" data-a-world="clear">clears at exit</button>
+              <button type="button" data-a-world="shipped" data-tone="good">restores at exit</button>
             </div>
             <span class="ctl-label">Nested repaint</span>
             <div class="seg" id="labANested">
@@ -966,7 +977,7 @@ private void ChkEdition_Changed(object sender, RoutedEventArgs e)
           <div class="lanes">
             <div class="lane" data-profile="pvp">
               <div class="lane-head">
-                <span>Load fails, defaults published, fan-out reaches the drawer</span>
+                <span>The load fails, the code publishes the defaults, the fan-out reaches the drawer</span>
                 <span class="rev" id="labAFlagRead">_isUpdatingSettingsUI at the echo: false</span>
               </div>
               <div class="steps" id="labASteps"></div>
@@ -975,15 +986,15 @@ private void ChkEdition_Changed(object sender, RoutedEventArgs e)
 
           <div class="state-grid" style="margin-top:14px;">
             <div class="stat">
-              <p class="k">Stored HasEodEdition</p>
+              <p class="k">HasEodEdition in the store</p>
               <p class="v" id="labAStored">True</p>
             </div>
             <div class="stat">
-              <p class="k">Checkbox on screen</p>
+              <p class="k">Checkbox on the screen</p>
               <p class="v" id="labABox">unchecked</p>
             </div>
             <div class="stat">
-              <p class="k">Recoverable</p>
+              <p class="k">You can get the value again</p>
               <p class="v" id="labARecover">yes</p>
             </div>
           </div>
@@ -999,26 +1010,31 @@ private void ChkEdition_Changed(object sender, RoutedEventArgs e)
           <div>
             <h2>The fan-out outside the gate</h2>
             <p class="kicker">
-              Publication is atomic. Announcement is seven separate calls on a thread that can
-              be parked for as long as the dispatcher takes, and part 6 asked nothing at all
-              before making them.
+              The publish is one operation. But the announce is seven calls on a thread, and the
+              dispatcher can stop that thread for a long time. Part 6 asked no question before
+              these calls.
             </p>
           </div>
         </div>
 
         <p>
-          <code>RaiseProfileSettingsChanged</code> takes the snapshot as a parameter rather than
-          re-reading the field per event, so no single fan-out can mix two profiles. Part 6 got
-          that right. What it did not ask is whether the fan-out should still be happening.
+          <code>RaiseProfileSettingsChanged</code> receives the snapshot as a parameter. It does
+          not read the field again for each event. Therefore one fan-out cannot mix two
+          profiles. Part 6 is correct here. But part 6 does not ask if the fan-out is still
+          necessary.
         </p>
         <p>
-          The sequence that breaks it: a reload on the log watcher's thread publishes profile A
-          and starts announcing. Its first handler marshals onto the dispatcher, which is
-          already running a manual profile switch inline. That switch publishes profile B and
-          announces all seven of B's values. Then A's fan-out resumes and delivers the rest of
-          A's. <code>QuestListPage</code> takes its faction radio from these events rather than
-          from the snapshot, and on the next filter change it <em>persists</em> what the radio
-          says, so B's screen ends up showing and then saving A's faction.
+          This sequence causes the defect. A reload on the thread of the log watcher publishes
+          profile A and starts to announce. The first handler moves to the dispatcher. The
+          dispatcher is already busy with a manual profile change. That change publishes profile
+          B and announces all seven values of B. Then the fan-out of A continues and sends the
+          other values of A.
+        </p>
+        <p>
+          <code>QuestListPage</code> sets its faction radio button from these events, and not
+          from the snapshot. At the next filter change, the page writes the value of the radio
+          button to the store. Thus the screen of profile B shows the faction of profile A. Then
+          the page saves that faction into profile B.
         </p>
 
         <div class="code">
@@ -1044,22 +1060,22 @@ private void ChkEdition_Changed(object sender, RoutedEventArgs e)
         </div>
 
         <p>
-          Re-asked before <em>every</em> event, not once up front, because each handler can block
-          this thread for as long as the dispatcher takes to run it: a switch that lands while
-          event <em>k</em> is being delivered still stops events <em>k+1</em> onwards. A partial
-          fan-out is safe by construction, since whatever superseded this snapshot publishes and
-          announces all seven of its own values.
+          The code asks this question before <em>each</em> event, and not one time at the start.
+          Each handler can stop this thread while the dispatcher does its work. A profile change
+          that occurs during event <em>k</em> stops event <em>k+1</em> and all the events after
+          it. A part of a fan-out is safe, because the snapshot that replaced this one publishes
+          and announces all seven of its own values.
         </p>
 
         <div class="note">
-          <p class="note-label">What the guide does not claim</p>
+          <p class="note-label">What this guide does not claim</p>
           <p>
-            One window stays open and the spec says so in the same terms: a publish landing
-            between the last check and the handler actually running is not closable from this
-            side. Closing it for good means the pages reading the snapshot rather than trusting
-            whichever event reached them last, which is a larger change than this one.
+            One window is still open, and the spec says the same. A publish can occur between
+            the last check and the start of the handler. This side cannot close that window. To
+            close it, the pages must read the snapshot, and they must not use the last event
+            that they received. That is a larger change than this one. The test
             <code>SettingsSetterContractTests.A_switch_landing_mid_fan_out_stops_the_rest_of_it</code>
-            pins what is closed.
+            holds the part that is closed.
           </p>
         </div>
       </section>
@@ -1068,25 +1084,25 @@ private void ChkEdition_Changed(object sender, RoutedEventArgs e)
       <div class="lab" id="lab-b">
         <div class="lab-head">
           <span class="lab-tag">Lab B</span>
-          <h3>The liveness re-check</h3>
+          <h3>The check at each announce</h3>
           <p class="sub">
-            Shipped behaviour pinned by
+            These tests hold the released behaviour:
             <code>SettingsSetterContractTests.A_fan_out_the_cache_has_moved_past_announces_nothing</code>
-            and <code>A_switch_landing_mid_fan_out_stops_the_rest_of_it</code>. The slider is where
-            the dispatcher's Season publish lands inside the log thread's PvE fan-out. Step 4 is
-            the faction event itself, which is the boundary worth landing on exactly.
+            and <code>A_switch_landing_mid_fan_out_stops_the_rest_of_it</code>. The slider sets
+            the point where the Season publish occurs in the PvE fan-out. Step 4 is the faction
+            event. Put the slider on that step, because it is the limit.
           </p>
         </div>
         <div class="lab-body">
           <div class="controls">
-            <span class="ctl-label">Announce policy</span>
+            <span class="ctl-label">Announce rule</span>
             <div class="seg" id="labBPolicy">
               <button type="button" data-b-policy="none" data-tone="bad" aria-pressed="true">no check</button>
-              <button type="button" data-b-policy="once">check once up front</button>
-              <button type="button" data-b-policy="shipped" data-tone="good">check before each</button>
+              <button type="button" data-b-policy="once">check one time at the start</button>
+              <button type="button" data-b-policy="shipped" data-tone="good">check before each event</button>
             </div>
             <div class="slider-wrap">
-              <span class="ctl-label">Season lands</span>
+              <span class="ctl-label">Season publishes at</span>
               <input type="range" id="labBLand" min="0" max="7" step="1" value="2"
                      aria-label="Where the Season publish lands inside the PvE fan-out">
               <span class="slider-read" id="labBLandRead"></span>
@@ -1112,15 +1128,15 @@ private void ChkEdition_Changed(object sender, RoutedEventArgs e)
 
           <div class="state-grid" style="margin-top:14px;">
             <div class="stat">
-              <p class="k">Cache holds</p>
+              <p class="k">The cache holds</p>
               <p class="v" data-tone="season">season</p>
             </div>
             <div class="stat">
-              <p class="k">Last faction event delivered</p>
+              <p class="k">Last faction event that arrived</p>
               <p class="v" id="labBRadio">usec</p>
             </div>
             <div class="stat">
-              <p class="k">Radio would persist</p>
+              <p class="k">The radio button writes</p>
               <p class="v" id="labBPersist">usec into season</p>
             </div>
           </div>
@@ -1134,29 +1150,35 @@ private void ChkEdition_Changed(object sender, RoutedEventArgs e)
         <div class="chapter-head">
           <span class="chapter-num">04</span>
           <div>
-            <h2>Two counters, opposite orders</h2>
+            <h2>Two counters, opposite sequences</h2>
             <p class="kicker">
-              A generation counter tells a load that an edit happened. It cannot tell it that an
-              edit is happening, and the difference is a window in which the load republishes
-              the value the player just replaced.
+              A generation counter tells a load that an edit is complete. It cannot tell the
+              load that an edit is in operation. In that window, the load publishes again the
+              value that the player replaced.
             </p>
           </div>
         </div>
 
         <p>
-          Part 6 already had <code>_editGeneration</code>: an edit bumps it, and a load that
-          captured it before its store read and finds it moved at publish time reads again
-          rather than reverting a number the player typed. The review's question was where
-          exactly the bump sits relative to the write, and the answer is that no single
-          placement works.
+          Part 6 has <code>_editGeneration</code>. An edit increases it. A load reads this
+          counter before it reads the store. If the counter is different at the publish, the
+          load reads the store again. Thus the load does not replace a number that the player
+          typed.
         </p>
         <p>
-          The bump happens <em>before</em> the store write, so that a load whose read is already
-          in flight cannot publish rows that predate the edit. That leaves the mirror hole: a
-          load can capture the <em>already bumped</em> counter, read rows the write has not
-          committed yet, find the counter unmoved at publish time, and republish pre-edit rows
-          under the right profile id with no failure recorded. Moving the bump after the write
-          only moves the hole the other way.
+          The review asked where the code must increase the counter, before or after the store
+          write. The answer is that neither position is sufficient.
+        </p>
+        <p>
+          The code increases the counter <em>before</em> the store write. Therefore a load that
+          started its read cannot publish rows that are older than the edit. But this leaves the
+          opposite hole. A load can read the counter after the increase, and then read rows
+          before the write is complete.
+        </p>
+        <p>
+          At the publish, the counter is the same, so the load publishes the old rows. The
+          snapshot then holds pre-edit rows with the correct profile id, and the code records no
+          failure. If you move the increase after the write, the hole moves to the other side.
         </p>
 
         <div class="code">
@@ -1199,29 +1221,35 @@ lock (_publishGate)
         </div>
 
         <p>
-          Two counters close both directions <em>provided each is touched in the opposite order
-          on the two sides</em>, which is the entire argument and is easy to get backwards. The
-          edit raises <code>_editsInFlight</code> first and lowers it last, so it is non-zero for
-          the whole span in which its row may be unreadable. The load captures
-          <code>_editGeneration</code> first and <code>_editsInFlight</code> second, so an edit
-          that began after the capture necessarily bumps the generation after the capture too.
-          Either signal makes the load read again.
+          Two counters close the two directions, but only if each side touches them in the
+          opposite sequence. This is the full argument, and it is easy to make an error here.
         </p>
         <p>
-          Note also the second half of the condition: only an edit to the profile <em>being
-          published</em> can be lost by this swap. A load moving the cache to a different profile
-          is meant to replace what is there, and the edit stays in the profile it was written to.
+          The edit increases <code>_editsInFlight</code> first, and decreases it last. Thus the
+          counter is more than zero for all the time in which a load cannot read the row. The
+          load reads <code>_editGeneration</code> first, and <code>_editsInFlight</code> second.
+          Thus an edit that starts after these reads must also increase the generation after
+          them. One signal or the other tells the load to read the store again.
+        </p>
+        <p>
+          Examine the second half of the condition. This swap can only lose an edit to the
+          profile that the code publishes. A load that moves the cache to a different profile
+          must replace the values that are there. The edit stays in the profile that received
+          the write.
         </p>
 
-        <h3>And when the re-reads run out</h3>
+        <h3>When the load has no more attempts</h3>
         <p>
-          <code>MaxLoadAttempts</code> is 3. If edits keep landing on every attempt, the load
-          gives the edits the last word and keeps the edited snapshot, which is strictly better
-          than replacing it with rows that predate the last edit. But part 6's give-up branch
-          returned without publishing <em>or notifying</em>, and one half of that promise is
-          unconditional: <code>HandleProfileReset</code> runs as a plain <code>Action</code>
-          whose contract is that the cache is current and announced when it returns. Returning
-          quietly left the settings panel showing values the reset had wiped.
+          <code>MaxLoadAttempts</code> is 3. If an edit occurs at each attempt, the load keeps
+          the snapshot that holds the edits. This is better than a snapshot with rows that are
+          older than the last edit.
+        </p>
+        <p>
+          But in part 6 this condition published nothing and announced nothing. One half of that
+          behaviour is incorrect. <code>HandleProfileReset</code> is a plain
+          <code>Action</code>. Its contract is that the cache is correct and announced when the
+          action is complete. Thus a quiet return left old values in the settings panel after
+          the reset removed them.
         </p>
 
         <div class="code">
@@ -1242,20 +1270,20 @@ lock (_publishGate)
           <span class="lab-tag">Lab C</span>
           <h3>The edit window</h3>
           <p class="sub">
-            Shipped behaviour pinned by
+            These tests hold the released behaviour:
             <code>SettingsSetterContractTests.A_load_that_read_while_an_edit_was_in_flight_does_not_publish_its_rows</code>,
             <code>The_same_load_with_no_edit_in_flight_publishes_the_rows_it_read</code> and
-            <code>An_edit_counts_as_in_flight_across_its_write_and_its_publish</code>. The player
-            has typed level 40 over a stored 22. Slide the load's capture across the edit and
-            stop on position 2, which is the only one the two policies disagree about.
+            <code>An_edit_counts_as_in_flight_across_its_write_and_its_publish</code>. The store
+            holds level 22, and the player typed level 40. Move the slider along the edit. Stop
+            at position 2, because the two conditions give different results only at that point.
           </p>
         </div>
         <div class="lab-body">
           <div class="controls">
-            <span class="ctl-label">Load's guard</span>
+            <span class="ctl-label">Guard of the load</span>
             <div class="seg" id="labCPolicy">
               <button type="button" data-c-policy="generation" data-tone="bad" aria-pressed="true">generation only</button>
-              <button type="button" data-c-policy="shipped" data-tone="good">generation + in-flight</button>
+              <button type="button" data-c-policy="shipped" data-tone="good">generation and in-flight</button>
             </div>
             <div class="slider-wrap">
               <span class="ctl-label">Capture at</span>
@@ -1277,19 +1305,19 @@ lock (_publishGate)
 
           <div class="state-grid" style="margin-top:14px;">
             <div class="stat">
-              <p class="k">Captured generation</p>
+              <p class="k">Generation that the load read</p>
               <p class="v" id="labCGen">0</p>
             </div>
             <div class="stat">
-              <p class="k">Captured in-flight</p>
+              <p class="k">In-flight that the load read</p>
               <p class="v" id="labCFlight">0</p>
             </div>
             <div class="stat">
-              <p class="k">Rows the load read</p>
+              <p class="k">Rows that the load read</p>
               <p class="v" id="labCRows">level 22</p>
             </div>
             <div class="stat">
-              <p class="k">Level on screen after</p>
+              <p class="k">Level on the screen after</p>
               <p class="v" id="labCScreen">40</p>
             </div>
           </div>
@@ -1303,38 +1331,41 @@ lock (_publishGate)
         <div class="chapter-head">
           <span class="chapter-num">05</span>
           <div>
-            <h2>What a store can hand back</h2>
+            <h2>What a store can give back</h2>
             <p class="kicker">
-              ProfileSettings is a plain SQLite table a player can hand edit, and the legacy
-              JSON import carried its numbers through unchecked for years. The single bulk read
-              is the one place all of that funnels through.
+              ProfileSettings is a plain SQLite table, and a player can edit it by hand. Also,
+              the legacy JSON import wrote its numbers with no check for many years. The one
+              bulk read receives all of these values.
             </p>
           </div>
         </div>
 
         <p>
-          The setters have always clamped, so no value the app itself wrote can be out of range.
-          That was the argument for not clamping on the way in, and it is wrong in three ways
-          the review enumerated: a hand-edited row, a legacy <code>app_settings.json</code>
-          import that clamped nothing, and an older build that could mis-read its own
-          comma-decimal scav rep under another locale. <code>ProfileSettingsSnapshot.From</code>
-          now clamps every bounded value it parses.
+          The setters always clamp. Thus no value that the application writes can be out of the
+          range. That was the argument against a clamp at the read. The review found three
+          errors in that argument. First, a player can edit a row by hand. Second, the legacy
+          <code>app_settings.json</code> import applied no clamp.
         </p>
         <p>
-          These are not cosmetic bounds. The values fan out into quest filtering, where
-          <code>QuestProgressService</code> compares them against task requirements:
+          Third, an old build read its own scav rep incorrectly in a locale with a comma decimal
+          mark. <code>ProfileSettingsSnapshot.From</code> now clamps each value that has a
+          range.
+        </p>
+        <p>
+          These ranges are necessary. The values go to the quest filter, where
+          <code>QuestProgressService</code> compares them with the conditions of each task.
         </p>
         <ul>
-          <li>a stored level of 9999 answers every quest's level requirement, so the whole list reads as unlocked;</li>
-          <li>the Make Amends branches are selected by an <em>exact</em> match against the DSP decode count, so an out-of-range row matches no branch at all and silently locks every one of them;</li>
-          <li>an unbounded scav rep reaches Fence karma filtering directly.</li>
+          <li>A stored level of 9999 is more than the level condition of each quest. Thus the full list shows as unlocked.</li>
+          <li>The code compares the DSP decode count <em>exactly</em> to select a Make Amends branch. A row that is out of the range matches no branch, and it locks all of them.</li>
+          <li>A scav rep with no clamp goes directly to the Fence karma filter.</li>
         </ul>
 
-        <h3>The comparer is part of the read</h3>
+        <h3>The comparer is a part of the read</h3>
         <p>
-          The bulk read replaced eight per-key <code>SELECT</code>s, and a per-key
-          <code>SELECT</code> against a table with no <code>COLLATE NOCASE</code> returns only
-          the exact key. A case-insensitive dictionary would not reproduce that:
+          The bulk read replaced eight <code>SELECT</code> statements, one for each key. The
+          table has no <code>COLLATE NOCASE</code>, so each of those statements returned only
+          the exact key. A dictionary that ignores the case does not do the same:
         </p>
 
         <div class="code">
@@ -1350,12 +1381,12 @@ while (reader.Read())
         </div>
 
         <p>
-          The faction is the one value normalised rather than clamped. It is lower cased on the
-          way in, not merely on the way out, because
-          <code>QuestListPage.LoadFactionSelection</code> compares ordinally: a row an older
-          build wrote as <code>"USEC"</code> matches neither radio button, so the player sees no
-          faction selected while quest filtering, which compares case-insensitively, still hides
-          the other faction's quests.
+          The faction is the one value that the code makes uniform, and it has no clamp. The
+          read makes it lower case, and not only the write.
+          <code>QuestListPage.LoadFactionSelection</code> compares the value as ordinal text. An
+          old build could write the row as <code>"USEC"</code>, which matches no radio button.
+          Therefore the player sees no faction. But the quest filter ignores the case, so it
+          continues to hide the quests of the other faction.
         </p>
       </section>
 
@@ -1365,11 +1396,12 @@ while (reader.Read())
           <span class="lab-tag">Lab D</span>
           <h3>The bulk read</h3>
           <p class="sub">
-            Shipped behaviour pinned by
+            These tests hold the released behaviour:
             <code>SettingsReloadRaceTests.A_row_whose_key_differs_only_in_case_is_not_the_setting</code>,
             <code>An_out_of_range_stored_scav_rep_is_clamped_on_the_way_in</code> and
             <code>SettingsSetterContractTests.An_out_of_range_stored_row_is_clamped_on_the_way_in</code>.
-            These five rows are all legal SQLite; the pair differing only in case is the boundary.
+            SQLite permits all five rows. The two rows that are different only in the case are
+            the limit.
           </p>
         </div>
         <div class="lab-body">
@@ -1381,15 +1413,15 @@ while (reader.Read())
             </div>
             <span class="ctl-label">Parse</span>
             <div class="seg" id="labDParse">
-              <button type="button" data-d-parse="clamped" data-tone="good" aria-pressed="true">clamp and normalise</button>
-              <button type="button" data-d-parse="raw" data-tone="bad">parse only</button>
+              <button type="button" data-d-parse="clamped" data-tone="good" aria-pressed="true">clamp and make uniform</button>
+              <button type="button" data-d-parse="raw" data-tone="bad">read only</button>
             </div>
           </div>
 
-          <p class="ctl-label" style="margin-bottom:6px;">Rows stored under the PvP partition</p>
+          <p class="ctl-label" style="margin-bottom:6px;">Rows in the PvP partition</p>
           <div class="reads" id="labDRows"></div>
 
-          <p class="ctl-label" style="margin:18px 0 6px;">The snapshot those rows produce</p>
+          <p class="ctl-label" style="margin:18px 0 6px;">The snapshot from those rows</p>
           <div class="reads" id="labDSnapshot"></div>
 
           <div class="verdict" id="labDVerdict"></div>
@@ -1403,22 +1435,23 @@ while (reader.Read())
           <div>
             <h2>Seven events, one refresh</h2>
             <p class="kicker">
-              One profile switch raised seven events. MainWindow pushed a quest list refresh
-              from five of them, and the pages were subscribed as well.
+              One profile change sent seven events. MainWindow told the quest list to refresh
+              for five of them. The pages also received the same events directly.
             </p>
           </div>
         </div>
 
         <p>
-          Five of <code>MainWindow</code>'s settings handlers ended with a push into
-          <code>QuestListPage</code>, on top of the page's own subscription to the same events.
-          One profile switch therefore ran the full quest pass seven times, off-tab included.
-          The pushes are gone; the pages subscribe directly and rebuild once. That is a UI-timing
-          change riding along with a correctness fix, which the spec flags rather than hides.
+          Five settings handlers in <code>MainWindow</code> called <code>QuestListPage</code> at
+          the end. The page also received the same events directly. Thus one profile change ran
+          the full quest procedure seven times, and it did this for pages that the player could
+          not see. This change removes the five calls. Each page receives the events and builds
+          its content one time. This changes the timing of the user interface, and the spec
+          records that with the correction.
         </p>
         <p>
-          Collapsing the burst is what makes "subscribe directly" cheap, and the coalescer that
-          does it has two decisions worth reading:
+          The coalescer collects the seven events into one refresh. This makes the direct
+          subscription sufficiently fast. It has two decisions that you must know:
         </p>
 
         <div class="code">
@@ -1446,19 +1479,20 @@ private void Run()
         </div>
 
         <p>
-          The scheduling rule is written down in exactly one place, and it has to be: a callback
-          that runs <em>inline</em>, which is what <code>Dispatcher.Invoke</code> does when it is
-          already on the UI thread, clears the pending flag before the rest of the burst arrives
-          and so coalesces nothing at all. <code>Background</code> priority is what makes the
-          burst land first. <code>RefreshCoalescerSchedulingTests.OnDispatcher_reports_a_refresh_that_throws</code>
-          pins the <code>BeginInvoke</code> choice against a real dispatcher, which is the only
-          way to observe the difference.
+          The schedule rule is in one place only, and this is necessary.
+          <code>Dispatcher.Invoke</code> runs the callback immediately when the caller is
+          already on the user-interface thread. The callback then clears the flag before the
+          other events arrive, and it collects nothing. The <code>Background</code> priority
+          lets all the events arrive first. The test
+          <code>RefreshCoalescerSchedulingTests.OnDispatcher_reports_a_refresh_that_throws</code>
+          holds the <code>BeginInvoke</code> decision with a true dispatcher, because you cannot
+          see the difference in another way.
         </p>
         <p>
-          One more failure path closes here. <code>ItemsPage</code>'s rebuild is an
-          <code>async void</code> sitting at the top of the dispatcher stack, where a throw has
-          nothing above it to catch it and takes the process down. It is now wrapped so a throw
-          is logged instead.
+          This chapter closes one more failure path. The rebuild method in
+          <code>ItemsPage</code> is an <code>async void</code> method at the top of the
+          dispatcher stack. No code above it can catch an exception, so an exception stops the
+          application. A try block now catches the exception and writes it to the log.
         </p>
       </section>
 
@@ -1467,60 +1501,68 @@ private void Run()
         <div class="chapter-head">
           <span class="chapter-num">07</span>
           <div>
-            <h2>The rest of the sweep</h2>
+            <h2>The other corrections</h2>
             <p class="kicker">
-              Four smaller findings that share one shape: a boundary where two pieces of code
-              had to agree and nothing made them.
+              Four smaller findings have the same shape. At each one, two parts of the code must
+              agree, but no mechanism makes them agree.
             </p>
           </div>
         </div>
 
-        <h3>The import that aborted after committing</h3>
+        <h3>The import that stopped after a write</h3>
         <p>
-          <code>MigrateAppSettingsAsync</code> wrote nine values inside one <code>try</code>
-          and declared its counter inside it too. A locked database on value six aborted the
-          run and reported <strong>zero</strong> for the five rows that had already committed.
-          <code>MigrateFromConfigFolderAsync</code> deletes the imported JSON files only when
-          the total is non-zero, so a partial import left the file behind to re-trigger the auto
-          migration on every launch. The counter is now hoisted out of the <code>try</code>, and
-          each value is guarded individually so one failure costs only itself.
+          <code>MigrateAppSettingsAsync</code> wrote nine values in one <code>try</code> block,
+          and it declared its counter in the same block. If the database was locked at value
+          six, the method stopped and reported <strong>zero</strong>. But five rows were already
+          in the database.
+        </p>
+        <p>
+          <code>MigrateFromConfigFolderAsync</code> deletes the JSON files only when the total
+          is more than zero. Thus a partial import kept the files, and the automatic migration
+          started again at each launch. The counter is now outside the <code>try</code> block.
+          Each value has its own guard, so one failure stops only that value.
         </p>
 
         <h3>Two readers of one file</h3>
         <p>
           <code>SettingsService.MigrateFromJsonIfNeeded</code> and
-          <code>ConfigMigrationService.MigrateAppSettingsAsync</code> both read legacy
-          <code>app_settings.json</code>, and they answer different questions, so there will
-          always be two. What they must not differ in is what a given JSON value becomes as a
-          row, and they had drifted on five values. The startup reader stored the faction in the
-          file's own casing, clamped no sync range at all, and clamped the scav rep without
-          rounding it, so it could write a 2.37 no setter could ever produce.
-          <code>LegacyAppSettingsValues</code> is now the shared value half, deliberately pure
-          functions over one value each so the two readers keep their own policies for which
-          table, which partition, whether to count it, and how to report a failure.
+          <code>ConfigMigrationService.MigrateAppSettingsAsync</code> both read the legacy
+          <code>app_settings.json</code> file. They answer different questions, so the code
+          needs both of them. But they must write the same row for a given JSON value, and they
+          were different for five values.
+        </p>
+        <p>
+          The start-up reader stored the faction in the case of the file. It applied no clamp to
+          the sync range. It clamped the scav rep but did not round it, so it could write 2.37,
+          which no setter can make.
+        </p>
+        <p>
+          <code>LegacyAppSettingsValues</code> now holds the value half. Each function is pure
+          and operates on one value. Thus the two readers keep their own rules for the table,
+          the partition, the count and the failure report. The test
           <code>ConfigMigrationProfileAttributionTests.Both_legacy_readers_turn_one_file_into_the_same_profile_rows</code>
-          is the test that makes the agreement mechanical rather than remembered.
+          makes them agree by machine, and not by memory.
         </p>
 
-        <h3>The spinner that undid the import</h3>
+        <h3>The spin button that removed the import</h3>
         <p>
-          <code>ItemInventoryService</code> debounces its saves, and
-          <code>AdjustFirQuantity</code> re-persists <em>cached + delta</em> absolutely. A
-          pending save holds a quantity captured before the import, so one spinner nudge after
-          an import wrote the stale total back over the imported rows. The flush now happens
-          before the first write and never after it, and the cache is reloaded after the last
-          one.
+          <code>ItemInventoryService</code> delays its saves. <code>AdjustFirQuantity</code>
+          writes the sum of the cache value and the change as an absolute quantity. A save that
+          waits holds a quantity from before the import. Thus one operation of the spin button
+          after an import wrote the old total over the imported rows. The flush now occurs
+          before the first write, and never after it. The code loads the cache again after the
+          last write.
         </p>
 
-        <h3>The status assembled from two profiles</h3>
+        <h3>The status from two profiles</h3>
         <p>
-          <code>QuestProgressService.GetStatus</code> already carried an explicit
-          <code>ProgressSnapshot</code> through the whole prerequisite walk. Its six requirement
-          gates each re-entered <code>SettingsService.Instance</code> for their own value, so a
-          publish between two of them mixed one profile's editions with another's level: the
-          exact tearing the snapshot type exists to make unobservable, reappearing in its
-          largest consumer. Both snapshots are now parameters, and every recursive step carries
-          the same pair.
+          <code>QuestProgressService.GetStatus</code> already carried a
+          <code>ProgressSnapshot</code> through the full prerequisite walk. But its six
+          condition tests each read <code>SettingsService.Instance</code> for their own value. A
+          publish between two of these tests mixed the editions of one profile with the level of
+          another profile. This is the same defect that the snapshot type prevents, and it was
+          in the largest consumer of that type. Both snapshots are now parameters, and each
+          recursive step carries the same two snapshots.
         </p>
 
         <div class="code">
@@ -1538,19 +1580,19 @@ internal QuestStatus GetStatus(
 }</code></pre>
         </div>
 
-        <h3>Two deferrals, filed and cross-referenced</h3>
+        <h3>Two items for later, with references</h3>
         <p>
-          The review deferred two things, and both are now GitHub issues named from the code
-          that defers them rather than only from a spec: extracting the EFT install locator and
-          dropping the <code>MapSettings</code> facade, and removing the dead
-          <code>ShowLevelLockedQuests</code> setting
-          (<a href="https://github.com/josephjang/TarkovHelper/issues/45">issue 45</a>). A filed
-          issue the code never mentions is a dead link the next reader will not find.
+          The review kept two items for later. Each one is now a GitHub issue, and the code that
+          keeps the item gives the issue reference. The first item is to move the EFT install
+          locator out and to remove the <code>MapSettings</code> facade. The second item is to
+          remove the unused <code>ShowLevelLockedQuests</code> setting
+          (<a href="https://github.com/josephjang/TarkovHelper/issues/45">issue 45</a>). If the
+          code gives no reference, the next reader cannot find the issue.
         </p>
         <p>
-          The test suite grows from 692 to 779, with <code>TempStoreRoot</code> and
-          <code>SettingsServiceTestSupport</code> replacing scaffolding that had been copied into
-          six and three suites respectively.
+          The number of tests increases from 692 to 779. <code>TempStoreRoot</code> and
+          <code>SettingsServiceTestSupport</code> replace set-up code. That code was in six test
+          files and in three test files.
         </p>
       </section>
 
@@ -1561,9 +1603,9 @@ internal QuestStatus GetStatus(
           <div>
             <h2>Comprehension gate</h2>
             <p class="kicker">
-              Eight questions, all of which need the reasoning rather than the vocabulary. The
-              approval checklist below unlocks when all eight are right; wrong answers explain
-              themselves so you can go back and re-read.
+              There are eight questions. Each one needs the reasoning, and not the words. The
+              approval checklist below opens when all eight answers are correct. Each incorrect
+              answer gives an explanation, so you can read the chapter again.
             </p>
           </div>
         </div>
@@ -1571,12 +1613,12 @@ internal QuestStatus GetStatus(
         <div class="quiz-intro">
           <div class="quiz-score" id="quizScore">0/8</div>
           <div>
-            <strong>This gate is a speed regulator, not a formality.</strong>
+            <strong>This gate controls your speed. It is not a formality.</strong>
             <p style="margin:4px 0 0;color:#c2c2c2;">
-              A reviewer who approves this diff without being able to answer questions 3 and 4
-              has not reviewed it: those two are where a wrong reading of the ordering leaves
-              the hole exactly where it was. Answer, read the explanation either way, and revise
-              as you go.
+              Questions 3 and 4 are the important ones. At those two points, an incorrect
+              understanding of the sequence keeps the hole where it was. If you cannot answer
+              them, you did not review this change. Answer each question, read the explanation,
+              and correct your understanding.
             </p>
           </div>
         </div>
@@ -1591,24 +1633,35 @@ internal QuestStatus GetStatus(
 
       <footer>
         <p>
-          Sources: <code>docs/decisions/fix-profile-settings-race.spec.md</code>, whose Technical
-          Decisions this change rewrites, and the retirement note it adds to
-          <code>docs/decisions/feature-complete-profile-reset.spec.md</code>. Part 6
-          (<code>2026-08-profile-settings-race-code-guide.html</code>) covers the snapshot and
-          revision gate this change builds on; parts 2 and 4 are the deep-review companions to
-          parts 1 and 3. The labs reimplement the decision logic faithfully but are
-          illustrations, not the shipped code; the shipped behaviour is pinned by
-          <code>SettingsSetterContractTests</code> (the fan-out liveness check, the in-flight
-          window, the clamps), <code>SettingsPublishOutcomeTests</code> (what an edit reports),
-          <code>RefreshCoalescerTests</code> and <code>RefreshCoalescerSchedulingTests</code>
-          (the collapsing rule, the dispatcher scheduling, the echo suppression),
-          <code>RevisionGateTests</code>, <code>QuestStatusSettingsSnapshotTests</code>,
-          <code>ConfigMigrationProfileAttributionTests</code> (the per-value guard, the two
-          legacy readers, the inventory flush order) and <code>ProfileResetHooksTests</code>
-          (the reset hook's notify contract). Lab A's nesting case is the hazard the scope's
-          restore semantics prevents rather than a nesting that exists in
-          <code>UpdateEditionUI</code> today, which is exactly why the guard is a scope and not
-          a hand-managed flag.
+          Sources. The first is <code>docs/decisions/fix-profile-settings-race.spec.md</code>,
+          whose Technical Decisions this change rewrites. The second is the note that this
+          change adds to <code>docs/decisions/feature-complete-profile-reset.spec.md</code>.
+        </p>
+        <p>
+          Part 6 (<code>2026-08-profile-settings-race-code-guide.html</code>) shows the snapshot
+          and the revision gate that this change uses. Parts 2 and 4 are the deep-review guides
+          for parts 1 and 3. The labs obey the same decision logic as the code. But they are
+          examples, and they are not the released code.
+        </p>
+        <p>
+          These tests hold the released behaviour.
+          <code>SettingsSetterContractTests</code> holds the check at each announce, the
+          in-flight window and the clamps. <code>SettingsPublishOutcomeTests</code> holds the
+          result of an edit. <code>RefreshCoalescerTests</code> and
+          <code>RefreshCoalescerSchedulingTests</code> hold the collect rule, the dispatcher
+          schedule and the echo guard.
+        </p>
+        <p>
+          <code>RevisionGateTests</code> and <code>QuestStatusSettingsSnapshotTests</code> hold
+          the gate and the quest status. <code>ConfigMigrationProfileAttributionTests</code>
+          holds the guard on each value, the two legacy readers and the sequence of the
+          inventory flush. <code>ProfileResetHooksTests</code> holds the notify contract of the
+          reset hook.
+        </p>
+        <p>
+          In lab A, the nested case is the hazard that the scope prevents. There is no nested
+          repaint in <code>UpdateEditionUI</code> today. This is the reason for a scope, and not
+          for a flag that the code sets and clears by hand.
         </p>
       </footer>
     </main>
@@ -1665,9 +1718,9 @@ internal QuestStatus GetStatus(
       var flag = false;
       var steps = [];
 
-      steps.push({ t: "load fails", cls: "is-kill" });
+      steps.push({ t: "the load fails", cls: "is-kill" });
       steps.push({ t: "publish Defaults(pvp)", cls: "is-done" });
-      steps.push({ t: "HasEodEditionChanged(false)", cls: "is-done" });
+      steps.push({ t: "send HasEodEditionChanged(false)", cls: "is-done" });
 
       var outerSaved = flag;
       if (guarded) {
@@ -1685,7 +1738,7 @@ internal QuestStatus GetStatus(
           // This is the whole difference between the two after-worlds.
           flag = (A.world === "shipped") ? innerSaved : false;
           steps.push({
-            t: A.world === "shipped" ? "nested exit: restore -> " + flag : "nested exit: clear -> false",
+            t: A.world === "shipped" ? "nested exit: restore to " + flag : "nested exit: clear to false",
             cls: (A.world === "shipped") ? "is-win" : "is-kill"
           });
         }
@@ -1693,11 +1746,11 @@ internal QuestStatus GetStatus(
 
       var flagAtEcho = flag;
       steps.push({ t: "ChkEodEdition.IsChecked = false", cls: "is-now" });
-      steps.push({ t: "WPF raises Unchecked", cls: "is-done" });
+      steps.push({ t: "WPF sends Unchecked", cls: "is-done" });
 
       var wrote = !flagAtEcho;
       steps.push({
-        t: wrote ? "handler stores HasEodEdition = False" : "handler returns early",
+        t: wrote ? "the handler writes HasEodEdition = False" : "the handler stops",
         cls: wrote ? "is-kill" : "is-win"
       });
 
@@ -1725,22 +1778,23 @@ internal QuestStatus GetStatus(
 
       if (!r.wrote) {
         say(aVerdict, "good", "The echo writes nothing.",
-          "The box shows unchecked because the load failed and defaults were published, which is " +
-          "the honest thing to show for a profile whose rows could not be read. The stored flag is " +
-          "untouched, so the next successful load puts the check back. A re-confirmation heals it " +
-          "through _lastLoadFailed.");
+          "The box is clear because the load failed and the code published the defaults. This is " +
+          "the correct display for a profile whose rows the code cannot read. The stored flag does " +
+          "not change, so the next correct load sets the check again. A re-confirmation corrects " +
+          "the screen through _lastLoadFailed.");
       } else if (A.world === "before") {
-        say(aVerdict, "bad", "The player's Edge of Darkness flag is gone.",
-          "No guard existed outside startup: _isLoading is raised only for the Window_Loaded pass, " +
-          "while these events also arrive on a profile switch, a profile reset and the settings " +
-          "self-heal. The handler could not tell an assignment from a click, so it stored False. " +
-          "Nothing in the app recovers it, and the player did not touch anything.");
+        say(aVerdict, "bad", "The Edge of Darkness flag of the player is deleted.",
+          "There was no guard after start-up. The code sets _isLoading only for the Window_Loaded " +
+          "pass. But these events also occur at a profile change, at a profile reset and at the " +
+          "settings self-heal. The handler could not tell the difference between a write and a " +
+          "click, so it stored False. The application cannot get the value again, and the player " +
+          "touched no control.");
       } else {
-        say(aVerdict, "bad", "The nested repaint lowered its caller's guard.",
-          "A flag that is cleared on exit rather than restored assumes it was the only one raised. " +
-          "The inner scope sets it false on the way out, the outer scope's own assignment then runs " +
-          "unguarded, and the destructive write is back. This is why SuppressSettingsEcho remembers " +
-          "the value it found: Dispose puts THAT back, not false.");
+        say(aVerdict, "bad", "The nested repaint lowered the guard of its caller.",
+          "A flag that the code clears at the exit is correct only if no other scope is open. The " +
+          "inner scope sets it to false at the exit. The write in the outer scope then has no " +
+          "guard, and the write that destroys data occurs again. Therefore SuppressSettingsEcho " +
+          "keeps the value that it found, and Dispose puts THAT value back, and not false.");
       }
     }
 
@@ -1820,27 +1874,28 @@ internal QuestStatus GetStatus(
 
       if (!pveFactionLate) {
         if (B.policy === "shipped") {
-          say(bVerdict, "good", "Every announce asks first, so none of them can be late.",
-            "PvE delivered " + deliveredCount + " of its seven and stopped the moment the cache " +
-            "moved. A partial fan-out is safe by construction: Season published and announced all " +
-            "seven of its own values, so nothing is left showing PvE.");
+          say(bVerdict, "good", "Each announce asks first, so no announce can be too late.",
+            "PvE sent " + deliveredCount + " of its seven events, and it stopped when the cache " +
+            "changed. A part of a fan-out is safe. Season published and announced all seven of " +
+            "its own values, so no control shows PvE.");
         } else {
-          say(bVerdict, "good", "Correct, but by luck rather than by construction.",
-            "PvE happened to announce its faction before Season landed, so Season's own faction " +
-            "event overwrote it. Move the slider to 3 or below and the same policy hands the radio " +
-            "PvE's faction with the cache holding Season.");
+          say(bVerdict, "good", "Correct, but only by chance.",
+            "PvE announced its faction before Season published, so the faction event of Season " +
+            "replaced it. Move the slider to 3 or less. The same rule then puts the PvE faction " +
+            "in the radio button while the cache holds Season.");
         }
       } else if (B.policy === "once") {
-        say(bVerdict, "bad", "One check up front cannot see a switch that lands later.",
-          "The check passed because the cache still held PvE when the fan-out began. Then Season " +
-          "published mid-fan-out and PvE kept announcing, because each handler can block this " +
-          "thread for as long as the dispatcher takes to run it. The question has to be re-asked " +
-          "before every event, not once.");
+        say(bVerdict, "bad", "One check at the start cannot see a later profile change.",
+          "The check was correct, because the cache still held PvE at the start of the fan-out. " +
+          "Then Season published during the fan-out, and PvE continued to announce. Each handler " +
+          "can stop this thread while the dispatcher does its work. Therefore the code must ask " +
+          "the question before each event, and not one time.");
       } else {
-        say(bVerdict, "bad", "The radio shows bear while the cache holds season.",
-          "QuestListPage takes its faction from this event rather than from the snapshot, and on " +
-          "the next filter change it persists what the radio says. So PvE's faction is not just " +
-          "displayed under Season's name, it gets written into Season.");
+        say(bVerdict, "bad", "The radio button shows bear, but the cache holds season.",
+          "QuestListPage sets its faction from this event, and not from the snapshot. At the next " +
+          "filter change, the page writes the value of the radio button to the store. Thus the " +
+          "screen shows the PvE faction with the Season name, and then it writes that faction " +
+          "into Season.");
       }
     }
 
@@ -1931,28 +1986,29 @@ internal QuestStatus GetStatus(
       cScreen.setAttribute("data-tone", r.reverts ? "bad" : "good");
 
       if (r.reverts) {
-        say(cVerdict, "bad", "The load republished rows the player had already replaced.",
-          "The capture landed after the generation bump but before the write committed, so the " +
-          "generation looks unmoved at publish time and the rows are pre-edit. The player's 40 is " +
-          "durable in the store and gone from the screen, under the right profile id with no " +
-          "failure recorded, and nothing in this service repairs it until they switch profile by " +
-          "hand. This is the hole a single counter leaves no matter where the bump sits.");
+        say(cVerdict, "bad", "The load published rows that the player already replaced.",
+          "The load read the counters after the increase, but before the write was complete. Thus " +
+          "the generation is the same at the publish, and the rows are older than the edit. The " +
+          "store holds the 40 of the player, but the screen does not show it. The profile id is " +
+          "correct and the code records no failure. This service repairs nothing until the player " +
+          "changes the profile by hand. One counter leaves this hole in each position.");
       } else if (r.overtaken && !r.rowsAreStale) {
-        say(cVerdict, "good", "Overtaken, and one extra read is the whole cost.",
-          "The in-flight counter is still raised, so the load reads again even though the rows it " +
-          "read were already current. That is the deliberate trade: the counter is non-zero for " +
-          "the entire span in which the edit's row MAY be unreadable, and paying one redundant " +
-          "read is cheaper than reasoning about which part of that span is safe. MaxLoadAttempts " +
-          "is 3, after which the edited snapshot keeps the last word.");
+        say(cVerdict, "good", "An edit is in operation, and one more read is the full cost.",
+          "The in-flight counter is more than zero, so the load reads the store again. The rows " +
+          "that it read were already correct. This is the accepted cost. The counter is more than " +
+          "zero for all the time in which the code CAN fail to read the row of the edit. One more " +
+          "read is easier than an analysis of which part of that time is safe. MaxLoadAttempts is " +
+          "3, and then the snapshot with the edits stays.");
       } else if (r.overtaken) {
-        say(cVerdict, "good", "Overtaken, so the load reads again instead of reverting.",
-          "Either signal is enough: the generation moved, or an edit was in flight across the read. " +
-          "The load re-reads, sees the committed row, and publishes the value the player typed.");
+        say(cVerdict, "good", "An edit occurred, so the load reads the store again.",
+          "One signal is sufficient: the generation is different, or an edit was in operation " +
+          "during the read. The load reads again, finds the new row, and publishes the value that " +
+          "the player typed.");
       } else {
-        say(cVerdict, "good", "Nothing to overtake.",
-          "The capture is outside the edit's span entirely, so the rows the load read are the " +
-          "current ones and publishing them is correct. Note the second half of the shipped " +
-          "condition too: only an edit to the profile being PUBLISHED can be lost by this swap.");
+        say(cVerdict, "good", "No edit is in operation.",
+          "The load read the counters outside the time of the edit. Therefore the rows are correct " +
+          "and the publish is correct. Examine the second half of the condition: this swap can " +
+          "only lose an edit to the profile that the code PUBLISHES.");
       }
     }
 
@@ -1972,11 +2028,11 @@ internal QuestStatus GetStatus(
     // Five rows, all legal SQLite under a (ProfileId, Key) primary key with no
     // COLLATE NOCASE. The first two differ only in case, so they are two rows.
     var D_ROWS = [
-      { key: "app.playerLevel", value: "42", note: "written by the setter" },
-      { key: "app.PlayerLevel", value: "9999", note: "hand edited into the file" },
-      { key: "app.scavRep", value: "12.5", note: "legacy import, never clamped" },
-      { key: "app.dspDecodeCount", value: "99", note: "hand edited" },
-      { key: "app.playerFaction", value: "USEC", note: "older build, file casing" }
+      { key: "app.playerLevel", value: "42", note: "the setter wrote this row" },
+      { key: "app.PlayerLevel", value: "9999", note: "a player edited the file by hand" },
+      { key: "app.scavRep", value: "12.5", note: "the legacy import wrote this row with no clamp" },
+      { key: "app.dspDecodeCount", value: "99", note: "a player edited the file by hand" },
+      { key: "app.playerFaction", value: "USEC", note: "an old build kept the case of the file" }
     ];
 
     var D = { comparer: "ordinal", parse: "clamped" };
@@ -2014,7 +2070,7 @@ internal QuestStatus GetStatus(
         var line = el("div", "read-row" + (isDropped ? " is-dropped" : "") + (i === 1 ? " is-boundary" : ""));
         line.appendChild(el("span", "rk", row.key));
         line.appendChild(el("span", "rv", row.value));
-        line.appendChild(el("span", "ro", isDropped ? "dropped: same key under this comparer" : row.note));
+        line.appendChild(el("span", "ro", isDropped ? "removed: this comparer finds the same key" : row.note));
         dRows.appendChild(line);
       });
 
@@ -2038,23 +2094,23 @@ internal QuestStatus GetStatus(
           v: String(level),
           bad: level > 79,
           note: level > 79
-            ? "answers every quest's level requirement, so the list reads as unlocked"
-            : "within the levels the game has"
+            ? "more than the level condition of each quest, thus the full list shows as unlocked"
+            : "in the range of levels that the game has"
         },
         {
           k: "ScavRep",
           v: scav.toFixed(1),
           bad: scav > 6,
           note: scav > 6
-            ? "reaches Fence karma quest filtering unbounded"
-            : "inside the range the setter accepts"
+            ? "goes to the Fence karma quest filter with no range"
+            : "in the range that the setter accepts"
         },
         {
           k: "DspDecodeCount",
           v: String(dsp),
           bad: dsp > 3,
           note: dsp > 3
-            ? "Make Amends branches match EXACTLY, so this matches none and locks them all"
+            ? "the Make Amends branches match EXACTLY, thus this value matches none and locks all of them"
             : "matches a Make Amends branch"
         },
         {
@@ -2062,8 +2118,8 @@ internal QuestStatus GetStatus(
           v: faction,
           bad: faction !== faction.toLowerCase(),
           note: faction !== faction.toLowerCase()
-            ? "LoadFactionSelection compares ordinally: neither radio selected, filtering still applies"
-            : "the one spelling the whole app agrees on"
+            ? "LoadFactionSelection compares ordinal text, thus no radio button is set, but the filter still operates"
+            : "the one spelling that all the application uses"
         }
       ];
 
@@ -2082,27 +2138,28 @@ internal QuestStatus GetStatus(
       var collapsed = Object.keys(built.dropped).length > 0;
 
       if (badCount === 0 && !collapsed) {
-        say(dVerdict, "good", "Every value is one the app itself could have written.",
-          "Ordinal keeps the hand-edited app.PlayerLevel as the separate row it is, exactly as the " +
-          "per-key SELECT this bulk read replaced did, and the clamps mean the funnel every stored " +
-          "row passes through cannot hand quest filtering a number no setter could produce.");
+        say(dVerdict, "good", "The application can write each of these values.",
+          "Ordinal keeps the row that a player edited by hand, app.PlayerLevel, as a different " +
+          "row. The eight SELECT statements did the same. The clamps make sure that the quest " +
+          "filter gets no number that a setter cannot make.");
       } else if (collapsed && badCount > 0) {
-        say(dVerdict, "bad", "Row order decided the level, and nothing clamped what it decided.",
-          "A case-insensitive dictionary collapses the two legal rows last-row-wins, so a row the " +
-          "app never wrote and the old per-key SELECT never returned becomes the setting. Without " +
-          "the clamp it reaches quest filtering intact. " + badCount + " of the four values are now " +
-          "outside what any setter can produce.");
+        say(dVerdict, "bad", "The sequence of the rows set the level, and no clamp corrected it.",
+          "A dictionary that ignores the case keeps only the last of the two rows. Thus a row " +
+          "becomes the setting, but the application never wrote it and the old SELECT never " +
+          "returned it. With no clamp, that value goes to the quest filter. " + badCount + " of " +
+          "the four values are now outside the range that a setter can make.");
       } else if (collapsed) {
-        say(dVerdict, "bad", "The clamp is hiding a read that is already wrong.",
-          "The level lands at 79 rather than 9999, which looks harmless, but it is still the " +
-          "hand-edited row winning over the one the setter wrote: 42 was the player's actual level. " +
-          "Clamping bounds the damage; Ordinal is what stops the wrong row from being read at all.");
+        say(dVerdict, "bad", "The clamp hides a read that is already incorrect.",
+          "The level is 79 and not 9999, and this looks safe. But the row that a player edited by " +
+          "hand is still more important than the row that the setter wrote. The correct level of " +
+          "the player was 42. The clamp limits the damage, but Ordinal stops the read of the " +
+          "incorrect row.");
       } else {
-        say(dVerdict, "bad", "The right rows, parsed without bounds.",
-          "Ordinal picked the setter's own row for the level, but the other three go through " +
-          "unclamped. These rows are not hypothetical: a plain SQLite table is hand editable, and " +
-          "the legacy app_settings.json import carried its numbers through unchecked for years. " +
-          badCount + " of the four values are outside what any setter can produce.");
+        say(dVerdict, "bad", "The rows are correct, but the code applies no range.",
+          "Ordinal selected the row of the setter for the level. But the other three values have " +
+          "no clamp. These rows are real. A player can edit a plain SQLite table by hand, and the " +
+          "legacy app_settings.json import wrote its numbers with no check for many years. " +
+          badCount + " of the four values are outside the range that a setter can make.");
       }
     }
 
@@ -2121,104 +2178,104 @@ internal QuestStatus GetStatus(
 
     var QUESTIONS = [
       {
-        q: "The destructive Edge of Darkness write needed no player action. What made a settings load able to reach the store at all?",
+        q: "The write that deleted the Edge of Darkness flag needed no player action. What started the sequence?",
         options: [
-          "The load wrote defaults into the store, which the checkbox then read back",
-          "Publishing that profile's defaults raised HasEodEditionChanged(false); assigning CheckBox.IsChecked raises Unchecked exactly as a click does, and the handler treated that echo as an edit and persisted it",
-          "The reset hook cleared the editions along with the rest of the profile",
-          "The snapshot's HasEodEdition was null, and null persists as False"
+          "The load wrote the defaults into the store, and the checkbox then read them",
+          "The publish of the defaults sent HasEodEditionChanged(false). A write to CheckBox.IsChecked sends Unchecked, and a click sends the same event. The handler read that echo as an edit and wrote it to the store",
+          "The reset hook cleared the editions with the other values of the profile",
+          "HasEodEdition in the snapshot was null, and the code writes null as False"
         ],
         answer: 1,
-        why: "Every link is ordinary on its own: defaults on an unreadable store (correct, and part 6's design), a repaint from the changed event (correct), and a change handler that persists what the control says (correct for a click). The defect is that WPF gives the handler no way to tell the two apart, so the chain runs end to end with nobody touching anything."
+        why: "Each step is correct alone. The defaults for a store that the code cannot read are correct, and they are the part 6 design. The repaint from the changed event is correct. A change handler that writes the value of the control is correct for a click. The defect is that WPF gives the handler no way to see the difference. Therefore the full sequence runs, and no person touches a control."
       },
       {
-        q: "SettingsEchoSuppression restores the previous value on Dispose instead of setting the flag to false. What does that buy?",
+        q: "SettingsEchoSuppression puts back the previous value at Dispose. It does not set the flag to false. What does this give you?",
         options: [
-          "It makes the struct usable from a background thread",
-          "It lets the same scope be opened twice for one repaint",
-          "A nested repaint's exit would otherwise lower a guard its caller raised, so the caller's own remaining assignments would run unguarded and the destructive write returns",
-          "It avoids a write to the field when the flag was already true, which matters for performance"
+          "The struct can operate from a background thread",
+          "The code can open the same scope two times for one repaint",
+          "The exit of a nested repaint would lower the guard of its caller. The other writes in the caller would then have no guard, and the write that destroys data occurs again",
+          "It prevents a write to the field when the flag is already true, which is faster"
         ],
         answer: 2,
-        why: "Lab A is exactly this: pick 'clears on exit' with nesting on and the write comes back. A hand-managed flag assumes it is the only one raised, which is true right up until two repaint paths compose. Restoring makes the guard correct under composition instead of correct by inspection."
+        why: "Lab A shows this. Select 'clears on exit' and set the nested repaint to on, and the write occurs again. A flag that the code sets and clears by hand is correct only if no other scope is open. That is true until two repaint methods operate together. The scope that puts back the previous value is correct in all conditions."
       },
       {
-        q: "The fan-out re-asks whether its snapshot is still live before EVERY one of the seven events rather than once before the first. Why is once not enough?",
+        q: "The fan-out asks before EACH of the seven events if the cache still holds its snapshot. It does not ask one time at the start. Why is one time not sufficient?",
         options: [
-          "The seven events are raised on seven different threads, so each needs its own check",
-          "Each handler marshals onto the dispatcher and can block the announcing thread for as long as the dispatcher takes, so a switch can land between two events of the same fan-out",
-          "The snapshot reference can be mutated in place between events",
-          "The publish gate is released between events, which is what allows the switch"
+          "Seven different threads send the seven events, so each event needs its own check",
+          "Each handler moves to the dispatcher and can stop the announce thread while the dispatcher does its work. Thus a profile change can occur between two events of the same fan-out",
+          "The code can change the values in the snapshot between two events",
+          "The code releases the publish gate between the events, and this permits the profile change"
         ],
         answer: 1,
-        why: "The announcing thread is not fast and is not atomic. It is parked on the dispatcher for each handler in turn, which is exactly the window a manual switch runs in. Set lab B's policy to 'check once up front' and slide the landing to 3 or below to watch a fan-out that passed its only check keep announcing a profile the cache no longer holds."
+        why: "The announce thread is slow, and it is not one operation. The dispatcher stops it for each handler in sequence. A manual profile change occurs in that window. In lab B, select 'check once up front' and move the slider to 3 or less. The fan-out passed its only check, but it continues to announce a profile that the cache does not hold."
       },
       {
-        q: "_editGeneration is bumped BEFORE the store write. Adding _editsInFlight closes a hole that placement leaves. Which hole?",
+        q: "The code increases _editGeneration BEFORE the store write. _editsInFlight closes a hole that this position leaves. Which hole?",
         options: [
-          "A load that reads rows before the bump and checks the counter after it, which the generation alone already reports",
-          "A load that captures the already-bumped generation, reads rows the write has not committed yet, finds the generation unmoved at publish time, and republishes the value the player just replaced",
-          "Two edits to the same key racing each other, where the second bump is lost",
-          "An edit whose publish is superseded, whose bump is then never undone"
+          "A load that reads the rows before the increase and reads the counter after it, which the generation alone already shows",
+          "A load reads the counter after the increase. It reads rows before the write is complete. At the publish the generation is the same, so the load publishes the value that the player replaced",
+          "Two edits to the same key at the same time, where the code loses the second increase",
+          "An edit whose publish fails, and whose increase the code never removes"
         ],
         answer: 1,
-        why: "Slide lab C to position 2 and switch between the two policies: it is the only position where they disagree. Moving the generation bump after the write does not fix it, it mirrors it. Two counters close both directions only because each is touched in the opposite order on the two sides: the edit raises in-flight first and lowers it last, the load captures the generation first and in-flight second."
+        why: "In lab C, move the slider to position 2 and change between the two conditions. This is the only position where they are different. If you move the increase after the write, the hole moves to the other side. Two counters close the two directions, but only if each side touches them in the opposite sequence. The edit increases in-flight first and decreases it last. The load reads the generation first and in-flight second."
       },
       {
-        q: "When a load is overtaken by edits on all three attempts, it keeps the edited snapshot and announces the LIVE snapshot rather than returning quietly. Why announce at all, when nothing was published?",
+        q: "An edit occurs at all three attempts. The load keeps the snapshot with the edits, and it announces the LIVE snapshot. Why does it announce, when it published nothing?",
         options: [
-          "The seven events are how subscribers learn the load finished, successfully or not",
-          "HandleProfileReset reaches this as a plain Action whose contract is that the cache is current AND announced when it returns; returning quietly left the settings panel showing values the reset had wiped",
-          "Announcing resets _lastLoadFailed, which the self-heal depends on",
-          "Without it the revision counter would never advance past this load"
+          "The seven events tell the subscribers that the load is complete, with success or with failure",
+          "HandleProfileReset calls this code as a plain Action. Its contract is that the cache is correct AND announced when the action is complete. A quiet return left old values in the settings panel after the reset removed them",
+          "The announce clears _lastLoadFailed, which the self-heal needs",
+          "Without the announce, the revision counter cannot go past this load"
         ],
         answer: 1,
-        why: "The cache genuinely is current in this branch, which is why keeping it is right. But the caller was promised a fan-out, and one half of that promise does not depend on whether this particular load published. The live snapshot is the honest thing to announce because it is the one every getter answers from."
+        why: "The cache is correct in this condition, and this is why the code keeps it. But the caller expects a fan-out, and one half of that expectation does not depend on this load. The live snapshot is the correct one to announce, because each getter gives its values."
       },
       {
-        q: "LoadProfileSettings builds its dictionary with StringComparer.Ordinal. What breaks under OrdinalIgnoreCase?",
+        q: "LoadProfileSettings makes its dictionary with StringComparer.Ordinal. What fails with OrdinalIgnoreCase?",
         options: [
-          "Keys stored by older builds in mixed case stop being found at all",
-          "The dictionary throws on the duplicate key, failing the whole load",
-          "ProfileSettings has no COLLATE NOCASE, so rows differing only in case are two legal rows; an ignore-case dictionary collapses them last-row-wins, letting row order decide the value and giving a hand-edited row an effect the per-key SELECT never gave it",
-          "SQLite returns the rows in an undefined order, so the comparer cannot be relied on either way"
+          "The code cannot find the keys that old builds stored in mixed case",
+          "The dictionary sends an exception for the second key, and the full load fails",
+          "ProfileSettings has no COLLATE NOCASE, so two rows that are different only in the case are two permitted rows. A dictionary that ignores the case keeps only the last row. Thus the sequence of the rows sets the value. A row that a player edited by hand then has an effect that the SELECT statement did not give it",
+          "SQLite returns the rows in no known sequence, so you cannot use the comparer"
         ],
         answer: 2,
-        why: "The bulk read replaced eight per-key SELECTs, and matching their behaviour means matching the storage's own collation. The build is result[key] = value, an indexer rather than Add, so the collapse is silent: no exception, just the wrong row winning. Lab D shows both rows and which one gets dropped."
+        why: "The bulk read replaced eight SELECT statements, one for each key. To keep their behaviour, the dictionary must use the collation of the storage. The code writes result[key] = value with an indexer, and not with Add. Thus there is no exception, and the incorrect row becomes the value. Lab D shows the two rows and the row that the code removes."
       },
       {
-        q: "RefreshCoalescer.OnDispatcher schedules through BeginInvoke rather than InvokeAsync. What is the difference that matters here?",
+        q: "RefreshCoalescer.OnDispatcher uses BeginInvoke, and not InvokeAsync. Which difference is important here?",
         options: [
-          "InvokeAsync runs the callback inline when already on the UI thread, so nothing coalesces",
-          "BeginInvoke accepts a DispatcherPriority and InvokeAsync does not",
-          "The DispatcherOperation InvokeAsync returns carries the callback's exception rather than rethrowing it, so discarding that operation, as a fire-and-forget schedule must, swallows a throwing refresh silently",
-          "InvokeAsync allocates a Task per request, which a per-event burst cannot afford"
+          "InvokeAsync runs the callback immediately on the user-interface thread, so the code collects nothing",
+          "BeginInvoke accepts a DispatcherPriority, but InvokeAsync does not accept one",
+          "The DispatcherOperation from InvokeAsync holds the exception of the callback, and it does not send the exception again. A fire-and-forget schedule must discard that operation, so a refresh that fails gives no message",
+          "InvokeAsync makes a Task for each request, and a group of events cannot accept that cost"
         ],
         answer: 2,
-        why: "Both queue the callback, so both coalesce. The difference is only visible when the refresh throws: BeginInvoke's operation raises Dispatcher.UnhandledException, which is the error path App.xaml.cs installs and logs through. The inline hazard in option 1 is real but belongs to Dispatcher.Invoke, and is why the priority is Background."
+        why: "Both methods put the callback in the queue, so both collect the events. You see the difference only when the refresh fails. The operation from BeginInvoke sends Dispatcher.UnhandledException. App.xaml.cs installs that path and writes the error to the log. The hazard in option 1 is real, but it applies to Dispatcher.Invoke. That hazard is the reason for the Background priority."
       },
       {
-        q: "ApplyPlayerLevelFromTextBox calls UpdatePlayerLevelUI unconditionally, even when it wrote nothing to the service. Why is the unconditional repaint load-bearing?",
+        q: "ApplyPlayerLevelFromTextBox always calls UpdatePlayerLevelUI, also when it wrote nothing to the service. Why is this repaint necessary?",
         options: [
-          "The echo guard has to be reopened so the next event can be suppressed",
-          "Typing 999 clamps to 79, the setter finds 79 already stored and raises no event, so without the repaint the box keeps showing 999 as though it had been accepted",
-          "The buttons' IsEnabled state is only recomputed by a repaint, and a no-op edit can still change it",
-          "It re-reads the snapshot, which is the only way to notice a profile switch that landed during the edit"
+          "The code must open the echo guard again to stop the next event",
+          "The value 999 clamps to 79. The setter finds that the store already holds 79 and sends no event. Without the repaint, the box continues to show 999, and the player thinks that the application accepted that value",
+          "Only a repaint calculates the IsEnabled state of the buttons, and an edit that changes nothing can still change that state",
+          "The repaint reads the snapshot again, which is the only way to find a profile change that occurred during the edit"
         ],
         answer: 1,
-        why: "The repaint covers two cases that raise no event: an unparsable entry ('abc'), which must not be left sitting in the box, and a clamped one, where the value applied differs from the value typed but matches the value stored. Both would otherwise leave the drawer showing something the service never agreed to."
+        why: "The repaint corrects two conditions that send no event. In the first, the text is not a number, for example 'abc', and the box must not keep it. In the second, the clamp changes the value, and the new value is the value that the store already holds. Without the repaint, the drawer shows a value that the service did not accept."
       }
     ];
 
     var CHECKLIST = [
-      "Announce re-checks ReferenceEquals against _profileSettings before EVERY one of the seven events, not once before the fan-out.",
-      "All five Update*UI methods open SuppressSettingsEcho, the struct restores rather than clears, and ChkEdition_Changed tests both _isLoading and _isUpdatingSettingsUI.",
-      "The two drawer text boxes compare before writing and repaint unconditionally afterwards.",
-      "An edit raises _editsInFlight before the generation bump and lowers it after the publish; a load captures the generation first and _editsInFlight second, and the publish check tests both against the same-profile guard.",
-      "The give-up branch publishes and announces the live snapshot instead of returning silently, so HandleProfileReset's notify contract holds.",
-      "ProfileSettingsSnapshot.From clamps PlayerLevel, ScavRep, DspDecodeCount and PrestigeLevel, and lower-cases the faction; LoadProfileSettings uses StringComparer.Ordinal.",
-      "MainWindow pushes no page refresh from its settings handlers, the pages build their coalescer through RefreshCoalescer.OnDispatcher, and ItemsPage's async void rebuild is wrapped.",
-      "The legacy import declares its counter outside the try and guards each value, both legacy readers go through LegacyAppSettingsValues, and the inventory flush happens before the first write with the reload after the last."
+      "Announce does the ReferenceEquals check against _profileSettings before EACH of the seven events, and not one time before the fan-out.",
+      "All five Update*UI methods open SuppressSettingsEcho. The struct puts back the previous value, and does not clear it. ChkEdition_Changed tests _isLoading and _isUpdatingSettingsUI.",
+      "The two text boxes in the drawer compare the value before they write it, and they always repaint after that.",
+      "An edit increases _editsInFlight before it increases the generation, and decreases it after the publish. A load reads the generation first and _editsInFlight second. The publish tests both counters with the same-profile guard.",
+      "The condition with no more attempts publishes and announces the live snapshot. It does not return quietly. Thus the notify contract of HandleProfileReset is correct.",
+      "ProfileSettingsSnapshot.From clamps PlayerLevel, ScavRep, DspDecodeCount and PrestigeLevel, and makes the faction lower case. LoadProfileSettings uses StringComparer.Ordinal.",
+      "The settings handlers in MainWindow do not refresh a page. The pages make their coalescer with RefreshCoalescer.OnDispatcher. A try block protects the async void rebuild in ItemsPage.",
+      "The legacy import declares its counter outside the try block and guards each value. Both legacy readers use LegacyAppSettingsValues. The inventory flush occurs before the first write, and the reload after the last write."
     ];
 
     var answered = {};
@@ -2294,17 +2351,23 @@ internal QuestStatus GetStatus(
         gateTitle.textContent = "Approval checklist: unlocked";
         gateBody.innerHTML = "";
         gateBody.appendChild(document.createTextNode(
-          "Eight of eight. You have the model; now check the diff against it. Walk these before approving:"));
+          "Eight of eight. You know the design. Now compare the changes with it. Check these items before you approve:"));
         var ul = el("ul");
         CHECKLIST.forEach(function (line) { ul.appendChild(el("li", null, line)); });
         gateBody.appendChild(ul);
         var pre = el("pre", "approval",
-          "Reviewed the settings deep-review fixes on PR #46 against docs/2026-08-profile-settings-race-deep-review-guide.html\n" +
+          "Reviewed the settings deep-review corrections on PR #46.\n" +
+          "Guide: docs/2026-08-profile-settings-race-deep-review-guide.html\n" +
           "Comprehension gate: 8/8\n" +
-          "Checklist walked: per-event announce liveness, echo suppression scope and its restore, " +
-          "compare-before-write on the drawer boxes, the two edit counters and their orders, " +
-          "the give-up branch's fan-out, clamps and the Ordinal bulk read, coalesced refresh, " +
-          "per-value legacy import");
+          "Checklist items examined:\n" +
+          "1. The check before each announce.\n" +
+          "2. The echo scope and the value that it puts back.\n" +
+          "3. The comparison before the write in the drawer boxes.\n" +
+          "4. The two edit counters and their sequences.\n" +
+          "5. The fan-out when there are no more attempts.\n" +
+          "6. The clamps and the Ordinal bulk read.\n" +
+          "7. The collected refresh.\n" +
+          "8. The guard on each import value.");
         gateBody.appendChild(pre);
       } else {
         railLabel.textContent = "Gate locked";
@@ -2312,8 +2375,8 @@ internal QuestStatus GetStatus(
         gateTitle.textContent = "Approval checklist: locked";
         gateBody.innerHTML = "";
         gateBody.appendChild(document.createTextNode(
-          "Answer all eight questions correctly to unlock the reviewer checklist. " +
-          correct + " of " + QUESTIONS.length + " so far; wrong answers explain themselves, so re-read and revise."));
+          "Answer all eight questions correctly to open the reviewer checklist. You have " +
+          correct + " of " + QUESTIONS.length + " correct. Each incorrect answer gives an explanation, so read the chapter again."));
       }
     }
 
