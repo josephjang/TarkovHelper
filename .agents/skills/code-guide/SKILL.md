@@ -12,3 +12,11 @@ A guide is a teaching artifact for reviewers and future maintainers, not a
 changelog: it explains why the change is shaped the way it is, and its labs let
 the reader drive the actual decision logic. Only substantial changes earn one
 (multi-file design work, usually with decision docs behind it).
+
+Two rules are easy to miss and are both enforced by the checkers in
+`scripts/`:
+
+- The prose is written to **ASD-STE100** (Simplified Technical English). Quoted
+  code, comments inside it, identifiers and test names are never rewritten.
+- The labs are proved **in node**, against the shipped behaviour read out of the
+  source. The browser pass is for layout only.
