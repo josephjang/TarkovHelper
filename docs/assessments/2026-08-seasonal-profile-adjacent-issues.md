@@ -121,3 +121,48 @@ natural future work boundaries are:
 
 Each future PR names these IDs and creates its focused decision documents. Closing or
 rejecting work is recorded in the PR/issue, not by editing this frozen assessment.
+
+## Verification note, appended 2026-08-16
+
+Added on request after a code check at commit `ffa08d1`. The snapshot above is
+unchanged; this note records where the code stands now. Two findings were resolved
+in substance by PRs that did not name their SPT IDs, so this note is the pointer
+those PRs were expected to leave.
+
+- **SPT-1: still open.** The method is now `ProfileService.SetActiveProfile`, but
+  the shape is exactly the finding's: the active-profile write is started as a
+  discarded task with no await, serialization, or latest-wins ordering, and
+  `UserDataDbService.SetSettingAsync` opens a fresh connection per call. Rapid
+  switches can still persist out of order, leaving an older selection to win after
+  restart. Only durability is at stake now: in memory, transitions are ordered by
+  the profile revision introduced with the attribution work. Severity: unchanged
+  Medium; the failure stays silent and needs rapid switches plus out-of-order
+  completion, and log-based auto-switching often re-corrects the stale value at
+  the next launch. Effort: small; serialize or coalesce at the one call site and
+  add the ordering guard tests from the finding.
+- **SPT-2: resolved in substance.** File preselection shipped as a rider on the
+  SPA-5 correctness fix (`fix-profile-data-attribution.md` R8) rather than as a
+  separate performance spec. `LogSyncService.IsWithinCutoff` prunes files before
+  parsing, deliberately generously: last-write time is the primary test, the
+  folder-name stamp is the fallback, and unreadable metadata or a session spanning
+  the cutoff keeps the file. Event-level filtering remains the correctness
+  boundary, and range `0` still scans all history. Guard tests:
+  `LogSyncAttributionTests`.
+- **SPT-3: still open.** Both cutoff sites still derive the cutoff from ambient
+  `DateTime.Now` (`ParseLogDirectoryAsync` and `SyncFromLogsAsync`), and no clock
+  abstraction exists in the project. The range tests build fixture timestamps
+  around the test run's own clock, as this finding predicted. The recommended
+  trigger, revising the sync-range behavior, has already passed without the seam
+  being added. Severity: unchanged Low, test determinism only. Effort: small; a
+  clock parameter through the two cutoff sites and a rewire of the range tests.
+- **SPT-4: resolved for its specific complaint.** `UserDataDbService` gained an
+  internal constructor taking an explicit database path, documented as a test seam
+  with the production singleton unchanged. `ProfileResetStoreTests` builds
+  multiple instances against distinct temporary paths in one process, including
+  concurrent instances racing schema migration, and `E2ETestHarness` uses the same
+  seam. The broader ARC-1 and TEST-1 work it was to coordinate with stays open.
+
+Remaining work to discharge this assessment: SPT-1 (a focused latest-wins
+persistence fix at the profile boundary; the guard-test recipe above still applies
+verbatim) and SPT-3 (a small clock seam through the two cutoff sites). Both are
+small efforts; SPT-1 is the one with user-visible stakes.

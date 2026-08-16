@@ -1423,3 +1423,147 @@ rather than a single authoritative text.
 - Michael Nygard, "Release It!" (2nd ed., 2018): transparency, fail fast.
 - ECMA-335 (CLI specification): atomicity of native-word reference writes.
 
+---
+
+## Verification note, appended 2026-08-16
+
+Added on request after a code check at commit `ffa08d1`. The snapshot above is
+unchanged; this note records where each finding stands now. Since `d1734b4`,
+39 commits have landed, all on the seasonal-profile line of work (profile data
+attribution, revision-gated reloads, complete profile reset, the settings race
+fix), and the verdicts fall exactly along that line. `App.xaml.cs`,
+`Program.cs`, `MapPage.xaml.cs`, and `Settings/MapSettings.cs` have zero diff
+since the snapshot, which mechanically accounts for many of the open verdicts.
+The snapshot's severity and effort ratings still apply to every open finding;
+adjustments for the partials are noted inline.
+
+Status: 2 fixed, 11 partial, 21 open.
+
+### Fixed
+
+- **THR-1**: quest progress is now a single immutable `ProgressSnapshot`
+  (ImmutableDictionary fields) published by `Volatile` read/write with a CAS
+  retry loop (`QuestProgressService.Mutate`); reloads build off to the side,
+  check `RevisionGate`, and publish once. `HideoutProgressService` guards
+  mutation, reset, and load publication with a dedicated `_stateGate` lock.
+  The exact build-then-swap recommendation shipped as part of the profile
+  attribution work. The assessment's only Critical is closed.
+- **TEST-1**: the suite roughly doubled (about 270 to about 660 cases) and
+  the coverage inversion is corrected: `UserDataDbService` is exercised
+  against real temp-file databases (`TempStoreRoot.NewStore` through the
+  internal path constructor; `ProfileResetStoreTests` seeds every owned table
+  and reads it back), log parsing has `LogSyncAttributionTests` plus the EFT
+  parser suites, and the `AppProfileId` migration is covered including an
+  eight-instance concurrent-migration race. One carve-out stands:
+  `MigrateToProfileSchemaAsync`, the destructive rename-copy-drop migration
+  DATA-2 worries about, has still never been executed by a test.
+
+### Partial
+
+- **THR-3**: the five synchronous accessors still block on
+  `InitializeAsync().GetAwaiter().GetResult()`; init now has a synchronized
+  `SemaphoreSlim` fast path, and `ConfigureAwait(false)` exists in exactly
+  two files (`UserDataDbService`, `TrackedUserDataWrites`; 27 sites), zero
+  elsewhere.
+- **THR-4**: 14 blocking sites are down to 4: three startup loads plus
+  `HideoutProgressService.SaveSingleModule`, the one remaining write that
+  freezes the UI on every hideout level click. `LogSyncService` is clean.
+- **THR-5**: 8 detached-continuation sites are down to 4 (the language-change
+  and progress handlers in `ItemsPage` and `CollectorPage`).
+- **THR-6**: still no `TaskScheduler.UnobservedTaskException` handler and
+  still about 38 discard sites, but the data-loss shape is closed where it
+  mattered most: progress and inventory writes flow through
+  `TrackedUserDataWrites`, whose logging wrapper never faults the returned
+  task, so those discards can no longer fault unobserved. Of the four named
+  `async void` methods, one is gone, one gained a full try/catch, and
+  `HideoutPage.UpdateDetailPanel` plus `InProgressQuestInputDialog.LoadTraders`
+  remain unguarded.
+- **THR-7**: the inventory save-debounce now flushes through an async method
+  with a catch-all and tracked writes;
+  `DatabaseUpdateService.OnUpdateTimerElapsed` is still a bare `async void`
+  timer callback.
+- **THR-8**: `UserDataDbService._isInitialized` became a `SemaphoreSlim` with
+  a `Volatile` fast path; `DatabaseUpdateService._isUpdating` and
+  `UpdateService._isChecking` are still plain non-volatile check-then-act
+  bools.
+- **RES-3**: the `MainWindow` profile lambda is now a named handler detached
+  on close; the two `App.xaml.cs` lambdas and `MapPage`'s nine-subscribe,
+  three-unsubscribe asymmetry are unchanged.
+- **DATA-1**: still no `PRAGMA user_version`. The one schema change since
+  (`RaidHistory.AppProfileId`) shipped as a second bespoke
+  `pragma_table_info`-probed migration, exactly the "continue probe-based
+  evolution" alternative this finding rejected. The "not a single ALTER
+  TABLE" evidence line is now false; the missing mechanism is not.
+- **DATA-2**: the swallow-versus-escape asymmetry is unchanged (the code-1
+  filter survives, its magic number now a named constant), but the body logs
+  through the real logger with the exception object, rollback is guarded, and
+  `InitializeAsync` now rethrows and only marks initialized on success. Still
+  zero tests over this migration.
+- **DATA-4**: `UserDataDbService` is fully converted to `Log.For<T>` (zero
+  `Debug.WriteLine` left); `HideoutDbService` is untouched (7 remain), and
+  about 35 `Debug.WriteLine` persist across 11 other production files.
+- **DATA-5**: one transaction was added (`ResetProfileAsync`; five
+  `BeginTransaction` sites total). Objective and inventory batch saves are
+  still per-row autocommit, and ordinal mapping not only survives: the new
+  `AppProfileId` was appended as ordinal 18 to the big raid SELECT, extending
+  exactly the fragility described.
+
+### Open
+
+- **THR-2**: both lock-held raise patterns are intact (`LogSyncService`
+  raises `MonitoringStatusChanged` under `_watcherLock`;
+  `EftRaidEventService` raises from about 14 sites under `_readLock`), and
+  the blocking subscriber still exists (`MapPage.OnRaidEvent` wraps its body
+  in `Dispatcher.Invoke`); only `MainWindow` moved to `InvokeAsync`. With
+  THR-1 closed, this is the top remaining threading risk.
+- **ARC-1**: no container; the `Instance` count grew to 38
+  (`ProfileResetService`). One genuine seam appeared, `IQuestProgressStore`
+  (every method takes an explicit profile id; injected into
+  `QuestProgressService` and `LogSyncService`), whose own doc comment states
+  that ARC-1 stays open.
+- **ARC-2**: the construction cascade and the premature-PvP-load-then-repair
+  shape survive; the new revision counter makes the repair race-safe, but the
+  order is still implicit and the compensation still runs every startup.
+- **ARC-3**: none of the five named files was split; four grew
+  (`QuestProgressService` 1,677 to 2,042), and `SettingsService` (974 to
+  1,606) joined the tier.
+- **RES-1**: `App.OnExit` still disposes 4 of 11; the inventory debounce
+  still has no exit flush, so a change made within half a second of closing
+  the app is lost.
+- **RES-2**: `HideoutPage`, `ItemsPage`, and `CollectorPage` are still
+  recreated rather than reused at the same four call sites; only
+  `_questListPage` (and now `_mapTrackerPage`) has the guard.
+- **STA-1, STA-2, STA-3**: `Program.cs` and `App.xaml.cs` are byte-identical
+  to the snapshot: migration and window construction still run before any
+  crash handler exists, the crash log still overwrites itself, and the Data/
+  wipe still runs synchronously with two empty catches.
+- **DATA-3**: 38 inline connection constructions, zero pragmas anywhere, no
+  factory.
+- **DATA-6**: all six named bare catches remain, the empty-catch count moved
+  from 35 to 36, and the DB services still log `ex.Message` without the
+  exception object.
+- **UI-1 through UI-6**: all open, and two moved backwards. UI-2 now has
+  three duplicated classes, not one (`QuestGroupHeader` and
+  `QuestDrawerTemplateSelector` are also byte-identical copies inside
+  `MapPage.xaml.cs`), UI-5's imperative counts drifted up (`.Visibility =`
+  sites 183 to 195), and the new profile UI (reset dialog, wide selector)
+  follows the imperative pattern, including one-shot localization with no
+  `LanguageChanged` subscription in the reset dialog.
+- **TOOL-1 through TOOL-4**: nothing was added (no `Directory.Build.props`,
+  `.editorconfig`, or `global.json`; `Microsoft.Data.Sqlite` is now pinned in
+  three csprojs, not two), every TOOL-2 stray is still tracked including the
+  14.9 MB `bin.zip`, `ci.yml` is unchanged, and both CLAUDE.md drifts stand.
+
+### Reading the result against the sequencing section
+
+The profile work fixed the two hardest wave-2 items outright (THR-1, TEST-1)
+and dented THR-4/5/6/7/8 and DATA-4 along the way. Wave 1, the "each a small,
+low-risk PR, nothing blocks starting all ten tomorrow" list, is nearly
+untouched: of its ten items, DATA-4 is half done and DATA-2 got its logging
+half; TOOL-1, TOOL-2, STA-1, STA-2, THR-5's remainder, RES-2, UI-2, and
+TOOL-4 remain exactly as cheap and exactly as unfixed as the day they were
+written. With THR-1 closed, no Critical finding remains open; the
+highest-stakes leftovers are THR-2 (the deadlock class is re-armed by any
+blocking subscriber, and `MapPage` is one today), DATA-3 (two writers, no
+busy timeout), DATA-2's swallowed-failure branch, and STA-1.
+

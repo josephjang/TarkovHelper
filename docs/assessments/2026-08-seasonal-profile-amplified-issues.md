@@ -169,3 +169,48 @@ Do not implement all SPA findings in one PR. The natural work boundaries are:
 
 Each future PR names these IDs and creates its focused decision documents. Closing or
 rejecting work is recorded in the PR/issue, not by editing this frozen assessment.
+
+## Verification note, appended 2026-08-16
+
+Added on request after a code check at commit `ffa08d1`. The snapshot above is
+unchanged; this note records where the code stands now and points at the PRs and
+decision documents that are the actual closure records.
+
+All six findings are resolved on `main`:
+
+- **SPA-1**: fixed by the profile data attribution work
+  (`fix-profile-data-attribution.md` / `.spec.md`; commits `54a3fbb`, `730bfb9`).
+  Writes carry their own partition key, and `QuestProgressService` no longer reads
+  `ActiveProfileId` at all. The settings slice landed with
+  `fix-profile-settings-race`. `ProfileAttributionSourceTests` locks the rule in
+  structurally: no write-path file may read `ProfileService.Instance` outside a
+  member-anchored allowlist.
+- **SPA-2**: all four named services (quest, hideout, inventory, settings) publish
+  reloads through `RevisionGate.Claim` with a monotonic selection revision, the
+  boundary recommended above. Settings was the last of the four, closed by
+  `fix-profile-settings-race.md` / `.spec.md` (commits `b7abf87`, `167a6dc`).
+- **SPA-3**: `ProfileResetService` and `UserDataDbService.ResetProfileAsync` delete
+  all owned tables in one SQLite transaction with rollback on failure, take the
+  captured target profile as a parameter (the source-scan test forbids the reset
+  path from asking which profile is selected), and fence pending sync and
+  live-event writes through `TrackedUserDataWrites`. Decision docs:
+  `feature-complete-profile-reset.md` / `.spec.md` (commits `34a81c6`, `569daa1`).
+- **SPA-4**: `RaidHistory.AppProfileId` exists as a nullable column with a
+  migration for older databases. Legacy rows stay `NULL`, and a reset deletes only
+  exact non-null owners, so ownership of legacy rows is never guessed.
+- **SPA-5**: `MainWindow.PerformQuestSync` now passes
+  `SettingsService.SyncDaysRange` to `SyncFromLogsAsync`, whose range parameter is
+  required so the next omission is a compile error. Fixed as R8 of
+  `fix-profile-data-attribution.md`; guard tests live in `LogSyncAttributionTests`.
+- **SPA-6**: the hardcoded MessageBox is gone. `ProfileResetDialog` draws every
+  string from `LocalizationService` (EN/KO/JA), names the target profile in both
+  the title line and the confirm button, enumerates deleted categories and
+  survivors, and has distinct working, failure and completion states.
+
+Still open nearby, outside SPA scope by design: THR-1 (one shared pattern for how
+the four caches build their snapshots; each carries its own guard today; low
+severity, medium refactoring effort), the profile selector's stale highlight
+(rendering and announcement only, excluded by `fix-profile-settings-race.md`;
+medium severity, small effort, see DR-10 in the PR #34 handoff note), and the
+SPT statuses recorded in the sibling
+`2026-08-seasonal-profile-adjacent-issues.md` note.

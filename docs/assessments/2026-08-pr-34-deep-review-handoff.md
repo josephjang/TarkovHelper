@@ -509,3 +509,128 @@ dotnet test TarkovHelper.Tests/TarkovHelper.Tests.csproj -c Release --no-build -
 These points come from the later `feature-profile-log-auto-switch` PRD/spec and
 supersede the earlier seasonal-pin material still present in the older seasonal
 profile spec.
+
+## Verification note, appended 2026-08-16
+
+Added on request after a code check at commit `ffa08d1` (branch head equal to
+`origin/main`). The review record above is unchanged; this note maps each root
+issue to where the code stands now. The hardening work for this review merged
+into PR #34 as commit `f78c8d6`; later PRs (profile data attribution, complete
+profile reset, profile settings race) closed more.
+
+Status: 7 fixed (DR-03, DR-07, DR-08, DR-09, DR-12, DR-13, DR-15), 7 partial
+(DR-01, DR-06, DR-10, DR-11, DR-14, DR-16, DR-17), 3 open (DR-02, DR-04, DR-05).
+
+Remaining work, ranked by severity of what is left today (not the severity at
+review time; later fixes shrank several blast radii). Effort scale: small is a
+contained change plus tests, medium is a focused PR, large is multi-PR work.
+
+| ID | Remaining item | Severity | Effort |
+| --- | --- | --- | --- |
+| DR-02 | Ordered watcher/scan/identity startup, off the UI thread | High | Medium; one lifecycle rewrite together with DR-04/05, and the filesystem tests are most of the work |
+| DR-04 | Ignore events from non-latest session folders; seed cursors on rollover | Medium | Small inside the DR-02 rewrite |
+| DR-05 | Shared no-throw cleanup; callbacks guard on the watching flag | Medium | Small inside the DR-02 rewrite |
+| DR-06 | Serialize the `_currentProfile` writers | Medium | Rides with DR-02 |
+| DR-10 | Revision-discard in the selector dispatcher callback | Medium | Small; `bf5287d` exists unmerged, rebase it and add a test |
+| DR-01 | Latest-wins persistence for the active-profile setting | Medium | Small; tracked as SPT-1 |
+| DR-01 | Skip store reloads on provenance-only flips (hideout, inventory) | Low | Small; copy the quest/settings guard plus two tests |
+| DR-16 | Delete the `ProfileChanged` event and `SetProfileAsync` | Low | Small; also removes DR-06's dead post-await read |
+| DR-11 | Measured selector fit, hysteresis, 36 px targets, non-tautological fit tests | Low | Medium |
+| DR-14 | Extract one `ProfileSelector` control; single cue animation | Low | Medium |
+| DR-17 | Service split beyond the framer | Low | Large; still deferred by design, revisit only if the DR-02 repair stays hard to test |
+
+Severity rationale for the top rows: DR-02's identity race is in play on every
+launch (misclassified Scav/PMC raids, whole-log replay on the live path), so it
+is High even though each window is narrow. DR-04 and DR-05 have rare triggers
+(an old file touched; a mid-startup failure) but silent, lasting consequences,
+so Medium. DR-10 is UI-and-announcement only since the attribution work, and
+DR-01's persistence race needs rapid switches plus a restart, so both sit at
+Medium. Everything Low is wasted work, dead surface, or maintainability, with
+no data at stake.
+
+Fixed:
+
+- **DR-03**: incremental reads are framed at the last complete newline by
+  `EftLogPatterns.FrameCompletedLines`; cursors advance only through it.
+- **DR-07**: the completed-profile parser requires exactly 24 hex characters and
+  normalizes case at the boundary; `EftProfileInfo.NextProfileId` is the one
+  full-width carry (an all-`f` id has no successor and returns null), recognition
+  shares it and compares case-insensitively. Covered by `EftProfileIdentityTests`
+  and `EftRaidEventParsingTests`.
+- **DR-08**: one stored session hint; game mode is derived on read
+  (`GameModeOf`); `EftRaidEventArgs` cannot carry an independently set pair.
+- **DR-09**: profile-keyed switches throw on unknown values,
+  `TryResolveDetectedProfile` reports no destination for unmapped hints,
+  `ParseStoredProfile` keeps the only deliberate fallback, and
+  `GetProfileId(GameMode)` is gone. `ProfileSwitchingTests` enumerates the enum
+  so a new member cannot silently alias onto PvP.
+- **DR-12**: the selection item status is localized (`HeaderProfileSelected` /
+  `HeaderProfileUnselected`, EN/KO/JA).
+- **DR-13**: the selector ships EN default labels in XAML and the constructor
+  paints a selection before `Window_Loaded`'s awaits run.
+- **DR-15**: the template-binding font literal is gone; `FontAssetsTests` still
+  enforces the policy.
+
+Partial:
+
+- **DR-01**: the transition core landed via the later SPA-1/SPA-2 fixes
+  (revisioned `ProfileChangedEventArgs`, `RevisionGate` in all four stores,
+  captured write ownership). Still open: the active-profile persistence write is
+  fire-and-forget with no latest-wins ordering (tracked as SPT-1), and on a
+  provenance-only flip `HideoutProgressService` and `ItemInventoryService` still
+  reload unconditionally (ItemInventory also flushes pending saves) while the
+  quest and settings services correctly skip.
+- **DR-06**: every raid and profile save path snapshots into a local before
+  scheduling, so the deterministic null-raid save is gone. Still open:
+  `_currentProfile` is last-writer-wins across four writers under three
+  different locks (the DR-02 startup race), and the dead `SetProfileAsync` reads
+  the field again after its await.
+- **DR-10**: lasting provenance is gone; the cue and its announcement are fully
+  transient and E2E-guarded. Still open: `OnActiveProfileChanged` never checks
+  `args.Revision`, so out-of-order dispatcher enqueues can leave the selector
+  rendering the losing profile until the next transition. The exact fix exists
+  unmerged as commit `bf5287d` on `fix/seasonal-profile-deep-review` (written
+  after PR #34 merged, never landed); `fix-profile-settings-race.md` records
+  only the milder brief-lag reading of this defect as a non-goal.
+- **DR-11**: the compact trigger and menu use MinWidth plus ellipsis instead of
+  a fixed width. Still open: interactive targets are ~30 px, the wide/compact
+  decision is the bare `HeaderLayout.CompactThreshold = 1000` with no
+  measurement, hysteresis, or re-evaluation on language/font change (the file's
+  own remark records JA at the default font needing ~1001 px), and one
+  `ProfileSelectorFitTests` case asserts a `Math.Max` tautology.
+- **DR-14**: no `ProfileSelector` control was extracted. The `ProfileControls`
+  table removed the per-profile switches; nine one-line handlers, twelve
+  localized-text assignments, and two hand-synchronized cue animations (the XAML
+  storyboard and a code-behind `DoubleAnimation`) remain.
+- **DR-16**: the implementation-status sections are gone, and
+  `ProfileChangedEventArgs.GameMode`, `GetProfileId(GameMode)`, and the public
+  hint accessor were removed. Still present with zero consumers:
+  `EftRaidEventService.ProfileChanged` (raised at three sites) and
+  `SetProfileAsync`.
+- **DR-17**: `EftLogPatterns` (the framer plus shared session parsing) was
+  extracted and `LogSyncService` shares it. The service itself is now 1248 lines
+  and startup scanning still runs synchronously on the UI thread from
+  `Window_Loaded`, the one DR-17 item meant to ride with DR-02.
+
+Open, untouched since the reviewed head (a diff from `5ba36f1` to `ffa08d1`
+never reaches these paths; no PRD, no tests):
+
+- **DR-02**: watchers are constructed with `EnableRaisingEvents = true` before
+  handlers attach, `_filePositions.Clear()` runs after they are live (an early
+  callback replays a file from byte zero), the DB identity load stays
+  fire-and-forget and can clobber the identity the initial scan just parsed,
+  and the initial scan reads outside `_readLock` on the UI thread.
+- **DR-04**: watcher callbacks never compare a changed file's folder with the
+  latest session folder; a touched or restored old log still replays a stale
+  `Session mode` line, switches the active profile, and can create raid rows.
+  The attribution work confines the damage (log progress writes carry their own
+  owner now), but profile selection and raid history remain exposed.
+- **DR-05**: the `StartMonitoring` catch does not dispose already-enabled
+  watchers or the timer, `StopMonitoring` is not no-throw, and callbacks do not
+  guard on `_isWatching`, so a failed startup can keep parsing and switching for
+  the process lifetime.
+
+Continuation Warning status: resolved. The interrupted draft was salvaged and
+merged into PR #34 as `f78c8d6` on 2026-08-10, so the recovery paths above are
+moot. One loose end: `fix/seasonal-profile-deep-review` still exists locally and
+on origin, carrying the single unmerged commit `bf5287d` named under DR-10.
