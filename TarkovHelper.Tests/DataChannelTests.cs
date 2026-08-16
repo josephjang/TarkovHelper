@@ -103,7 +103,7 @@ public sealed class DataChannelTests
           "schemaVersion": 1,
           "dataFormatVersion": 1,
           "version": "1.0.10",
-          "database": { "file": "tarkov_data.db", "sha256": "abc123", "size": 42 }
+          "database": { "file": "tarkov_data.db", "digest": "sha256:abc123", "size": 42 }
         }
         """;
 
@@ -117,7 +117,7 @@ public sealed class DataChannelTests
         Assert.Equal(1, manifest.DataFormatVersion);
         Assert.Equal("1.0.10", manifest.Version);
         Assert.Equal("tarkov_data.db", manifest.Database.File);
-        Assert.Equal("abc123", manifest.Database.Sha256);
+        Assert.Equal("sha256:abc123", manifest.Database.Digest);
         Assert.Equal(42, manifest.Database.Size);
     }
 
@@ -150,7 +150,7 @@ public sealed class DataChannelTests
             """);
 
         Assert.NotNull(manifest);
-        Assert.Null(manifest.Database.Sha256);
+        Assert.Null(manifest.Database.Digest);
         Assert.Null(manifest.Database.Size);
     }
 

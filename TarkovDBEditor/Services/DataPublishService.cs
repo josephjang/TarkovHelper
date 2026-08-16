@@ -754,7 +754,9 @@ public class DataPublishService : IDisposable
             database = new
             {
                 file = DatabaseFileName,
-                sha256 = await ComputeFileSha256Async(databasePath),
+                // Algorithm-qualified, following OCI: a reader that does not implement
+                // the named algorithm can tell that apart from no digest at all.
+                digest = $"sha256:{await ComputeFileSha256Async(databasePath)}",
                 size = new FileInfo(databasePath).Length,
             },
         };

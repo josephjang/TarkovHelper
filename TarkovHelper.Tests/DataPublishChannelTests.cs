@@ -227,7 +227,7 @@ public sealed class DataPublishChannelTests : IDisposable
         Assert.Equal("1.0.11", manifest.Version);
         Assert.Equal(DatabaseFile, manifest.Database.File);
         // Hashed against what was actually published, which is the stamped source.
-        Assert.Equal(Sha256Hex(SourceBytes(source)), manifest.Database.Sha256);
+        Assert.Equal($"sha256:{Sha256Hex(SourceBytes(source))}", manifest.Database.Digest);
         Assert.Equal(SourceBytes(source).Length, manifest.Database.Size);
     }
 

@@ -214,8 +214,16 @@ public sealed class DatabaseUpdateService : IDisposable
 
     #region Channel documents
 
-    /// <summary>The payload an endpoint serves. Integrity fields are optional by design.</summary>
-    internal sealed record DataChannelPayload(string File, string? Sha256, long? Size);
+    /// <summary>
+    /// The payload an endpoint serves. Integrity fields are optional by design.
+    /// <para>
+    /// <c>Digest</c> is algorithm-qualified, <c>"sha256:&lt;hex&gt;"</c>, following OCI and
+    /// Sigstore. The prefix is what lets a build that only knows sha256 recognize a
+    /// digest it cannot check, instead of mistaking it for an absent one and skipping
+    /// verification without ever noticing.
+    /// </para>
+    /// </summary>
+    internal sealed record DataChannelPayload(string File, string? Digest, long? Size);
 
     /// <summary>data/v&lt;N&gt;/manifest.json: what this endpoint currently offers.</summary>
     internal sealed record DataChannelManifest(
@@ -621,9 +629,27 @@ public sealed class DatabaseUpdateService : IDisposable
             }
         }
 
-        if (string.IsNullOrWhiteSpace(payload.Sha256))
+        if (string.IsNullOrWhiteSpace(payload.Digest))
         {
-            _log.Debug("Manifest carries no hash; installing without content verification");
+            _log.Debug("Manifest carries no digest; installing without content verification");
+            return true;
+        }
+
+        // "<algorithm>:<hex>". An algorithm this build does not implement is a publish
+        // from the future, not a bad download: warn and install, the same way an absent
+        // digest installs. Refusing would turn a hash upgrade into a breaking change for
+        // every build already in the field, which is the outcome this channel exists to
+        // avoid.
+        var separator = payload.Digest.IndexOf(':');
+        var algorithm = separator > 0 ? payload.Digest[..separator] : null;
+        var expectedHash = separator > 0 ? payload.Digest[(separator + 1)..] : null;
+
+        if (!string.Equals(algorithm, "sha256", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(expectedHash))
+        {
+            _log.Warning(
+                $"Manifest digest '{payload.Digest}' is not a sha256 digest this build can check; "
+                + "installing without content verification.");
             return true;
         }
 
@@ -633,11 +659,11 @@ public sealed class DatabaseUpdateService : IDisposable
             actualHash = Convert.ToHexString(SHA256.HashData(stream));
         }
 
-        if (!actualHash.Equals(payload.Sha256, StringComparison.OrdinalIgnoreCase))
+        if (!actualHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
         {
             _log.Error(
-                $"Downloaded database hash {actualHash} does not match the manifest's "
-                + $"{payload.Sha256}. Keeping the current database.");
+                $"Downloaded database digest sha256:{actualHash.ToLowerInvariant()} does not match "
+                + $"the manifest's {payload.Digest}. Keeping the current database.");
             return false;
         }
 
