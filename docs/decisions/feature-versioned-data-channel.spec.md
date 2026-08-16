@@ -10,43 +10,51 @@
 
 ## Summary
 
-Three ideas carry the design. First, an integer **data format** identifies the
-reader contract for `tarkov_data.db` (schema plus the semantics an app build
-understands); the current family is format 1, and the number bumps only when a
-publish cannot stay additive. Second, endpoints are **versioned URLs**: one
-`data/v<N>/` directory per format on raw main, each holding the
-`db_version.txt` + `tarkov_data.db` pair; the pre-channel
-`TarkovHelper/Assets/` URLs, hardcoded in fielded builds, become format 1's
-second address, kept byte-identical to `data/v1/` by the publish flow and a
-guard test, and frozen in place the day the format moves past 1. Each app
-build compiles in the format it reads from a single csproj property that also
-selects its bundled seed database, so the pin, the polled URLs, and the seed
-cannot skew. Third, `db_version.txt` becomes **line-oriented**: the first line
-is the version token with today's exact-equality semantics, later lines are
-directives; the one directive defined now, `frozen`, is how a build learns its
-channel has ended and surfaces it to the user.
+Three ideas carry the design. First, an integer **data format version**
+identifies the reader contract for `tarkov_data.db`, and endpoints are
+**versioned URLs**: one `data/v<N>/` directory per data format version on raw
+main. The pre-channel `TarkovHelper/Assets/` URLs, hardcoded in fielded builds,
+become data format version 1's second address, kept byte-identical to `data/v1/`
+by the publish flow and a guard test. Each app build compiles in the version it
+reads from a single csproj property that also selects its bundled seed database,
+so the pin, the polled URLs, and the seed cannot skew.
+
+Second, each endpoint publishes a **`manifest.json`** naming the version it
+serves and the digest and size of the database beside it, so a client verifies
+what it downloaded before installing it, and the database itself carries the same
+version in SQLite's `user_version`, so the payload can be checked against its own
+claim rather than only against the publisher's.
+
+Third, a single mutable pointer at **`data/index.json`** names the data format
+version currently published. A build compares it against its own pin to learn it
+has been left behind. Superseded endpoint directories are never rewritten, so
+nothing about a freeze is a manual step that can be forgotten.
 
 This settles the mechanism question `feature-eft-1-1-roadmap.spec.md`
 deliberately left open (versioned URLs, a minimum-app-version marker, or a
-manifest): versioned URLs win, for the reasons under Technical Decisions.
+manifest), in favor of versioned URLs carrying a manifest, for the reasons under
+Technical Decisions.
 
 ## Non-Goals
 
-- No manifest file and no minimum-app-version marker (rejected under
-  Technical Decisions).
+- No minimum-app-version marker (rejected under Technical Decisions).
 - No delta or incremental downloads; the whole-file replace stays (the
   database is about 7 MB).
-- No back-publishing to frozen formats. The pipeline produces one
-  current-format database per run; the roadmap policy promises a freeze at
-  the last compatible version, not parallel maintenance of old formats.
+- No back-publishing to superseded data format versions. The pipeline produces
+  one current database per run; the roadmap policy promises a freeze at the last
+  compatible version, not parallel maintenance of old ones.
 - No git automation in TarkovDBEditor: the publish commit and push to main
   stay manual and reviewed, as today.
-- No change to the app self-update feed (`update.xml`, `UpdateService`,
-  AutoUpdater).
+- No change to the app self-update feed (`update.xml`, `UpdateService`) beyond
+  its polling interval.
 - No change to what the channel carries: exactly the pair that hot-updates
   today. Map configs, SVGs, and icons keep shipping inside app releases; the
   runtime icon channel stays in the triggered backlog of
   `feature-eft-1-1-roadmap.spec.md`.
+- No manual data-update check. The Settings "check for updates" button still
+  checks only for app updates, so restarting the app is the only way to force a
+  data check. Deferred to the next settings UX pass; `ForceUpdateCheckAsync`
+  stays uncalled until then.
 
 ## Current Behavior
 
@@ -62,7 +70,7 @@ Verified in the working tree and against main before design.
   clearing, `.bak` swap with retries) and rewrites the local version file. A
   failed version fetch logs a warning and returns "Failed to get remote
   version" without touching local state, so a 404 on a not-yet-existing
-  endpoint is non-destructive.
+  endpoint is non-destructive. Nothing verifies what was downloaded.
 - `db_version.txt` holds a single opaque token (`1.0.10` at the time of
   writing); no ordering is ever computed. Rollback relies on this:
   re-publishing older content under a changed token is followed like any
@@ -77,7 +85,8 @@ Verified in the working tree and against main before design.
   `TarkovHelper/Assets`, copies changed files (database, map configs, SVGs,
   marker/item/hideout icons), suggests the next patch version, and writes
   `db_version.txt`. It never touches git; a human commits and pushes main,
-  and installs pick the publish up within minutes.
+  and installs pick the publish up within minutes. Nothing checks that the file
+  it publishes is a database.
 - `UpdateServiceTests.Update_feed_constants_point_at_fork` pins both URL
   constants full-string to the fork, guarding against upstream-URL
   reintroduction.
@@ -95,475 +104,397 @@ Verified in the working tree and against main before design.
 
 ## Design
 
-### Repository layout: one directory per data format
+### Vocabulary
 
-A **data format** is the contract an app build can read: the SQLite schema
-plus the semantic conventions of its values. Additive changes (new columns or
-tables, feature-detected on read via the `ColumnExistsAsync` pattern) do not
-bump it; a change that would crash or mislead an older reader (rename,
-repurpose, removal, semantic change of existing values) does. Whether a given
-publish bumps is decided at that publish's review, per the roadmap's
-cross-phase ground rules.
-
-- `data/v1/db_version.txt` and `data/v1/tarkov_data.db` are created in this
-  phase at the repo root, byte-identical to the Assets pair. Git stores blobs
-  content-addressed, so the identical mirror adds two tree entries, not
-  repository growth; the working tree grows by one ~7 MB copy.
-- `TarkovHelper/Assets/db_version.txt` and `tarkov_data.db` stay committed
-  solely as the pre-channel endpoint (fielded builds hardcode those URLs) and
-  stop feeding builds (seed re-sourcing below). Permanent invariant: the
-  Assets pair and the `data/v1/` pair are byte-identical, forever. Both are
-  format 1's endpoint; they advance together and they freeze together. A
-  guard test enforces it (Test Strategy).
-- **Freeze procedure**, recorded now so the publish that first needs it is
-  routine: the first publish that bumps the format to N+1 creates
-  `data/v<N+1>/` with the new pair, stops writing every lower-format
-  endpoint, and appends a `frozen` line to each lower-format endpoint's
-  `db_version.txt` without changing its version token or database. Channel
-  builds parse line 1, see no version change, and surface the notice.
-  Pre-channel builds compare the whole string, see a change, and re-download
-  the unchanged database once (harmless, accepted in the PRD's Risks).
-- **Ordering at a bump**: `data/v<N+1>/` lands on main before or with the
-  release tag of the app build that pins N+1. The new build's early checks
-  would otherwise 404 (gracefully, but avoidably); its bundled seed already
-  carries format-N+1 data either way. This mirrors the update.xml-last
-  principle from `feature-fork-release-process.md`.
-
-### Single-sourced format pin (TarkovHelper)
-
-- `TarkovHelper/TarkovHelper.csproj` gains `<TarkovDataFormat>1</TarkovDataFormat>`.
-  - The seed copy items are re-sourced: the `None Update` entries for
-    `Assets\tarkov_data.db` and `Assets\db_version.txt` are replaced by
-    `None Include="..\data\v$(TarkovDataFormat)\..."` items with
-    `Link="Assets\..."` and `CopyToOutputDirectory=PreserveNewest`. The
-    output layout is unchanged (runtime paths, packaging, and e2e
-    expectations untouched); the repo Assets copies remain auto-included
-    `None` items without a copy step, so there is no output collision.
-  - `<AssemblyMetadata Include="TarkovDataFormat" Value="$(TarkovDataFormat)" />`
-    exposes the number to code.
-- `TarkovHelper/Services/DatabaseUpdateService.cs`: the two `const` URLs
-  become `internal static readonly` values derived from
-  `DataFormatVersion`, which is read once from the assembly metadata at type
-  initialization. A missing or unparseable metadata value throws there: a
-  build wired that badly must fail loudly, never fail soft onto some default
-  endpoint. URL shape:
-  `https://raw.githubusercontent.com/josephjang/TarkovHelper/refs/heads/main/data/v{N}/db_version.txt`
-  and `.../tarkov_data.db`. Internal visibility for the guard tests stays.
-- The pin, the polled URLs, and the bundled seed all derive from the one
-  csproj property, so a format bump is a one-property change plus the new
-  data directory, and skew between them is mechanically impossible.
-
-### Version file parsing and the frozen directive
-
-- Channel builds parse `db_version.txt` line-oriented: the first
-  non-whitespace line, trimmed, is the version token; each later
-  non-whitespace line is a directive. `frozen` is the only directive defined;
-  unknown directives are ignored deliberately, so builds in the field stay
-  tolerant of vocabulary added after them. An empty or whitespace-only file
-  is a failed check, same as a fetch error.
-- Comparison and download semantics are unchanged and apply to the token
-  alone. The local `Assets/db_version.txt` stores only the token; the frozen
-  state is endpoint state, not data state, and is re-derived on every check
-  rather than persisted.
-- `UpdateCheckResult` gains `IsEndpointFrozen`, and `DatabaseUpdateService`
-  exposes the latest observed value.
-- UI: `MainWindow` subscribes to the so-far-unconsumed
-  `DatabaseUpdateService.UpdateCheckCompleted`; while the endpoint is frozen
-  it shows a passive notice in the header area next to the existing
-  app-update indicator ("Data updates for this version have ended - update
-  the app"), localized EN/KO/JA via `LocalizationService.Core.cs`. No dialog,
-  no toast. The notice clears if a later check reports the endpoint
-  unfrozen (supported for operator error, not planned use).
-
-### Publish flow (TarkovDBEditor)
-
-- `DataPublishService` switches from the single Assets target to the channel
-  layout for the database pair: the **live format is the highest
-  `data/v<N>/` directory present in the repo**, a publish writes that
-  directory, and while the live format is 1 it mirrors the identical pair
-  into `TarkovHelper/Assets/`. The tool never creates a new format
-  directory itself; creating `data/v<N+1>/` is a deliberate manual act in the
-  reviewed PR that also teaches the app the new format, so a routine publish
-  cannot bump the format by accident. Comparison, hashing, and the
-  next-version suggestion read from the live format directory.
-- Non-channel assets (map configs, SVGs, marker/item/hideout icons) keep
-  publishing into `TarkovHelper/Assets/` subfolders as today; they ship via
-  app releases and are not part of the channel pair.
-- `DataPublishWindow` shows both database targets in the comparison and
-  publish summaries.
-- One-commit rule: a publish commit carries every endpoint copy it wrote, so
-  raw main never serves a half-published mirror; the mirror guard test turns
-  any slip red in CI on main (detection behind the tooling's prevention).
-
-### Files touched
-
-- `TarkovHelper/TarkovHelper.csproj` (format property, metadata, seed items)
-- `TarkovHelper/Services/DatabaseUpdateService.cs` (derived URLs, parser,
-  frozen state, internal test seam)
-- `TarkovHelper/MainWindow.xaml` + `MainWindow.xaml.cs` (frozen notice)
-- `TarkovHelper/Services/LocalizationService.Core.cs` (notice strings, three
-  languages)
-- `data/v1/db_version.txt`, `data/v1/tarkov_data.db` (new, identical to the
-  Assets pair)
-- `TarkovDBEditor/Services/DataPublishService.cs` (channel targets)
-- `TarkovDBEditor/Views/DataPublishWindow.xaml` + `.xaml.cs` (target display)
-- `TarkovHelper.Tests/UpdateServiceTests.cs` (updated full-string URL pins)
-- `TarkovHelper.Tests/DataChannelTests.cs` (new: parse matrix, URL
-  derivation, metadata agreement, frozen propagation)
-- `TarkovHelper.Tests/DataChannelMirrorTests.cs` (new: repo-walk byte
-  identity, seed-source identity)
-- `TarkovHelper.Tests/DataChannelEndpointServingTests.cs` (new: local HTTP
-  fixture through the internal seam)
-- `docs/database-update-mechanism.md` (reference doc gains the channel
-  layout, format pin, and freeze semantics)
-
-## Technical Decisions
-
-**Versioned URLs, not a manifest and not a minimum-app-version marker.** All
-three candidates protect only builds shipped after them, so reach does not
-differentiate; complexity and failure modes do. A minimum-app-version marker
-gates on the wrong key (the app version, when the compatibility key is the
-data format; an app release that does not touch the schema should not strand
-anyone), forces ordering semantics onto what is today an opaque equality
-token, and cannot work alone: pre-channel builds ignore any marker, so the
-legacy endpoint still could never carry breaking data, and after a break the
-older-but-marker-aware builds stop receiving even compatible corrections
-unless per-version endpoints exist anyway. It degenerates into versioned URLs
-plus parsing. A manifest (one JSON mapping formats to URLs) encodes the same
-information the URL scheme carries for free, while adding a parse-negotiate
-step to a five-minute client loop, a manifest-vs-blob skew failure mode with
-its own publish-ordering rule, and flexibility nothing needs: at most two
-formats will be alive at a time, and if a multi-file need (icon packs,
-deltas) ever materializes, a manifest can be added inside a format directory
-without breaking the URL scheme. Versioned URLs put the format where the
-reader already looks, need no parsing, and make the freeze physical: a frozen
-endpoint is simply a directory that stops changing.
-
-**Format 1 gets its channel directory now; Assets becomes a frozen-in-place
-mirror.** The alternative, leaving channel builds on the Assets URLs and
-creating `data/v2/` only at the first actual break, avoids the mirror but
-means the mechanism's first real run is the emergency publish: the seed
-re-wiring, the multi-target publish flow, and the endpoint contract would all
-execute for the first time under pressure. Creating `data/v1/` now means
-every routine publish exercises exactly the path the breaking one will use,
-and the roadmap's phase-2 e2e expectation ("the new build fetches from its
-own endpoint") is testable immediately. The cost is near zero because git
-stores content-addressed blobs.
-
-**The pin lives in the csproj and everything derives from it.** The
-alternative (a constant in `DatabaseUpdateService` beside hand-maintained
-csproj copy paths) leaves the reader pin and the bundled seed free to skew,
-which is precisely the class of mistake this phase exists to make
-mechanically impossible. One property selects the seed copy source and, via
-assembly metadata, the polled URLs; a bump is one reviewable diff.
-
-**The version token stays an opaque equality token.** Introducing ordering
-(parsing it as a version and comparing) was considered and rejected: equality
-is what the entire field already runs, it is what makes
-rollback-by-republish work, and per-format endpoints remove the only question
-ordering could have answered. The line-oriented file is the extension point
-instead: directives let an endpoint say new things to new builds without a
-format bump, and ignoring unknown directives keeps that true for builds
-already shipped.
-
-**The frozen notice ships now, with the reader.** Defining the directive but
-deferring the UI until a freeze actually happens was rejected: the notice
-only exists on builds that already carry it when their channel freezes, so
-deferring it recreates the retroactivity problem one level up, the same
-argument that made the channel a phase instead of a trigger
-(`feature-eft-1-1-roadmap.spec.md`, Technical Decisions).
-
-**The live format is the highest data directory, and only a human creates
-one.** Giving TarkovDBEditor its own format constant would add a second pin
-(editor vs app) that can drift silently. The repo layout is self-describing:
-the editor publishes to the highest `data/v<N>/` present and mirrors to
-Assets while that is v1. Creating the next directory happens only in the
-reviewed PR that bumps the app's pin, so the two sides of a format bump are
-one diff.
-
-### Appended during implementation (2026-08-16)
-
-**The freeze notice strings live in `LocalizationService.Header.cs`, not
-`Core.cs`.** The file list above named the wrong partial: every other title-bar
-string (`HeaderVersionTooltipIdle`, `HeaderChecking`, the sync chip) is in
-`Header.cs`, and `LocalizationHeaderStringsTests` is the completeness guard that
-covers that file. The two new keys (`HeaderDataFrozen`,
-`HeaderDataFrozenTooltip`) went there and into that test's key list.
-
-**The publish tool repairs a drifted mirror, it does not only detect one.** The
-design gave the tool the one-commit rule and left detection to the CI guard. In
-implementation the tool also treats an out-of-sync Assets mirror as a
-publishable change (`ComparisonResult.MirrorNeedsRepair`), so it copies the
-database to both endpoints even when the database itself is unchanged.
-Otherwise the guard could turn CI red with no in-tool way to fix it: with no
-database change, `HasAnyChanges` was false and the Publish button stayed
-disabled, leaving hand-copying as the only repair.
-
-**The local version file is parsed by the same reader as the remote one.** Not
-in the design, and it matters for exactly one install: a user whose pre-channel
-build polled a frozen Assets endpoint wrote the whole body, `frozen` line
-included, into its local `db_version.txt`. After updating to a channel build, a
-raw string comparison would never match the remote token and would re-download
-the database on every check, forever. Reading the token off both sides costs
-nothing and closes that path.
-
-**The endpoint test server is a raw `TcpListener`, not `HttpListener`.**
-`HttpListener` goes through HTTP.sys, which needs elevation or a netsh URL
-reservation, and this suite must run non-elevated. `LocalFileServer.cs`
-implements just what the client under test uses (GET, Content-Length, 404, no
-keep-alive) and records requested paths, which is what lets the tests prove the
-negative that a frozen or up-to-date check never fetches the database.
-
-**The publish side got tests and an explicit-path constructor.** The Test
-Strategy above only covered the app side, which left the tool that produces the
-repository state untested while it grew the rule that one publish leaves both
-format-1 endpoints identical. `DataPublishService` now has a public
-`(sourceBasePath, repoRootPath)` overload (the default one delegates to it), and
-`DataPublishChannelTests` drives real publishes against throwaway trees:
-highest-format resolution including the v10-beats-v9 numeric case, the
-no-channel error, both drift directions repairing to byte-identical endpoints,
-an in-sync pair having nothing to publish (so the drift tests cannot pass
-vacuously), and a format-2 publish leaving the frozen format-1 endpoints and
-their directives untouched.
-
-**The default `None` glob has to give up the Assets pair explicitly.** The
-design said the repo copies "remain auto-included `None` items without a copy
-step". In practice that leaves two items targeting `Assets\tarkov_data.db` in
-the output (the linked channel item and the default-glob one), and which wins is
-MSBuild ordering rather than intent. The csproj now carries `<None Remove>` for
-both, and `DataChannelTests` pins that.
-
-### Appended after review (2026-08-16): the manifest replaces the version file
-
-Review of the shape above against how other update channels are built produced four
-reversals, all settled before anything shipped, which is the only time this is
-cheap. The line-oriented `db_version.txt` protocol described earlier is replaced;
-everything about the format directories, the pin, and the Assets mirror stands.
-
-**The remote document is JSON, named for its role.** `data/v<N>/manifest.json`
-carries `schema`, `dataSchema`, `version`, and a `database` object with `file`,
-`sha256`, and `size`. The name `db_version.txt` was already a misnomer the moment
-it carried anything besides a version, and every mature channel (electron-builder
-`latest.yml`, Squirrel `RELEASES`, APT `Release`, rustup's TOML manifest, Docker
-and TUF manifests) names the document for its role and carries a payload hash
-inside it. The line format was not a dead end, since unknown directives were
-ignored, but it handles repeated structure badly, which the deferred icon channel
-would need.
-
-**The hash closes a hazard this spec had already recorded as open.** Risks below
-notes that raw GitHub caches each file separately, so a client can pair a fresh
-version token with a stale database and record the new token against the wrong
-bytes. Verification after download makes that pair atomic, and it also catches a
-truncated download, which the previous code installed happily. A sidecar hash file
-would not work: it can be cached stale just as easily. Integrity fields are
-optional to the reader (absent means install without verifying) but mandatory in
-the repository, enforced by `DataChannelMirrorTests`, because shipping without a
-hash would silently disable verification everywhere.
-
-**`frozen` is removed; a pointer at `data/index.json` replaces it.** The freeze
-directive required hand-editing every superseded endpoint at bump time, which
-mutates documents this design calls immutable and can be forgotten. The index
-names the schema currently published, the publish tool rewrites it on every run,
-and a build compares its own pin against it. Superseded directories are now never
-touched again, and the detection cannot be forgotten because nobody performs it.
-The index is the only mutable part of the channel. An unreadable index leaves the
-last known state alone rather than declaring the build current.
-
-**The superseded state escalates the existing update pill instead of adding a
-notice.** A newer data schema can only ship with the build that pins it, so being
-superseded implies an app update already exists and is already on screen. The pill
-therefore changes wording (naming the data consequence rather than the version)
-and tone (warning rather than success, with dark text because white on amber is
-unreadable at that size), and the separate chip is gone. Two internal causes that
-are *not* superseded (a manifest schema above this build's maximum, and an
-endpoint serving a different `dataSchema`) refuse the update and log without any
-user-facing message: both are publishing errors fixed by the next publish, where
-telling the user to update the app would be wrong advice.
-
-**Polling drops from five minutes to one hour.** Five minutes was 288 checks a day
-against a payload that changes a few times per game patch, and it sits below raw
-GitHub's own per-file cache window, so the extra checks could not learn anything
-new even in principle. The startup check (unchanged, immediate) is the one that
-matters. Deliberately deferred: wiring the Settings "check for updates" button to
-also check data, which would give the longer interval a manual escape hatch.
-`ForceUpdateCheckAsync` stays uncalled, so restarting the app remains the only way
-to force a data check; this is scheduled for the next settings UX pass.
-
-### Appended (2026-08-16): a mechanical guard on the data schema promise
-
-The additive-only rule the whole channel rests on was pure discipline, exercised
-during ordinary feature work by a pipeline that regenerates the database wholesale
-from upstream. `DataSchemaDriftTests` makes it mechanical: it snapshots the
-published database's tables and declared column types into
-`DataSchemaBaseline.v<N>.json` and fails when a table or column disappears or is
-retyped, while allowing additions freely. The first run writes the baseline and
-fails deliberately, so a deleted baseline can never re-appear silently and pass
-against whatever the database happens to hold that day.
-
-Scope is read compatibility only: not indexes, views, or constraints, which a
-reader cannot observe, and not row contents, which change every publish. When a
-break is genuinely intended it is a data schema bump, not a relaxed test, and the
-new schema gets its own baseline file.
-
-### Appended (2026-08-16): vocabulary, fixed
-
-The earlier sections used "data format" and "data schema" for one concept and
-"schema" for a second, which had already produced
-`dataSchema = comparison.LiveDataFormat` in the publish tool: one integer, two
-names, in a single assignment. The vocabulary below is normative from here on,
-and the wire field names are pinned by a test so they cannot drift again.
+Four names, deliberately distinct, because three of these are integers and a
+name has to say what its slot holds.
 
 **data format** is the contract a build must satisfy to read `tarkov_data.db`
 correctly. It covers the SQLite schema, **the meaning of each field, and the
 range of values a field may take**.
 
 **data format version** (`dataFormatVersion`, `currentDataFormatVersion`,
-`<TarkovDataFormatVersion>`, `data/v<N>/`) is the integer identifying *which*
-data format. It increments only when forward compatibility breaks. The test to
-apply is a single question: *would the previously released build, reading this
-data with its existing code, show the user something wrong?* If yes, it is a
-bump. If an older build simply ignores the change (new tables, new columns, new
-rows, new values inside a field's documented range), it is not.
+`<TarkovDataFormatVersion>`, `DataFormatVersion`, `data/v<N>/`) is the integer
+identifying *which* data format. It increments only when forward compatibility
+breaks. The test to apply is a single question: *would the previously released
+build, reading this data with its existing code, show the user something wrong?*
+If yes, it is a bump. If an older build simply ignores the change (new tables,
+new columns, new rows, new values inside a field's documented range), it is not.
 
-The two are named separately on purpose, and every place that holds the integer
-says "version" in its name. "Data format" alone always means the contract; the
-number identifying it is always a "data format version". A name should say what
-its slot contains, and `dataFormat = 1` did not.
+**schema version** (`schemaVersion`) is the shape of a JSON document in this
+channel, and nothing else.
 
-**schema version** (`schemaVersion`, integer) is the shape of the JSON document
-carrying that information, and nothing else.
+**version** (`version`, opaque string) is which publish the data is, compared
+for equality only.
 
-**version** (`version`, opaque string) is which publish the data is, compared for
-equality only.
+"Forward compatibility" is used in
+[Confluent's sense](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html):
+consumers on the old contract can read data written under the new one. That is
+this project's situation exactly, since the readers that cannot be fixed are the
+builds already installed. Wherever this repository previously said "additive",
+forward compatibility is the precise name for the same rule.
 
-Why "format" and not "schema" for the first one, given the sibling PRD and this
-spec originally said either: schema versioning as practised (Avro, JSON Schema,
-Confluent Schema Registry) compares **structure**, and is blind to a field whose
-meaning or permitted value range changed. That blindness is exactly what this
-version must not have. The name follows [Apache Iceberg's
+### Repository layout
+
+```
+<repo>/
+├── data/
+│   ├── index.json                 # the data format version published right now
+│   └── v1/                        # data format version 1 endpoint
+│       ├── manifest.json          # what this endpoint serves
+│       ├── tarkov_data.db
+│       └── db_version.txt         # legacy-protocol token and the seed bookmark
+└── TarkovHelper/Assets/           # the address pre-channel builds poll
+    ├── tarkov_data.db             # byte-identical to data/v1
+    └── db_version.txt
+```
+
+`TarkovHelper/Assets/` stays committed because builds already in the field
+hardcode those URLs and cannot be repointed. Those builds compare the whole body
+of `db_version.txt` as their version, so that file must keep holding a bare
+token. Permanent invariant: the Assets pair and the `data/v1/` pair are
+byte-identical, forever, enforced by `DataChannelMirrorTests`. Git stores blobs
+content-addressed, so the mirror adds tree entries rather than repository growth.
+
+**Bumping the data format version**, recorded now so the publish that first needs
+it is routine: create `data/v<N+1>/` with the new database and manifest, stop
+writing every lower endpoint, and point `data/index.json` at the new version. No
+lower endpoint is edited, ever. The new directory lands on main before or with
+the release tag of the app build that pins N+1, mirroring the update.xml-last
+principle from `feature-fork-release-process.md`.
+
+### Single-sourced data format version pin (TarkovHelper)
+
+- `TarkovHelper/TarkovHelper.csproj` carries
+  `<TarkovDataFormatVersion>1</TarkovDataFormatVersion>`.
+  - The seed copy items source from it: `None Include="..\data\v$(TarkovDataFormatVersion)\..."`
+    with `Link="Assets\..."` and `CopyToOutputDirectory=PreserveNewest`. The
+    output layout is unchanged, so runtime paths, packaging, and e2e
+    expectations still find `Assets\tarkov_data.db`. The repo's Assets copies
+    are removed from the default `None` glob (`<None Remove>`), because
+    otherwise two items target the same output path and MSBuild ordering, not
+    intent, decides which wins.
+  - `<AssemblyMetadata Include="TarkovDataFormatVersion" ... />` exposes the
+    number to code.
+- `DatabaseUpdateService.DataFormatVersion` reads that metadata once at type
+  initialization and derives `INDEX_URL`, `CHANNEL_BASE_URL`, and
+  `MANIFEST_URL` from it. Missing or unparseable metadata throws there: a build
+  wired that badly must fail loudly, never fail soft onto some default endpoint.
+
+One property therefore selects the seed, the polled URLs, and the version the
+app claims to read, so a bump is one reviewable diff and skew between them is
+mechanically impossible.
+
+### Channel documents
+
+```json
+// data/v1/manifest.json
+{
+  "schemaVersion": 1,
+  "dataFormatVersion": 1,
+  "version": "1.0.10",
+  "database": { "file": "tarkov_data.db", "digest": "sha256:...", "size": 6889472 }
+}
+
+// data/index.json
+{ "schemaVersion": 1, "currentDataFormatVersion": 1 }
+```
+
+- `version` keeps today's semantics exactly: an opaque token compared for
+  equality, never ordered, so rollback-by-republish keeps working.
+- `digest` is algorithm-qualified (`sha256:<hex>`) following OCI and Sigstore.
+  The prefix is what lets a build that only knows sha256 tell "a digest I cannot
+  check" apart from "no digest at all"; without it the two are indistinguishable
+  and verification switches itself off silently.
+- Integrity fields are **optional to the reader**: absent, unparseable, or
+  naming an unknown algorithm all mean "install without verifying", with a log
+  line. Refusing would turn a future hash upgrade into a breaking change for
+  every build in the field. They are **mandatory in the repository**, enforced by
+  `DataChannelMirrorTests`, so they can only go missing deliberately.
+- `database.file` is data, not a constant, which leaves room to later give the
+  payload a version-stamped filename (immutable URLs) without changing a reader.
+- Unknown fields are ignored, so an endpoint can carry information for newer
+  builds without disturbing the ones already shipped.
+- A document that cannot be read (empty body, broken JSON, a missing required
+  field) is a failed check: no download, no local state change.
+- `schemaVersion` above this build's maximum, or a `dataFormatVersion` that is
+  not this build's pin, is refused with a log and **no user-facing message**.
+  Both are publishing errors that the next publish fixes, and telling the user to
+  update the app would be wrong advice.
+
+### Verifying a download
+
+After the bytes arrive and before they replace the working database:
+
+1. `size`, when present, must match.
+2. `digest`, when present and checkable, must match.
+3. The database's own `PRAGMA user_version` must be this build's data format
+   version, or 0.
+
+Any failure discards the temp file and leaves both the working database and the
+local bookmark untouched, so the next check retries rather than recording a
+version it did not actually install.
+
+`user_version` is the 32-bit slot SQLite reserves for the application and never
+reads itself. 0 means "no claim" and is accepted, because databases published
+before stamping existed have to keep working. Failing to read the stamp at all is
+not a rejection: the bytes already matched the digest, so the file is what the
+publisher served, and discarding a verified download over an unreadable pragma
+would be the worse outcome.
+
+### Being left behind
+
+A build compares `index.json`'s `currentDataFormatVersion` against its own pin.
+Higher means this build's endpoint will receive nothing further. The state is
+re-derived on every check that reaches the index and deliberately left alone when
+that fetch fails, so a network blip cannot flicker the notice off and on.
+
+A newer data format version can only ship with the build that pins it, so being
+left behind implies a newer app exists and its update affordance is already on
+screen. The UI therefore **escalates the existing update pill** rather than
+raising a second notice: the label names the data consequence instead of the
+version, and the tone moves from success green to warning, with dark text because
+white on amber is unreadable at that size. Settings shows the same fact in its
+update status line. Being left behind still does not stop the endpoint serving
+the last compatible data an install has not caught up to yet.
+
+### Publish flow (TarkovDBEditor)
+
+`DataPublishService` writes the **live data format version**, meaning the highest
+`data/v<N>/` directory present in the repository, and mirrors into
+`TarkovHelper/Assets` while that is 1. Per publish it:
+
+1. Stamps the source database's `user_version` with the live version, before
+   anything is hashed or copied, so both endpoints receive one stamped file and
+   stay byte-identical. A source SQLite cannot open fails the publish here.
+2. Copies the database to the endpoint, and to the Assets mirror while
+   applicable, treating a drifted mirror as a publishable change so the tool can
+   always repair what the CI guard reports.
+3. Writes `manifest.json` with a freshly computed digest and size.
+4. Writes the version stamp to every endpoint the live version serves.
+5. Rewrites `data/index.json`.
+
+The tool never creates a format directory: bumping the data format version is a
+deliberate act in the same reviewed PR that teaches the app to read it, so a
+routine publish cannot bump it by accident. A repository with no `data/` channel
+fails the comparison rather than silently falling back to the Assets-only layout.
+Non-channel assets (map configs, SVGs, icons) keep publishing to Assets only.
+
+One-commit rule: a publish commit carries every endpoint file it wrote, so raw
+main never serves a half-published mirror.
+
+### Files touched
+
+- `TarkovHelper/TarkovHelper.csproj` (version property, metadata, seed items)
+- `TarkovHelper/Services/DatabaseUpdateService.cs` (derived URLs, document
+  readers, verification, superseded state, test seam)
+- `TarkovHelper/MainWindow.xaml.cs` (update pill escalation, Settings status)
+- `TarkovHelper/Services/LocalizationService.Header.cs` (pill and status
+  strings, three languages)
+- `TarkovHelper/Services/UpdateService.cs` (app-update polling interval)
+- `data/index.json`, `data/v1/manifest.json`, `data/v1/db_version.txt`,
+  `data/v1/tarkov_data.db`
+- `TarkovDBEditor/Services/DataPublishService.cs` (channel targets, stamping,
+  manifest and index writing, explicit-path constructor)
+- `TarkovDBEditor/Views/DataPublishWindow.xaml.cs` (target display)
+- `TarkovHelper.Tests/`: `DataChannelTests`, `DataChannelMirrorTests`,
+  `DataChannelEndpointServingTests`, `DataPublishChannelTests`,
+  `DataFormatDriftTests` + `DataFormatBaseline.v1.json`, `LocalFileServer`,
+  updated `UpdateServiceTests` and `LocalizationHeaderStringsTests`
+- `docs/database-update-mechanism.md`, root and TarkovDBEditor `CLAUDE.md`
+
+## Technical Decisions
+
+**Versioned URLs, not a minimum-app-version marker.** Both protect only builds
+shipped after them, so reach does not differentiate; failure modes do. A marker
+gates on the wrong key: the app version, when the compatibility key is the data
+format, so an app release that does not touch the data would strand people for
+nothing. It also forces ordering semantics onto what is today an opaque equality
+token, and it cannot work alone, because pre-channel builds ignore any marker and
+after a break the older-but-marker-aware builds would stop receiving even
+compatible corrections unless per-version endpoints existed anyway. It
+degenerates into versioned URLs plus parsing. Versioned URLs put the version
+where the reader already looks and make a freeze physical: a superseded endpoint
+is a directory that stops changing.
+
+**The document is JSON named for its role, not a line-oriented version file.**
+The first design carried the version and a `frozen` directive in
+`db_version.txt`. That name was already a misnomer the moment the file held
+anything besides a version, and the format handles repeated structure badly,
+which the deferred icon channel would need. Every mature channel
+(electron-builder `latest.yml`, Squirrel `RELEASES`, APT `Release`, rustup's TOML
+manifest, Docker and TUF manifests) names the document for its role and carries a
+payload digest inside it. The line format was not a dead end, since unknown
+directives were ignored, but JSON is the shape this problem already has
+elsewhere.
+
+**The digest travels in the same document as the version.** Risks below records
+that raw GitHub caches each file separately, so a client can pair a fresh version
+with a stale database and record the new version against the wrong bytes.
+Verification after download makes that pair atomic, and it also catches a
+truncated download, which the previous code installed happily. A sidecar hash
+file would not work: it can be cached stale just as easily.
+
+**A pointer, not a marker written into superseded endpoints.** The first design
+had a publish append `frozen` to every lower endpoint at bump time. That mutates
+documents this design calls immutable and leaves a step someone can forget.
+`data/index.json` is rewritten on every publish, so superseded directories are
+never touched again and the detection cannot be forgotten, because nobody
+performs it. The index is the only mutable part of the channel; an unreadable one
+leaves the last known state alone rather than declaring the build current.
+
+**Data format version 1 gets its channel directory now.** Leaving channel builds
+on the Assets URLs and creating `data/v2/` only at the first actual break avoids
+the mirror, but it means the mechanism's first real run is the emergency publish,
+with the seed re-wiring, the multi-target publish flow, and the endpoint contract
+all executing for the first time under pressure. Creating `data/v1/` now means
+every routine publish exercises exactly the path the breaking one will use. The
+cost is near zero because git stores content-addressed blobs.
+
+**The pin lives in the csproj and everything derives from it.** A constant in
+`DatabaseUpdateService` beside hand-maintained csproj copy paths would leave the
+reader pin and the bundled seed free to skew, which is precisely the class of
+mistake this phase exists to make mechanically impossible.
+
+**The version token stays an opaque equality token.** Introducing ordering was
+considered and rejected: equality is what the entire field already runs, it is
+what makes rollback-by-republish work, and per-version endpoints remove the only
+question ordering could have answered.
+
+**"Data format", not "data schema".** Schema versioning as practised (Avro, JSON
+Schema, Confluent Schema Registry) compares **structure**, and is blind to a
+field whose meaning or permitted value range changed. That blindness is exactly
+what this version must not have, and "schema" is separately taken in this
+repository for `_schema_meta` and DDL. The name follows [Apache Iceberg's
 `format-version`](https://iceberg.apache.org/spec/), defined as incrementing when
 older readers would no longer read newer tables correctly, with readers required
-to refuse versions above what they support: the same concept, the same shape, the
-same name. Delta Lake calls its equivalent a protocol version
+to refuse versions above what they support: the same concept, shape, and name.
+Delta Lake calls its equivalent a protocol version
 (`minReaderVersion`/`minWriterVersion`) and has since moved to named table
 features because one integer proved too coarse across many engines; that is the
-recorded escape hatch if a single integer ever stops being enough here, though
-with one reader it is not close. `schemaVersion` for a document's own shape
-follows Docker's manifest field of that name and TUF's `spec_version`.
-CloudEvents' `dataschema` is deliberately not followed: that attribute is
-informational by specification and is not a compatibility gate.
+recorded escape hatch if one integer ever stops being enough here, though with a
+single reader it is not close. `schemaVersion` for a document's own shape follows
+Docker's manifest field of that name and TUF's `spec_version`. CloudEvents'
+`dataschema` is deliberately not followed: that attribute is informational by
+specification and is not a compatibility gate.
 
-"Forward compatibility" is [Confluent's
-term](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html)
-and is used here in their sense: consumers on the old contract can read data
-written under the new one. That is our situation exactly, since the readers we
-cannot fix are the builds already installed. The additive-only rule stated
-earlier in this spec is forward compatibility; those are the same rule under two
-names, and this is the name to use.
+**The database states its own data format version.** Asserting it only from the
+directory path and the manifest leaves the payload silent, and a manifest can be
+internally consistent while describing the wrong file: a directory populated by
+hand, a copy from the wrong build, a half-finished bump. `PRAGMA user_version` is
+the slot SQLite reserves for exactly this, so the payload can be checked against
+its own claim rather than only against the publisher's.
 
-**What the drift guard does and does not cover.** `DataFormatDriftTests` compares
-tables and declared column types, so it catches the structural half mechanically.
-It cannot catch a field whose meaning changed or whose permitted range narrowed,
-because nothing in the file says what a value means. Those remain a human
-judgement made against the question above, and a green test run is therefore not
-evidence that forward compatibility holds. Recorded here so the guard is not read
-as more than it is.
+**The escalation reuses the update pill.** Adding a second notice beside a button
+that already says "update" splits one situation into two things to read and
+leaves the user's only action in the quieter of the two. Deferring the escalation
+until a bump actually happens was also rejected: the notice only exists on builds
+that already carry it, so deferring recreates the retroactivity problem one level
+up, the same argument that made this channel a phase instead of a trigger
+(`feature-eft-1-1-roadmap.spec.md`, Technical Decisions).
 
-### Appended (2026-08-16): the database states its own data format
+**Polling drops to hourly.** Five minutes was 288 checks a day against a payload
+that changes a few times per game patch, and it sits below raw GitHub's own
+per-file cache window, so the extra checks could not learn anything new even in
+principle. The startup check is unchanged and immediate, and it is the one that
+finds things. The app-update check moves from three minutes to the same interval
+for the same reason, in its own commit.
 
-Until now the data format was asserted only from outside the payload, by the
-directory path and by the manifest, and the database itself said nothing. SQLite
-reserves a 32-bit slot for exactly this (`PRAGMA user_version`, which SQLite never
-reads itself; `application_id` is the neighbouring slot for file-type magic), so a
-publish now stamps the live format into the database it publishes, and a client
-checks the stamp after the hash passes.
+**The live data format version is the highest data directory, and only a human
+creates one.** Giving TarkovDBEditor its own version constant would add a second
+pin that can drift silently. The repository layout is self-describing instead.
 
-What this catches that the manifest cannot: a manifest can be internally
-consistent and still describe the wrong file. A directory populated by hand, a
-copy from the wrong build, a half-finished format bump. The manifest is the
-publisher describing the payload; the stamp is the payload describing itself, and
-disagreement between them is now visible instead of silent.
+**The publish tool repairs a drifted mirror rather than only reporting it.**
+Leaving repair to the CI guard means the guard can turn red with no in-tool fix:
+with no database change `HasAnyChanges` was false, the Publish button stayed
+disabled, and hand-copying was the only way out.
 
-Rules, matching the integrity fields above: `user_version` 0 means "no claim" and
-is accepted, because databases published before stamping existed have to keep
-working and capability is judged by what a field says rather than by a version
-number. A non-zero value that disagrees with the build's pin is refused, and the
-working database and its bookmark are both left alone. Failing to read the stamp
-at all is not a rejection: the bytes already matched the manifest's hash, so the
-file is what the publisher meant to serve, and discarding a verified download over
-our own inability to read a pragma would be the worse outcome.
-
-The stamp is written to the source before it is hashed or copied, so both format-1
-endpoints receive one stamped file and stay byte-identical. A source SQLite cannot
-open now fails the publish rather than being stamped silently or skipped: a file
-that is not a database should never reach the channel, and nothing else in the
-tool was checking.
+**A source SQLite cannot open fails the publish.** Stamping could have skipped
+silently, but a file that is not a database should never reach the channel, and
+nothing else in the tool was checking that what it ships is one.
 
 ## Open Questions
 
-- Whether the 1.1 quest-data refresh publishes as format 1 (additive) or
-  becomes format 2 is not this phase's call: it is settled by the quest-data
-  phase's source decision and regeneration diff, already an open question in
-  `feature-eft-1-1-roadmap.spec.md`. This design supports both outcomes
-  without change: format 1 publishes flow to both mirrors; a format 2
-  publish creates `data/v2/` and freezes them.
+- Whether the 1.1 quest-data refresh publishes under data format version 1
+  (forward-compatible) or becomes version 2 is not this phase's call: it is
+  settled by the quest-data phase's source decision and regeneration diff,
+  already an open question in `feature-eft-1-1-roadmap.spec.md`. This design
+  supports both outcomes without change.
 
 ## Test Strategy
 
 - **Unit** (`TarkovHelper.Tests`):
-  - URL guards: `Update_feed_constants_point_at_fork` updated to pin the two
-    v1 URLs full-string on the fork host (same wrong-host rationale as
-    today), plus a derivation test that both URLs embed
-    `/data/v{DataFormatVersion}/`, so a future bump cannot leave a stale
-    hardcoded path behind.
+  - URL guards: `Update_feed_constants_point_at_fork` pins the index and
+    manifest URLs full-string on the fork host (same wrong-host rationale as
+    today), plus a derivation test that the manifest URL embeds
+    `/data/v{DataFormatVersion}/`, so a bump cannot leave a stale hardcoded path.
   - Pin integrity: `DataFormatVersion` equals the csproj
-    `<TarkovDataFormatVersion>` value as seen through assembly metadata; the
-    build-output `Assets/tarkov_data.db` and `Assets/db_version.txt` are
-    byte-identical to the repo's `data/v1/` pair, which catches a mis-wired
-    seed copy item.
-  - Version-file parse matrix: single token; trailing LF/CRLF; token plus
-    `frozen`; unknown directive ignored; blank and whitespace-only files fail
-    the check; interior blank lines skipped.
-  - Frozen propagation: `IsEndpointFrozen` flows into `UpdateCheckResult`;
-    the notice string keys resolve in EN, KO, and JA.
-  - Mirror integrity (offline repo walk, same pattern as `UpdateXmlTests`
-    and `DecisionDocsTests`): the Assets pair is byte-identical to the
-    `data/v1/` pair. This is also the CI tripwire for a half-published
-    commit on main.
-- **Integration** (hermetic, in the normal suite): a local static HTTP
-  server serves a fixture with the full repository layout, and
-  `DatabaseUpdateService` gains an internal constructor seam (base URL plus
-  assets directory; `InternalsVisibleTo` already exists) so tests can point
-  an instance at it. One pass polls the legacy Assets path shape, one polls
-  `data/v1/`; both complete `CheckAndUpdateAsync` with a download and correct
-  version bookkeeping, and a frozen fixture surfaces `IsEndpointFrozen`
-  without downloading. This is the automated stand-in for the roadmap's
-  phase-2 e2e ("a build without the channel keeps updating against the
-  restructured repository"): the previous binary cannot run inside the unit
-  suite, so the tests pin the served contract both build generations depend
-  on, and the real binary is covered by the manual smoke below.
+    `<TarkovDataFormatVersion>` as seen through assembly metadata; the
+    build-output `Assets/` pair is byte-identical to the repo's `data/v1/` pair,
+    which catches a mis-wired seed copy item.
+  - Document readers: valid manifest and index parse into their fields; unknown
+    fields ignored; integrity fields optional; version trimmed; and a matrix of
+    unusable documents (empty, malformed, missing required fields) all yielding
+    a failed check rather than a fabricated one.
+  - Wire field names pinned exactly. The reader is case-insensitive and ignores
+    unknown fields, so a rename would otherwise pass every other test while
+    silently disabling what it renamed.
+  - Mirror integrity (offline repo walk, same pattern as `UpdateXmlTests` and
+    `DecisionDocsTests`): the Assets pair is byte-identical to `data/v1/`, the
+    committed manifest describes the committed database (digest, size, version),
+    the index covers the version this build polls, and the published database
+    carries its `user_version` stamp. This is also the CI tripwire for a
+    half-published commit on main.
+  - Localization: the pill and status keys resolve in EN, KO, and JA.
+- **Data format drift** (`DataFormatDriftTests`): snapshots the published
+  database's tables and declared column types into `DataFormatBaseline.v<N>.json`
+  and fails when a table or column disappears or is retyped, while allowing
+  additions freely. The first run writes the baseline and fails deliberately, so
+  a deleted baseline cannot silently reappear and pass against whatever the
+  database happens to hold that day.
+  - **What it cannot cover:** a field whose meaning changed or whose permitted
+    range narrowed, because nothing in the file says what a value means. Those
+    stay a human judgement against the question in Vocabulary, and a green run is
+    therefore not evidence that forward compatibility holds.
+- **Integration** (hermetic, in the normal suite): a loopback HTTP server serves
+  a fixture laid out like the repository, and `DatabaseUpdateService` has an
+  internal constructor seam (channel root plus assets directory;
+  `InternalsVisibleTo` already exists). Covers a complete update, a digest
+  mismatch, a truncated payload, a digest naming an algorithm this build cannot
+  check, absent integrity fields, a mismatched `user_version`, supersession
+  including that a failed index fetch does not clear it, and the two refusals.
+  The server is a raw `TcpListener` rather than `HttpListener`, which needs
+  elevation or a netsh URL reservation this suite cannot assume, and it records
+  requested paths so a test can prove the negative that a check which found
+  nothing never fetched the database.
+- **Publish side** (`DataPublishChannelTests`): drives real publishes against
+  throwaway trees through a public explicit-path constructor. Covers highest
+  version resolution including v10 beating v9, the no-channel error, both mirror
+  drift directions repairing to byte-identical endpoints, an in-sync pair having
+  nothing to publish (so the drift tests cannot pass vacuously), the manifest
+  round-tripping through the app's own reader, and a version-2 publish leaving
+  the superseded endpoints untouched.
 - **E2E**: the existing suite must stay green unchanged (the harness pins
   `TARKOVHELPER_DISABLE_DB_UPDATE`, and the output Assets layout does not
-  change). No new UI e2e is added: exercising the frozen notice end-to-end
-  would require the packaged app to honor a URL override, and a production
-  escape hatch for the feed URLs is exactly what the full-string URL guards
-  exist to forbid. A debug-gated override was considered and rejected for
-  the same reason; the notice is covered at unit level (parse, propagation,
-  localization) instead.
-- **Manual smoke** (after merge; this PR is not a data publish, the Assets
-  bytes do not change): fetch all four raw URLs and byte-compare the pairs;
-  run the previous released build and confirm its DB check still reports up
-  to date; run the new build and confirm from its log that the check hits
-  `data/v1/` and reports up to date.
+  change). No new UI e2e: exercising the escalated pill end-to-end would require
+  the packaged app to honor a URL override, and a production escape hatch for the
+  feed URLs is exactly what the full-string URL guards exist to forbid.
+- **Manual smoke** (after merge; this PR is not a data publish): fetch the raw
+  URLs and byte-compare the mirrored pair; run the previous released build and
+  confirm its DB check still reports up to date; run the new build and confirm
+  from its log that the check hits `data/v1/` and reports up to date.
 
 ## Verification
 
-- `dotnet build TarkovHelper.sln` - clean build.
-- `dotnet test --filter "Category!=E2E"` - full non-E2E suite green,
-  including `DecisionDocsTests` (this pair passes the format invariants),
-  the updated URL pins, and the new channel tests.
+- `dotnet build TarkovHelper.sln` - clean build, zero warnings, Debug and
+  Release.
+- `dotnet test --filter "Category!=E2E"` - full non-E2E suite green, including
+  `DecisionDocsTests` (this pair passes the format invariants), the updated URL
+  pins, and the new channel tests.
 - E2E suite on the development desktop - no new failures relative to main.
-- The manual smoke steps from Test Strategy, after merge to main.
+- `dotnet publish` output carries the seed pair at `Assets/`, so the release zip
+  is unaffected by the re-sourcing.
+- The manual smoke steps above, after merge to main.
 
 ## Risks & Migration
 
@@ -573,26 +504,24 @@ tool was checking.
   endpoint automatically: the bundled seed matches the new pin, and the
   immediate first check then syncs, the same self-heal already documented in
   `docs/database-update-mechanism.md`.
-- **Half-publish skew.** If a publish updated one format-1 mirror and not
-  the other, raw main would serve differing version tokens per endpoint
-  until fixed. Prevented by the tool writing both in one commit; detected by
-  the mirror guard in CI. Both mirrors always carry format-1 data, so the
-  worst case is a token mismatch, not breakage.
-- **Raw CDN per-file caching (~5 min) can skew a single check**: a client
-  can fetch a fresh version token while the database URL still serves the
-  cached previous blob, record the new token against the old data, and stay
-  that way until the next publish changes the token again. This hazard
-  exists today and is unchanged by this phase; it is recorded here because
-  the design review surfaced it. The fix (a content check after download,
-  e.g. a version stamp inside the database) is real work touching the DB
-  build pipeline and earns its own decision if it ever bites in practice.
-- **Repository growth** stays what it is today: each publish adds one
-  database blob to history; the mirror adds none (content-addressed).
-  Hosting blobs as GitHub Release assets instead was considered and
-  rejected: heavier per-publish tooling, a second publish trust model, and
-  raw main is proven; revisit only if repository size actually hurts.
+- **Half-publish skew.** If a publish updated one format-1 endpoint and not the
+  other, raw main would serve different bytes per address until fixed. Prevented
+  by the tool writing both in one commit and repairing drift it finds; detected
+  by the mirror guard in CI.
+- **Raw CDN per-file caching can still skew a single check**, but no longer
+  silently: a client can fetch a fresh manifest beside a cached older database,
+  and the digest check now discards it and retries rather than recording the new
+  version against the wrong bytes. The residual cost is a wasted download.
+- **Repository growth** stays what it is today: each publish adds one database
+  blob to history; the mirror adds none (content-addressed). Hosting blobs as
+  GitHub Release assets instead was considered and rejected: heavier per-publish
+  tooling, a second publish trust model, and raw main is proven; revisit only if
+  repository size actually hurts.
+- **A longer poll interval has no manual override**, because the Settings button
+  remains app-only (Non-Goals). Restarting the app forces a check, which is the
+  escape hatch until the settings pass lands.
 - **Rollback of this phase**: revert the app-side changes and the csproj
-  re-sourcing; the Assets endpoint was never repointed, so pre-channel
-  builds never notice, and an inert `data/v1/` directory harms nothing.
-  Within-format data rollback is unchanged: republish older content under a
-  new token and every build follows it.
+  re-sourcing; the Assets endpoint was never repointed, so pre-channel builds
+  never notice, and an inert `data/` directory harms nothing. Within-format data
+  rollback is unchanged: republish older content under a new token and every
+  build follows it.
