@@ -7,8 +7,7 @@ namespace TarkovHelper.Tests;
 /// <summary>
 /// Guards the versioned data channel (feature-versioned-data-channel.spec.md): the
 /// format pin that ties this build's bundled seed database to the endpoint it polls,
-/// the db_version.txt reader, and the frozen directive that tells a build its channel
-/// has ended.
+/// and the two channel documents it reads.
 ///
 /// The pin is the load-bearing part. One csproj property selects both the seed copied
 /// into Assets\ and the URLs DatabaseUpdateService derives, so a build can only poll
@@ -28,7 +27,7 @@ public sealed class DataChannelTests
     public void Runtime_data_format_matches_the_csproj_property()
     {
         // The metadata item is the only bridge from the csproj property to runtime; if
-        // it is dropped or renamed, the URLs below silently describe a different format
+        // it is dropped or renamed, the URLs below silently describe a different schema
         // than the bundled database.
         Assert.Equal(CsprojDataFormat(), DatabaseUpdateService.DataFormatVersion.ToString());
     }
@@ -74,118 +73,159 @@ public sealed class DataChannelTests
     #region Endpoint URLs
 
     [Fact]
-    public void Endpoint_urls_are_derived_from_the_running_data_format()
+    public void The_manifest_url_is_derived_from_the_running_data_format()
     {
         // A format bump must move the endpoint with it. Pinning the derived segment
-        // (rather than a literal) is what makes a stale hardcoded path impossible.
-        var expectedSegment = $"/data/v{DatabaseUpdateService.DataFormatVersion}/";
-
-        Assert.Contains(expectedSegment, DatabaseUpdateService.VERSION_URL, StringComparison.Ordinal);
-        Assert.Contains(expectedSegment, DatabaseUpdateService.DATABASE_URL, StringComparison.Ordinal);
-        Assert.EndsWith("/db_version.txt", DatabaseUpdateService.VERSION_URL, StringComparison.Ordinal);
-        Assert.EndsWith("/tarkov_data.db", DatabaseUpdateService.DATABASE_URL, StringComparison.Ordinal);
+        // rather than a literal is what makes a stale hardcoded path impossible.
+        Assert.Contains($"/data/v{DatabaseUpdateService.DataFormatVersion}/",
+            DatabaseUpdateService.MANIFEST_URL, StringComparison.Ordinal);
+        Assert.EndsWith("/manifest.json", DatabaseUpdateService.MANIFEST_URL, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Both_endpoint_urls_share_one_channel_directory()
+    public void The_index_sits_above_the_format_directories()
     {
-        // The version stamp must describe the database served beside it; two directories
-        // would let a check compare one endpoint's version against another's data.
-        Assert.StartsWith(DatabaseUpdateService.CHANNEL_BASE_URL + "/",
-            DatabaseUpdateService.VERSION_URL, StringComparison.Ordinal);
-        Assert.StartsWith(DatabaseUpdateService.CHANNEL_BASE_URL + "/",
-            DatabaseUpdateService.DATABASE_URL, StringComparison.Ordinal);
+        // The index answers "which schema does the project publish now", so it must live
+        // outside any one format's directory. If it were inside, a superseded build could
+        // only ever read a copy that stopped being maintained with the rest of that
+        // directory, which is precisely the state it needs to detect.
+        Assert.Equal($"{DatabaseUpdateService.DATA_ROOT_URL}/index.json", DatabaseUpdateService.INDEX_URL);
+        Assert.StartsWith(DatabaseUpdateService.DATA_ROOT_URL + "/v",
+            DatabaseUpdateService.CHANNEL_BASE_URL, StringComparison.Ordinal);
     }
 
     #endregion
 
-    #region db_version.txt reader
+    #region Manifest document
 
-    [Theory]
-    [InlineData("1.0.10", "1.0.10")]
-    [InlineData("1.0.10\n", "1.0.10")]
-    [InlineData("1.0.10\r\n", "1.0.10")]
-    [InlineData("  1.0.10  ", "1.0.10")]
-    [InlineData("\n\n1.0.10\n", "1.0.10")]
-    public void Version_token_is_the_first_non_blank_line(string content, string expected)
+    private const string ValidManifest = """
+        {
+          "schema": 1,
+          "dataSchema": 1,
+          "version": "1.0.10",
+          "database": { "file": "tarkov_data.db", "sha256": "abc123", "size": 42 }
+        }
+        """;
+
+    [Fact]
+    public void A_valid_manifest_parses_into_its_fields()
     {
-        var parsed = DatabaseUpdateService.ParseVersionFile(content);
+        var manifest = DatabaseUpdateService.ParseManifest(ValidManifest);
 
-        Assert.NotNull(parsed);
-        Assert.Equal(expected, parsed.Version);
-        Assert.False(parsed.IsFrozen);
-    }
-
-    [Theory]
-    [InlineData("1.0.10\nfrozen")]
-    [InlineData("1.0.10\nfrozen\n")]
-    [InlineData("1.0.10\r\nfrozen\r\n")]
-    [InlineData("1.0.10\n\nfrozen\n")]
-    [InlineData("1.0.10\nFrozen")]
-    [InlineData("1.0.10\n  frozen  ")]
-    public void Frozen_directive_is_recognized_after_the_token(string content)
-    {
-        var parsed = DatabaseUpdateService.ParseVersionFile(content);
-
-        Assert.NotNull(parsed);
-        Assert.Equal("1.0.10", parsed.Version);
-        Assert.True(parsed.IsFrozen);
+        Assert.NotNull(manifest);
+        Assert.Equal(1, manifest.Schema);
+        Assert.Equal(1, manifest.DataSchema);
+        Assert.Equal("1.0.10", manifest.Version);
+        Assert.Equal("tarkov_data.db", manifest.Database.File);
+        Assert.Equal("abc123", manifest.Database.Sha256);
+        Assert.Equal(42, manifest.Database.Size);
     }
 
     [Fact]
-    public void Unknown_directives_are_ignored_without_disturbing_the_token()
+    public void Unknown_fields_are_ignored()
     {
-        // Forward compatibility is the whole point of the directive list: an endpoint
-        // must be able to say new things to newer builds without breaking the builds
-        // already in the field, which can never be taught the new vocabulary.
-        var parsed = DatabaseUpdateService.ParseVersionFile("1.0.10\nsomething-from-2027\nfrozen");
+        // Forward compatibility is the point: an endpoint must be able to carry fields
+        // for newer builds without disturbing the ones already in the field, which can
+        // never be taught the new vocabulary.
+        var manifest = DatabaseUpdateService.ParseManifest("""
+            {
+              "schema": 1, "dataSchema": 1, "version": "1.0.10",
+              "database": { "file": "tarkov_data.db", "signature": "from-2027" },
+              "publishedBy": "someone", "notes": ["a", "b"]
+            }
+            """);
 
-        Assert.NotNull(parsed);
-        Assert.Equal("1.0.10", parsed.Version);
-        Assert.True(parsed.IsFrozen);
+        Assert.NotNull(manifest);
+        Assert.Equal("1.0.10", manifest.Version);
     }
 
     [Fact]
-    public void A_token_that_merely_contains_frozen_is_not_a_directive()
+    public void Integrity_fields_are_optional()
     {
-        // Directives are whole lines. A version token like "1.0.10-frozen-fix" must not
-        // freeze the channel, and "frozen" on the first line is a token, not a directive.
-        var versionLike = DatabaseUpdateService.ParseVersionFile("1.0.10-frozen-fix");
-        Assert.NotNull(versionLike);
-        Assert.False(versionLike.IsFrozen);
+        // Absent hash means "install without verifying", not "reject". Capability lives
+        // in the presence of a field, not in a version number.
+        var manifest = DatabaseUpdateService.ParseManifest("""
+            { "schema": 1, "dataSchema": 1, "version": "1.0.10",
+              "database": { "file": "tarkov_data.db" } }
+            """);
 
-        var firstLine = DatabaseUpdateService.ParseVersionFile("frozen");
-        Assert.NotNull(firstLine);
-        Assert.Equal("frozen", firstLine.Version);
-        Assert.False(firstLine.IsFrozen);
+        Assert.NotNull(manifest);
+        Assert.Null(manifest.Database.Sha256);
+        Assert.Null(manifest.Database.Size);
+    }
+
+    [Fact]
+    public void The_version_token_is_trimmed()
+    {
+        var manifest = DatabaseUpdateService.ParseManifest("""
+            { "schema": 1, "dataSchema": 1, "version": "  1.0.10\n",
+              "database": { "file": "tarkov_data.db" } }
+            """);
+
+        Assert.NotNull(manifest);
+        Assert.Equal("1.0.10", manifest.Version);
+    }
+
+    [Theory]
+    // Nothing at all.
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    // Not JSON, or the wrong JSON.
+    [InlineData("1.0.10")]
+    [InlineData("{ \"schema\": 1, ")]
+    [InlineData("[]")]
+    // Required fields missing or unusable. A null version would compare unequal to every
+    // local version and re-download the database on every check, forever.
+    [InlineData("""{ "schema": 1, "dataSchema": 1, "database": { "file": "tarkov_data.db" } }""")]
+    [InlineData("""{ "schema": 1, "dataSchema": 1, "version": "  ", "database": { "file": "x.db" } }""")]
+    [InlineData("""{ "schema": 1, "dataSchema": 1, "version": "1.0.10" }""")]
+    [InlineData("""{ "schema": 1, "dataSchema": 1, "version": "1.0.10", "database": {} }""")]
+    [InlineData("""{ "dataSchema": 1, "version": "1.0.10", "database": { "file": "x.db" } }""")]
+    [InlineData("""{ "schema": 1, "version": "1.0.10", "database": { "file": "x.db" } }""")]
+    public void An_unusable_manifest_is_a_failed_check(string? content)
+    {
+        // Null, not a fabricated document: an unreadable manifest must behave like a
+        // failed fetch (no download, no local state change), never like a new version.
+        Assert.Null(DatabaseUpdateService.ParseManifest(content));
+    }
+
+    #endregion
+
+    #region Index document
+
+    [Fact]
+    public void A_valid_index_parses_into_its_fields()
+    {
+        var index = DatabaseUpdateService.ParseIndex("""{ "schema": 1, "currentDataSchema": 3 }""");
+
+        Assert.NotNull(index);
+        Assert.Equal(1, index.Schema);
+        Assert.Equal(3, index.CurrentDataSchema);
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("\n\n")]
-    [InlineData("\r\n \r\n")]
-    public void Content_without_a_token_is_a_failed_check(string? content)
+    [InlineData("not json")]
+    [InlineData("""{ "schema": 1 }""")]
+    [InlineData("""{ "currentDataSchema": 2 }""")]
+    [InlineData("""{ "schema": 1, "currentDataSchema": 0 }""")]
+    public void An_unusable_index_yields_nothing(string? content)
     {
-        // Null, not a fabricated version: an empty body must behave like a failed fetch
-        // (no download, no local state change), never like a version that differs.
-        Assert.Null(DatabaseUpdateService.ParseVersionFile(content));
+        // The caller keeps its previous knowledge on null. Returning a default here
+        // would let a broken index quietly declare every build current.
+        Assert.Null(DatabaseUpdateService.ParseIndex(content));
     }
 
     #endregion
-
-    #region Frozen state on results
 
     [Fact]
-    public void An_unflagged_check_result_is_not_frozen()
+    public void An_unflagged_check_result_is_not_superseded()
     {
         // The optional parameter's default must be the harmless one: a result built
-        // without the flag must never tell a healthy build its data channel has ended.
-        // (Propagation through a real check is covered by DataChannelEndpointServingTests,
-        // which drives the service against a served frozen endpoint.)
-        Assert.False(new UpdateCheckResult(true, false, "up to date").IsEndpointFrozen);
+        // without the flag must never tell a healthy build its data has stopped.
+        // (Propagation through a real check is covered by DataChannelEndpointServingTests.)
+        Assert.False(new UpdateCheckResult(true, false, "up to date").IsSuperseded);
     }
-
-    #endregion
 }

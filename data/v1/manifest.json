@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "dataSchema": 1,
+  "version": "1.0.10",
+  "database": {
+    "file": "tarkov_data.db",
+    "sha256": "e2854c6af84093f95d45e40cdada74d2cf82714a457d4f5a3f1e46f5255a22cc",
+    "size": 6889472
+  }
+}

@@ -10,8 +10,8 @@ TarkovHelper는 두 가지 자동 업데이트 채널을 가집니다:
 
 1. **앱 업데이트** — AutoUpdater.NET이 GitHub Release의 `TarkovHelper.zip`으로 앱 전체를 교체
    (`Services/UpdateService.cs`, 3분 주기 체크)
-2. **DB 업데이트** — `Services/DatabaseUpdateService.cs`가 5분 주기로 GitHub raw의
-   `db_version.txt`를 확인하고, 버전이 다르면 `tarkov_data.db`만 다운로드해 교체
+2. **DB 업데이트** — `Services/DatabaseUpdateService.cs`가 시작 시 1회 + 이후 1시간 주기로
+   GitHub raw의 매니페스트를 확인하고, 버전이 다르면 `tarkov_data.db`만 다운로드해 교체
    (앱 업데이트 없이 DB만 갱신됨). 폴링 대상은 그 빌드의 **데이터 채널**
    (`data/v<N>/`)이며, 자세한 내용은 아래 "데이터 채널" 절 참고
 
@@ -159,8 +159,8 @@ internal const string UpdateXmlUrl = "https://raw.githubusercontent.com/josephja
 internal static readonly string VERSION_URL  = ".../refs/heads/main/data/v1/db_version.txt";
 internal static readonly string DATABASE_URL = ".../refs/heads/main/data/v1/tarkov_data.db";
 
-// 5분 주기로 원격 db_version.txt를 읽어 첫 줄 토큰을 로컬과 문자열 비교;
-// 다르면 tarkov_data.db를 .tmp로 내려받아 교체하고 DatabaseUpdated 이벤트 발생
+// 시작 시 1회 + 1시간 주기로 index.json과 manifest.json을 읽고, version 토큰을 로컬과 비교;
+// 다르면 tarkov_data.db를 .tmp로 내려받아 sha256/size 검증 후 교체하고 DatabaseUpdated 이벤트 발생
 ```
 
 > **참고 (앱 업데이트와 DB의 상호작용):** 앱 self-update zip에는 릴리즈 시점의
@@ -205,28 +205,37 @@ internal static readonly string DATABASE_URL = ".../refs/heads/main/data/v1/tark
 
 설계 문서: `docs/decisions/feature-versioned-data-channel.spec.md`
 
-### 데이터 형식(format)과 엔드포인트
+### 데이터 스키마(data schema)와 엔드포인트
 
-**데이터 형식**은 앱 빌드가 읽을 수 있는 `tarkov_data.db`의 계약(스키마 + 값의 의미)입니다.
-추가 전용 변경(새 컬럼/테이블, `ColumnExistsAsync`로 feature-detect)은 형식을 올리지 않고,
-기존 리더를 깨뜨리는 변경(rename, 용도 변경, 삭제, 의미 변경)만 형식을 올립니다.
+**데이터 스키마**는 앱 빌드가 읽을 수 있는 `tarkov_data.db`의 계약(SQLite 스키마 + 값의 의미)
+입니다. 추가 전용 변경(새 컬럼/테이블, `ColumnExistsAsync`로 feature-detect)은 올리지 않고,
+기존 리더를 깨뜨리는 변경(rename, 용도 변경, 삭제, 의미 변경)만 올립니다.
+
+매니페스트 문서의 모양을 가리키는 `schema`와는 다른 축입니다. 둘 다 리더 계약이고 둘 다
+feature detection이 1차 방어선이지만, **데이터 스키마는 선택자**(어느 엔드포인트와 대화할지를
+URL로 고름)이고 **매니페스트 schema는 검증자**(받아온 문서를 읽을 수 있는지 판정)입니다.
+7 MB짜리 페이로드는 내려받기 전에 걸러야 하므로 버전이 경로에 드러나 있어야 하고,
+매니페스트는 작아서 일단 받아 읽고 판단해도 됩니다.
 
 ```
 <repo>/
 ├── data/
-│   └── v1/                        # 형식 1 엔드포인트 (앱이 폴링하는 곳)
+│   ├── index.json                 # 지금 발행 중인 데이터 스키마 (채널의 유일한 가변 부분)
+│   └── v1/                        # 스키마 1 엔드포인트 (앱이 폴링하는 곳)
+│       ├── manifest.json          # 새 빌드가 읽는 문서
 │       ├── tarkov_data.db
-│       └── db_version.txt
-└── TarkovHelper/Assets/           # 채널 이전 빌드가 폴링하는 주소 (형식 1의 두 번째 주소)
+│       └── db_version.txt         # 레거시 프로토콜용 + 설치본 북마크의 시드
+└── TarkovHelper/Assets/           # 채널 이전 빌드가 폴링하는 주소
     ├── tarkov_data.db             # data/v1과 항상 바이트 단위로 동일
     └── db_version.txt
 ```
 
 `TarkovHelper/Assets/`는 이미 배포된 빌드가 URL을 하드코딩하고 있어 변경할 수 없으므로
-남겨 둡니다. 두 주소는 같은 형식의 엔드포인트이므로 **항상 함께 갱신되고 함께 동결**되며,
-`DataChannelMirrorTests`가 바이트 동일성을 CI에서 강제합니다.
+남겨 둡니다. 그 빌드들은 본문 전체를 문자열 비교하므로 여기에는 토큰만 담긴
+`db_version.txt`가 계속 있어야 하고, `DataChannelMirrorTests`가 `data/v1`과의 바이트
+동일성을 CI에서 강제합니다.
 
-### 형식 고정(pin)
+### 스키마 고정(pin)
 
 `TarkovHelper.csproj`의 `<TarkovDataFormat>` 하나가 두 가지를 동시에 결정합니다:
 
@@ -236,39 +245,62 @@ internal static readonly string DATABASE_URL = ".../refs/heads/main/data/v1/tark
 따라서 번들 데이터와 폴링 채널이 어긋날 수 없습니다. 메타데이터가 없거나 잘못되면
 `DatabaseUpdateService`는 기본값으로 넘어가지 않고 즉시 예외를 던집니다.
 
-### 형식 올리기와 동결(freeze)
+### manifest.json
+
+```json
+{
+  "schema": 1,
+  "dataSchema": 1,
+  "version": "1.0.10",
+  "database": { "file": "tarkov_data.db", "sha256": "...", "size": 6889472 }
+}
+```
+
+- `version`은 여전히 **불투명한 동등 비교 토큰**입니다. 순서 비교를 하지 않으므로 이전 내용을
+  새 토큰으로 다시 발행하면 그대로 롤백이 됩니다.
+- `sha256`/`size`는 다운로드 후 검증합니다. 불일치하면 임시 파일을 버리고 기존 DB를 유지하며
+  북마크도 올리지 않습니다. raw GitHub이 파일별로 캐시하기 때문에 새 매니페스트와 낡은 DB가
+  짝지어질 수 있는데, **버전과 해시가 같은 문서에 있어야** 그 짝이 원자적으로 검증됩니다.
+- 두 필드는 리더 입장에서 **선택적**입니다. 없으면 검증 없이 설치합니다. 능력은 버전 숫자가
+  아니라 필드의 존재로 판단한다는 원칙이고, 덕분에 `schema`는 거의 오를 일이 없습니다.
+- `database.file`도 상수가 아니라 데이터입니다. 나중에 페이로드 파일명에 버전을 넣어 URL을
+  불변으로 만드는 선택지를 막지 않습니다.
+- 모르는 필드는 무시합니다. 이미 배포된 빌드는 새 어휘를 배울 수 없으므로, 엔드포인트가 새
+  빌드에게만 새로운 이야기를 할 수 있어야 합니다.
+- 읽을 수 없는 문서(빈 본문, 깨진 JSON, 필수 필드 누락)는 실패한 체크로 처리합니다.
+  다운로드도 로컬 상태 변경도 없습니다.
+
+`schema`가 이 빌드의 상한보다 크거나 `dataSchema`가 pin과 다르면 **거부하고 로그만 남깁니다.**
+사용자에게는 알리지 않습니다. 발행 실수이지 사용자가 할 수 있는 일이 없고, 다음 publish로
+고쳐지기 때문입니다.
+
+### index.json과 스키마 올리기
+
+```json
+{ "schema": 1, "currentDataSchema": 1 }
+```
 
 추가 전용으로 만들 수 없는 publish가 처음 필요해질 때:
 
-1. 새 형식 디렉터리 `data/v<N+1>/`를 만들고 새 데이터를 넣습니다 (도구가 아니라 사람이,
-   앱의 pin을 올리는 같은 PR에서).
-2. 이하 형식 엔드포인트에는 더 이상 쓰지 않습니다.
-3. 각 이하 형식의 `db_version.txt`에 `frozen` 줄을 덧붙입니다. 버전 토큰과 DB는 그대로 둡니다.
+1. 새 디렉터리 `data/v<N+1>/`를 만들고 새 데이터를 넣습니다 (도구가 아니라 사람이, 앱의 pin을
+   올리는 같은 PR에서).
+2. 이하 스키마 엔드포인트에는 더 이상 쓰지 않습니다. **덧붙이지도 고치지도 않습니다.**
+3. `data/index.json`의 `currentDataSchema`가 새 값을 가리킵니다 (발행 도구가 매번 자동으로 씀).
 
-동결된 채널을 폴링하는 빌드는 토큰이 그대로이므로 다운로드하지 않고, 타이틀 바에
-"데이터 업데이트 종료" 알림을 표시합니다. 채널 이전 빌드는 문자열 전체를 비교하므로
-변경으로 보고 동일한 DB를 한 번 다시 받습니다 (무해, 1회).
+뒤에 남은 빌드는 자기 pin과 `currentDataSchema`를 비교해서 스스로 알아냅니다. 그래서 지나간
+엔드포인트 디렉터리는 **다시는 수정되지 않고**, bump 시점에 사람이 손으로 표시를 덧붙이는 단계도
+없습니다(잊어버릴 수가 없습니다). 인덱스를 읽지 못하면 마지막으로 알던 상태를 유지합니다.
 
-### db_version.txt 형식
-
-첫 번째 비어 있지 않은 줄이 **버전 토큰**이고, 그 뒤의 각 줄은 **디렉티브**입니다.
-
-```
-1.0.10          <- 버전 토큰 (기존과 동일한 문자열 동등 비교 대상)
-frozen          <- 디렉티브 (현재 정의된 유일한 값)
-```
-
-- 알 수 없는 디렉티브는 의도적으로 무시합니다. 이미 배포된 빌드는 새 어휘를 배울 수 없으므로,
-  엔드포인트가 새 빌드에게만 새로운 이야기를 할 수 있어야 합니다.
-- 토큰이 없는 본문(빈 파일 등)은 실패한 체크로 처리합니다 (다운로드 없음, 로컬 상태 변경 없음).
-- 로컬 `Assets/db_version.txt`에는 토큰만 기록합니다. 동결 여부는 데이터가 아니라
-  엔드포인트의 상태이므로 매 체크마다 다시 읽습니다.
+뒤에 남았다는 것은 **더 새로운 앱이 반드시 존재한다**는 뜻입니다(새 스키마는 그것을 pin한 빌드
+없이 생길 수 없으므로). 그래서 UI는 별도 알림을 띄우지 않고 **이미 있는 앱 업데이트 pill을
+승격**시킵니다. 라벨이 결과를 말하고, 색이 성공에서 경고로 바뀝니다.
 
 ## 버전 관리
 
 ### DB 버전
-- 파일: `data/v<N>/db_version.txt`와 그 미러 `Assets/db_version.txt` (예: `1.0.10`,
-  앱 버전과 독립적인 DB 데이터 버전)
+- 원격 기준: `data/v<N>/manifest.json`의 `version` (예: `1.0.10`, 앱 버전과 독립)
+- 로컬 북마크: 설치본의 `Assets/db_version.txt` (지금 가진 버전을 적어 두는 용도이며,
+  엔드포인트가 아닙니다). 저장소의 같은 경로는 채널 이전 빌드에게 서빙되는 별개의 역할입니다.
 - `DatabaseUpdateService`가 로컬/원격 **토큰**을 문자열 동등 비교하여 다르면 DB를 다운로드
   (순서 비교가 아니므로, 이전 내용을 새 토큰으로 다시 publish하면 롤백이 됩니다)
 - 배포 zip에 포함됨 (없으면 신규 설치가 첫 체크에서 DB 전체를 재다운로드)
@@ -365,11 +397,13 @@ WHERE MapName = @MapName
    - tarkov_data.db 업데이트
 2. Map Editor에서 마커 편집 (필요시)
 3. Data Publish 창에서 publish
-   - DB와 db_version.txt를 live 형식(`data/v<N>/`, 저장소에 있는 가장 높은 v 디렉터리)에 씀
-   - 형식이 1이면 `TarkovHelper/Assets/`에도 같은 바이트를 미러링
+   - DB, manifest.json, db_version.txt를 live 스키마(`data/v<N>/`, 저장소에 있는 가장 높은
+     v 디렉터리)에 씀
+   - `data/index.json`의 currentDataSchema를 갱신
+   - 스키마가 1이면 `TarkovHelper/Assets/`에도 DB와 db_version.txt를 미러링
    - 아이콘/맵/설정은 기존대로 Assets/에만 (앱 릴리즈로 배포되는 자산)
 4. **복사된 엔드포인트 파일을 한 커밋에 함께** main에 커밋/push
-   → 사용자 앱의 DatabaseUpdateService가 5분 내 자동 반영
+   → 사용자 앱의 DatabaseUpdateService가 다음 체크(최대 1시간, 앱 재시작 시 즉시)에 자동 반영
 ```
 
 > publish 도구는 새 형식 디렉터리를 만들지 않습니다. 형식을 올리는 것은 앱의 pin을 함께
@@ -417,8 +451,10 @@ WHERE MapName = @MapName
 
 ### 설정 파일
 - `update.xml` - AutoUpdater 설정
-- `data/v<N>/db_version.txt` - DB 버전 (엔드포인트 원본)
-- `Assets/db_version.txt` - 형식 1 미러 겸 설치본의 로컬 버전 기록
+- `data/index.json` - 지금 발행 중인 데이터 스키마
+- `data/v<N>/manifest.json` - 그 스키마 엔드포인트가 서빙하는 것 (버전, 해시, 크기)
+- `data/v<N>/db_version.txt` - 레거시 프로토콜용 토큰 겸 설치본 북마크의 시드
+- `Assets/db_version.txt` - 스키마 1 미러(저장소) 겸 로컬 버전 기록(설치본)
 - `Assets/DB/Data/map_configs.json` - 맵 설정
 - `TarkovHelper.csproj`의 `<TarkovDataFormat>` - 시드 DB와 폴링 URL을 함께 결정하는 pin
 

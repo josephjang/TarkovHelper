@@ -108,19 +108,53 @@ public sealed class DataChannelMirrorTests
     }
 
     [Fact]
-    public void The_endpoint_this_build_polls_is_readable_and_live()
+    public void The_committed_manifest_describes_the_committed_database()
     {
-        // The committed file must satisfy the reader that consumes it. Asserted against
-        // the format this build actually polls, not the mirrored one: after a future
-        // bump, data/v1 being frozen is the expected end state, while shipping a build
-        // aimed at an already-frozen endpoint never is.
+        // The manifest is what clients trust to decide whether to download and whether
+        // to keep what they downloaded. If its hash, size, or version drifts from the
+        // files beside it, every install either re-downloads forever or rejects a
+        // perfectly good database.
         var format = DatabaseUpdateService.DataFormatVersion;
-        var parsed = DatabaseUpdateService.ParseVersionFile(
-            File.ReadAllText(Path.Combine(TestRepo.Root(), "data", $"v{format}", VersionFile)));
+        var channelDir = Path.Combine(TestRepo.Root(), "data", $"v{format}");
+        var manifestPath = Path.Combine(channelDir, "manifest.json");
 
-        Assert.NotNull(parsed);
-        Assert.False(string.IsNullOrWhiteSpace(parsed.Version));
-        Assert.False(parsed.IsFrozen,
-            $"data/v{format} is marked frozen while this build still polls it.");
+        Assert.True(File.Exists(manifestPath), $"data/v{format}/manifest.json is missing");
+        var manifest = DatabaseUpdateService.ParseManifest(File.ReadAllText(manifestPath));
+        Assert.True(manifest != null, $"data/v{format}/manifest.json does not satisfy the app's own reader");
+
+        Assert.Equal(format, manifest!.DataSchema);
+        Assert.True(manifest.Schema <= DatabaseUpdateService.MAX_SUPPORTED_MANIFEST_SCHEMA,
+            $"The committed manifest declares schema {manifest.Schema}, which this build cannot read.");
+
+        var databasePath = Path.Combine(channelDir, manifest.Database.File);
+        Assert.True(File.Exists(databasePath), $"The manifest names {manifest.Database.File}, which is not there");
+
+        // Integrity fields are optional to the reader, but the repository must carry
+        // them: shipping without a hash silently turns off download verification.
+        Assert.False(string.IsNullOrWhiteSpace(manifest.Database.Sha256),
+            "The committed manifest has no sha256, which would disable download verification for every client.");
+        Assert.Equal(new FileInfo(databasePath).Length, manifest.Database.Size);
+        Assert.Equal(Sha256Of(databasePath), manifest.Database.Sha256!.ToUpperInvariant());
+
+        // The bookmark seeded into installs has to name the same version the manifest does.
+        Assert.Equal(File.ReadAllText(Path.Combine(channelDir, VersionFile)).Trim(), manifest.Version);
+    }
+
+    [Fact]
+    public void The_channel_index_covers_the_schema_this_build_polls()
+    {
+        // A build must never ship pointing at a schema the index does not acknowledge:
+        // it would declare itself superseded from its first check.
+        var indexPath = Path.Combine(TestRepo.Root(), "data", "index.json");
+        Assert.True(File.Exists(indexPath), "data/index.json is missing: no build could tell whether it is current");
+
+        var index = DatabaseUpdateService.ParseIndex(File.ReadAllText(indexPath));
+        Assert.True(index != null, "data/index.json does not satisfy the app's own reader");
+
+        Assert.True(index!.CurrentDataSchema >= DatabaseUpdateService.DataFormatVersion,
+            $"index.json publishes schema {index.CurrentDataSchema}, below the "
+            + $"{DatabaseUpdateService.DataFormatVersion} this build reads.");
+        Assert.True(Directory.Exists(Path.Combine(TestRepo.Root(), "data", $"v{index.CurrentDataSchema}")),
+            $"index.json points at schema {index.CurrentDataSchema}, which has no directory.");
     }
 }

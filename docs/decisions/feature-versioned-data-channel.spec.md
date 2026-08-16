@@ -333,6 +333,62 @@ the output (the linked channel item and the default-glob one), and which wins is
 MSBuild ordering rather than intent. The csproj now carries `<None Remove>` for
 both, and `DataChannelTests` pins that.
 
+### Appended after review (2026-08-16): the manifest replaces the version file
+
+Review of the shape above against how other update channels are built produced four
+reversals, all settled before anything shipped, which is the only time this is
+cheap. The line-oriented `db_version.txt` protocol described earlier is replaced;
+everything about the format directories, the pin, and the Assets mirror stands.
+
+**The remote document is JSON, named for its role.** `data/v<N>/manifest.json`
+carries `schema`, `dataSchema`, `version`, and a `database` object with `file`,
+`sha256`, and `size`. The name `db_version.txt` was already a misnomer the moment
+it carried anything besides a version, and every mature channel (electron-builder
+`latest.yml`, Squirrel `RELEASES`, APT `Release`, rustup's TOML manifest, Docker
+and TUF manifests) names the document for its role and carries a payload hash
+inside it. The line format was not a dead end, since unknown directives were
+ignored, but it handles repeated structure badly, which the deferred icon channel
+would need.
+
+**The hash closes a hazard this spec had already recorded as open.** Risks below
+notes that raw GitHub caches each file separately, so a client can pair a fresh
+version token with a stale database and record the new token against the wrong
+bytes. Verification after download makes that pair atomic, and it also catches a
+truncated download, which the previous code installed happily. A sidecar hash file
+would not work: it can be cached stale just as easily. Integrity fields are
+optional to the reader (absent means install without verifying) but mandatory in
+the repository, enforced by `DataChannelMirrorTests`, because shipping without a
+hash would silently disable verification everywhere.
+
+**`frozen` is removed; a pointer at `data/index.json` replaces it.** The freeze
+directive required hand-editing every superseded endpoint at bump time, which
+mutates documents this design calls immutable and can be forgotten. The index
+names the schema currently published, the publish tool rewrites it on every run,
+and a build compares its own pin against it. Superseded directories are now never
+touched again, and the detection cannot be forgotten because nobody performs it.
+The index is the only mutable part of the channel. An unreadable index leaves the
+last known state alone rather than declaring the build current.
+
+**The superseded state escalates the existing update pill instead of adding a
+notice.** A newer data schema can only ship with the build that pins it, so being
+superseded implies an app update already exists and is already on screen. The pill
+therefore changes wording (naming the data consequence rather than the version)
+and tone (warning rather than success, with dark text because white on amber is
+unreadable at that size), and the separate chip is gone. Two internal causes that
+are *not* superseded (a manifest schema above this build's maximum, and an
+endpoint serving a different `dataSchema`) refuse the update and log without any
+user-facing message: both are publishing errors fixed by the next publish, where
+telling the user to update the app would be wrong advice.
+
+**Polling drops from five minutes to one hour.** Five minutes was 288 checks a day
+against a payload that changes a few times per game patch, and it sits below raw
+GitHub's own per-file cache window, so the extra checks could not learn anything
+new even in principle. The startup check (unchanged, immediate) is the one that
+matters. Deliberately deferred: wiring the Settings "check for updates" button to
+also check data, which would give the longer interval a manual escape hatch.
+`ForceUpdateCheckAsync` stays uncalled, so restarting the app remains the only way
+to force a data check; this is scheduled for the next settings UX pass.
+
 ## Open Questions
 
 - Whether the 1.1 quest-data refresh publishes as format 1 (additive) or

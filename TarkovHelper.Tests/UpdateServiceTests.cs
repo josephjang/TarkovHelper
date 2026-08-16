@@ -84,20 +84,20 @@ public sealed class UpdateServiceTests
         // check would also pass for a wrong host like https://evil.example/josephjang/…,
         // which is exactly the drift this guard exists to catch.
         //
-        // The two DB URLs are pinned at v1 on purpose. They are derived from
-        // <TarkovDataFormat>, so bumping the format fails this test until someone
-        // updates it deliberately — which is the review moment a format bump deserves.
+        // The manifest URL is pinned at v1 on purpose. It is derived from
+        // <TarkovDataFormat>, so bumping the schema fails this test until someone
+        // updates it deliberately, which is the review moment a bump deserves.
         // DataChannelTests covers the format-agnostic half (URLs track the running
-        // format), so this pair keeps guarding the host and nothing else drifts.
+        // schema), so this pair keeps guarding the host and nothing else drifts.
         Assert.Equal(
             "https://raw.githubusercontent.com/josephjang/TarkovHelper/main/update.xml",
             UpdateService.UpdateXmlUrl);
         Assert.Equal(
-            "https://raw.githubusercontent.com/josephjang/TarkovHelper/refs/heads/main/data/v1/db_version.txt",
-            DatabaseUpdateService.VERSION_URL);
+            "https://raw.githubusercontent.com/josephjang/TarkovHelper/refs/heads/main/data/index.json",
+            DatabaseUpdateService.INDEX_URL);
         Assert.Equal(
-            "https://raw.githubusercontent.com/josephjang/TarkovHelper/refs/heads/main/data/v1/tarkov_data.db",
-            DatabaseUpdateService.DATABASE_URL);
+            "https://raw.githubusercontent.com/josephjang/TarkovHelper/refs/heads/main/data/v1/manifest.json",
+            DatabaseUpdateService.MANIFEST_URL);
     }
 
     [Fact]
