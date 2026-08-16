@@ -3,6 +3,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 
 namespace TarkovDBEditor.Services;
 
@@ -254,6 +255,16 @@ public class DataPublishService : IDisposable
             result.ChannelDirPath = ChannelDirFor(result.LiveDataFormat);
             result.MirrorsToAssets = result.LiveDataFormat == MirroredDataFormat;
 
+            // Stamp the source before it is hashed or compared, so every downstream
+            // number describes a database that declares its own data format. Done here
+            // rather than after copying because both endpoints must end up byte
+            // identical, which only holds if one stamped file is copied to both.
+            progress?.Invoke("Stamping data format...");
+            if (!await StampSourceDataFormatAsync(result))
+            {
+                return result;
+            }
+
             // 1. Compare Database
             progress?.Invoke("Comparing database...");
             await CompareDatabase(result);
@@ -291,6 +302,53 @@ public class DataPublishService : IDisposable
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Writes the live data format into the source database's own header, using SQLite's
+    /// user_version: the 32-bit slot SQLite reserves for the application and never reads
+    /// itself. A published database then carries its contract with it, so a client can
+    /// check what it downloaded against what it can read without having to trust the
+    /// manifest that came alongside.
+    /// </summary>
+    private async Task<bool> StampSourceDataFormatAsync(ComparisonResult result)
+    {
+        var sourceDbPath = Path.Combine(_sourceBasePath, DatabaseFileName);
+        // A missing source is reported by CompareDatabase as "not found"; that is a
+        // clearer message than anything this step could produce.
+        if (!File.Exists(sourceDbPath)) return true;
+
+        try
+        {
+            await using (var connection = new SqliteConnection($"Data Source={sourceDbPath}"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                // PRAGMA takes no parameters; the value is an int this tool derived from
+                // the repository layout, never user input.
+                command.CommandText =
+                    $"PRAGMA user_version = {result.LiveDataFormat.ToString(CultureInfo.InvariantCulture)}";
+                await command.ExecuteNonQueryAsync();
+            }
+
+            return true;
+        }
+        catch (SqliteException ex)
+        {
+            // The file is there but SQLite will not open it. Publishing it anyway would
+            // ship whatever it actually is to every install, so this stops here rather
+            // than treating the stamp as optional.
+            result.Success = false;
+            result.ErrorMessage =
+                $"{sourceDbPath} is not a database SQLite can open ({ex.Message}).\n\n" +
+                "Rebuild the database in TarkovDBEditor before publishing.";
+            return false;
+        }
+        finally
+        {
+            // Pooled connections keep the file open, and the publish copies it next.
+            SqliteConnection.ClearAllPools();
+        }
     }
 
     private async Task CompareDatabase(ComparisonResult result)

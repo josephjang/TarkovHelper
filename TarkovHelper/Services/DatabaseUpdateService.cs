@@ -539,7 +539,7 @@ public sealed class DatabaseUpdateService : IDisposable
                 }
             }
 
-            if (!VerifyDownload(tempPath, payload))
+            if (!VerifyDownload(tempPath, payload) || !VerifyDataFormatStamp(tempPath))
             {
                 TryDeleteTemp(tempPath);
                 return false;
@@ -635,6 +635,62 @@ public sealed class DatabaseUpdateService : IDisposable
             _log.Error(
                 $"Downloaded database hash {actualHash} does not match the manifest's "
                 + $"{payload.Sha256}. Keeping the current database.");
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Reads the data format the database stamps into itself (SQLite's user_version, the
+    /// 32-bit slot SQLite reserves for the application and never touches) and refuses a
+    /// file built for a different one.
+    /// <para>
+    /// The manifest already claims a data format, but that is the publisher describing
+    /// the payload; this is the payload describing itself, so a mis-published endpoint
+    /// is caught even when its manifest is internally consistent. An unstamped database
+    /// reads 0, which means "no claim" and is accepted: databases published before
+    /// stamping existed must keep working, and capability is judged by what a field
+    /// says, not by a version number.
+    /// </para>
+    /// </summary>
+    private bool VerifyDataFormatStamp(string tempPath)
+    {
+        int stamped;
+        try
+        {
+            using var connection = new SqliteConnection($"Data Source={tempPath};Mode=ReadOnly");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA user_version";
+            stamped = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+        catch (Exception ex)
+        {
+            // The bytes already matched the manifest's hash, so the file is what the
+            // publisher meant to serve. Failing to read the stamp is our problem, and
+            // rejecting a verified download over it would be the worse outcome.
+            _log.Warning($"Could not read the data format stamp: {ex.Message}. Installing anyway.");
+            return true;
+        }
+        finally
+        {
+            // Microsoft.Data.Sqlite pools per connection string, so the handle outlives
+            // the using block and the File.Move below would fail on Windows.
+            SqliteConnection.ClearAllPools();
+        }
+
+        if (stamped == 0)
+        {
+            _log.Debug("Downloaded database carries no data format stamp; installing without that check");
+            return true;
+        }
+
+        if (stamped != DataFormatVersion)
+        {
+            _log.Error(
+                $"Downloaded database is stamped data format {stamped}, but this build reads "
+                + $"{DataFormatVersion}. Keeping the current database.");
             return false;
         }
 

@@ -1,5 +1,5 @@
 using System.IO;
-using System.Text;
+using Microsoft.Data.Sqlite;
 using TarkovDBEditor.Services;
 // Aliased rather than importing the whole namespace: both projects have a Services
 // namespace, and the published documents are deliberately read back through the app's
@@ -22,12 +22,60 @@ public sealed class DataPublishChannelTests : IDisposable
     private const string DatabaseFile = "tarkov_data.db";
     private const string VersionFile = "db_version.txt";
 
-    private static readonly byte[] NewDb = Encoding.UTF8.GetBytes("freshly-built-database");
-    private static readonly byte[] OldDb = Encoding.UTF8.GetBytes("previously-published-db");
-
     private readonly TempStoreRoot _temp = new("datapublish");
 
     public void Dispose() => _temp.Dispose();
+
+    /// <summary>
+    /// Real SQLite databases, not stand-in byte arrays: a publish now stamps the source
+    /// with its data format, so the fixtures have to be openable the way the editor's
+    /// actual output is. The marker table just makes the two distinguishable.
+    /// </summary>
+    private byte[] NewDatabase(string marker)
+    {
+        var path = Path.Combine(_temp.NewFolder("db"), "built.db");
+        using (var connection = new SqliteConnection($"Data Source={path}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = $"CREATE TABLE Marker (Name TEXT); INSERT INTO Marker VALUES ('{marker}');";
+            command.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        return File.ReadAllBytes(path);
+    }
+
+    private byte[] NewDb => _newDb ??= NewDatabase("freshly-built");
+    private byte[] OldDb => _oldDb ??= NewDatabase("previously-published");
+
+    /// <summary>
+    /// NewDb as a previous publish would have left it on an endpoint: stamped with its
+    /// data format. Fixtures that mean "the channel already holds this exact data" have
+    /// to use this, because an unstamped copy is genuinely different data now.
+    /// </summary>
+    private byte[] PublishedNewDb => _publishedNewDb ??= Stamped(NewDb, dataFormat: 1);
+
+    private byte[]? _newDb;
+    private byte[]? _oldDb;
+    private byte[]? _publishedNewDb;
+
+    private byte[] Stamped(byte[] database, int dataFormat)
+    {
+        var path = Path.Combine(_temp.NewFolder("stamped"), "db.sqlite");
+        File.WriteAllBytes(path, database);
+
+        using (var connection = new SqliteConnection($"Data Source={path}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA user_version = {dataFormat}";
+            command.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        return File.ReadAllBytes(path);
+    }
 
     /// <summary>The editor's build output, i.e. what a publish reads from.</summary>
     private string NewSource(byte[]? database)
@@ -36,6 +84,14 @@ public sealed class DataPublishChannelTests : IDisposable
         if (database != null) File.WriteAllBytes(Path.Combine(dir, DatabaseFile), database);
         return dir;
     }
+
+    /// <summary>
+    /// What the source holds now. A publish stamps it first, so this is what the
+    /// endpoints must end up containing, and comparing against the original bytes would
+    /// be comparing against a file that no longer exists.
+    /// </summary>
+    private static byte[] SourceBytes(string sourceDir) =>
+        File.ReadAllBytes(Path.Combine(sourceDir, DatabaseFile));
 
     private string NewRepo()
     {
@@ -133,7 +189,8 @@ public sealed class DataPublishChannelTests : IDisposable
         var repo = NewRepo();
         WriteEndpoint(ChannelDir(repo, 1), "1.0.10", OldDb);
         WriteEndpoint(AssetsDir(repo), "1.0.10", OldDb);
-        using var service = new DataPublishService(NewSource(NewDb), repo);
+        var source = NewSource(NewDb);
+        using var service = new DataPublishService(source, repo);
 
         var comparison = await service.CompareAsync();
         Assert.True(comparison.Success);
@@ -146,7 +203,7 @@ public sealed class DataPublishChannelTests : IDisposable
         Assert.True(published.Success, published.ErrorMessage);
         AssertSameBytes(Path.Combine(ChannelDir(repo, 1), DatabaseFile), Path.Combine(AssetsDir(repo), DatabaseFile));
         AssertSameBytes(Path.Combine(ChannelDir(repo, 1), VersionFile), Path.Combine(AssetsDir(repo), VersionFile));
-        Assert.Equal(NewDb, await File.ReadAllBytesAsync(Path.Combine(ChannelDir(repo, 1), DatabaseFile)));
+        Assert.Equal(SourceBytes(source), await File.ReadAllBytesAsync(Path.Combine(ChannelDir(repo, 1), DatabaseFile)));
         Assert.Equal("1.0.11", await File.ReadAllTextAsync(Path.Combine(ChannelDir(repo, 1), VersionFile)));
     }
 
@@ -158,7 +215,8 @@ public sealed class DataPublishChannelTests : IDisposable
         var repo = NewRepo();
         WriteEndpoint(ChannelDir(repo, 1), "1.0.10", OldDb);
         WriteEndpoint(AssetsDir(repo), "1.0.10", OldDb);
-        using var service = new DataPublishService(NewSource(NewDb), repo);
+        var source = NewSource(NewDb);
+        using var service = new DataPublishService(source, repo);
 
         var comparison = await service.CompareAsync();
         var published = await service.PublishAsync(comparison, "1.0.11");
@@ -168,8 +226,9 @@ public sealed class DataPublishChannelTests : IDisposable
         Assert.Equal(1, manifest.DataFormat);
         Assert.Equal("1.0.11", manifest.Version);
         Assert.Equal(DatabaseFile, manifest.Database.File);
-        Assert.Equal(Sha256Hex(NewDb), manifest.Database.Sha256);
-        Assert.Equal(NewDb.Length, manifest.Database.Size);
+        // Hashed against what was actually published, which is the stamped source.
+        Assert.Equal(Sha256Hex(SourceBytes(source)), manifest.Database.Sha256);
+        Assert.Equal(SourceBytes(source).Length, manifest.Database.Size);
     }
 
     [Fact]
@@ -197,7 +256,7 @@ public sealed class DataPublishChannelTests : IDisposable
         // to be able to fix it, which means treating it as a change even though the
         // editor's own database is already what the channel holds.
         var repo = NewRepo();
-        WriteEndpoint(ChannelDir(repo, 1), "1.0.10", NewDb);
+        WriteEndpoint(ChannelDir(repo, 1), "1.0.10", PublishedNewDb);
         WriteEndpoint(AssetsDir(repo), "1.0.10", OldDb);
         using var service = new DataPublishService(NewSource(NewDb), repo);
 
@@ -220,8 +279,8 @@ public sealed class DataPublishChannelTests : IDisposable
         // Same failure, the other half: identical databases, disagreeing stamps, which
         // would hand two builds different answers about the same bytes.
         var repo = NewRepo();
-        WriteEndpoint(ChannelDir(repo, 1), "1.0.10", NewDb);
-        WriteEndpoint(AssetsDir(repo), "0.9.0", NewDb);
+        WriteEndpoint(ChannelDir(repo, 1), "1.0.10", PublishedNewDb);
+        WriteEndpoint(AssetsDir(repo), "0.9.0", PublishedNewDb);
         using var service = new DataPublishService(NewSource(NewDb), repo);
 
         var comparison = await service.CompareAsync();
@@ -242,8 +301,8 @@ public sealed class DataPublishChannelTests : IDisposable
         // The assertion that keeps the two above honest: MirrorNeedsRepair must not be
         // true by construction, or "a drifted mirror is publishable" would prove nothing.
         var repo = NewRepo();
-        WriteEndpoint(ChannelDir(repo, 1), "1.0.10", NewDb);
-        WriteEndpoint(AssetsDir(repo), "1.0.10", NewDb);
+        WriteEndpoint(ChannelDir(repo, 1), "1.0.10", PublishedNewDb);
+        WriteEndpoint(AssetsDir(repo), "1.0.10", PublishedNewDb);
         using var service = new DataPublishService(NewSource(NewDb), repo);
 
         var comparison = await service.CompareAsync();
@@ -284,7 +343,8 @@ public sealed class DataPublishChannelTests : IDisposable
         WriteEndpoint(ChannelDir(repo, 1), "1.0.10", OldDb);
         WriteEndpoint(AssetsDir(repo), "1.0.10", OldDb);
         WriteEndpoint(ChannelDir(repo, 2), "2.0.0", OldDb);
-        using var service = new DataPublishService(NewSource(NewDb), repo);
+        var source = NewSource(NewDb);
+        using var service = new DataPublishService(source, repo);
 
         var comparison = await service.CompareAsync();
         Assert.Equal(2, comparison.LiveDataFormat);
@@ -294,7 +354,7 @@ public sealed class DataPublishChannelTests : IDisposable
         var published = await service.PublishAsync(comparison, "2.0.1");
 
         Assert.True(published.Success, published.ErrorMessage);
-        Assert.Equal(NewDb, await File.ReadAllBytesAsync(Path.Combine(ChannelDir(repo, 2), DatabaseFile)));
+        Assert.Equal(SourceBytes(source), await File.ReadAllBytesAsync(Path.Combine(ChannelDir(repo, 2), DatabaseFile)));
         Assert.Equal("2.0.1", await File.ReadAllTextAsync(Path.Combine(ChannelDir(repo, 2), VersionFile)));
         Assert.Equal(2, ReadManifest(ChannelDir(repo, 2)).DataFormat);
 

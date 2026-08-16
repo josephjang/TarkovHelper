@@ -1,6 +1,7 @@
 using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using TarkovHelper.Services;
 
 namespace TarkovHelper.Tests;
@@ -139,6 +140,31 @@ public sealed class DataChannelMirrorTests
 
         // The bookmark seeded into installs has to name the same version the manifest does.
         Assert.Equal(File.ReadAllText(Path.Combine(channelDir, VersionFile)).Trim(), manifest.Version);
+    }
+
+    [Fact]
+    public void The_published_database_stamps_its_own_data_format()
+    {
+        // Read back through SQLite, not by peeking at the header, so this proves SQLite
+        // itself agrees the stamp is set: the published database declares the contract
+        // it was built for, and a client can check what it downloaded without having to
+        // trust the manifest that arrived with it.
+        var format = DatabaseUpdateService.DataFormatVersion;
+        var databasePath = Path.Combine(TestRepo.Root(), "data", $"v{format}", DatabaseFile);
+
+        int stamped;
+        using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA user_version";
+            stamped = Convert.ToInt32(command.ExecuteScalar());
+        }
+        SqliteConnection.ClearAllPools();
+
+        Assert.True(stamped == format,
+            $"data/v{format}/{DatabaseFile} is stamped with data format {stamped}, expected {format}. "
+            + "Publishing sets this; a hand-copied database will not have it.");
     }
 
     [Fact]
