@@ -77,6 +77,14 @@ metadata. When adding or changing a column, update every affected layer:
 If schema registration is omitted, the column may exist in SQLite but remain
 absent from the editor UI.
 
+**Keep the change additive.** The published database is a contract with every
+TarkovHelper build already installed, and those builds cannot be fixed after the
+fact. Adding a table or column is free, because readers feature-detect. Removing
+one, or changing its declared type, breaks them all, so `DataSchemaDriftTests`
+fails on it. When a break is genuinely intended it is a data schema bump: publish
+under a new `data/v<N+1>/` and raise `<TarkovDataFormat>` in the same PR. See
+`../docs/decisions/feature-versioned-data-channel.spec.md`.
+
 ### Database Access
 
 - Use `DatabaseService.Instance.DatabasePath` for the active database.
