@@ -39,7 +39,7 @@ public class DataPublishService : IDisposable
     private const int IndexSchemaVersion = 1;
 
     /// <summary>The only format that is also served from the pre-channel Assets endpoint.</summary>
-    private const int MirroredDataFormat = 1;
+    private const int MirroredDataFormatVersion = 1;
 
     private readonly string _sourceBasePath;
     private readonly string _repoRootPath;
@@ -76,7 +76,7 @@ public class DataPublishService : IDisposable
     /// Returns 0 when the channel is missing entirely, which callers must treat as an
     /// error rather than falling back to the Assets-only layout.
     /// </summary>
-    public int GetLiveDataFormat()
+    public int GetLiveDataFormatVersion()
     {
         if (!Directory.Exists(_dataChannelPath)) return 0;
 
@@ -116,7 +116,7 @@ public class DataPublishService : IDisposable
 
         // Data channel
         /// <summary>Format this publish writes, i.e. the highest data/v&lt;N&gt; in the repo.</summary>
-        public int LiveDataFormat { get; set; }
+        public int LiveDataFormatVersion { get; set; }
         public string? ChannelDirPath { get; set; }
 
         /// <summary>
@@ -241,8 +241,8 @@ public class DataPublishService : IDisposable
 
             // The channel is where the database is published; without it there is no
             // correct target, so this fails rather than silently writing Assets only.
-            result.LiveDataFormat = GetLiveDataFormat();
-            if (result.LiveDataFormat == 0)
+            result.LiveDataFormatVersion = GetLiveDataFormatVersion();
+            if (result.LiveDataFormatVersion == 0)
             {
                 result.Success = false;
                 result.ErrorMessage =
@@ -252,8 +252,8 @@ public class DataPublishService : IDisposable
                     "the app-side format bump, not something this tool does.";
                 return result;
             }
-            result.ChannelDirPath = ChannelDirFor(result.LiveDataFormat);
-            result.MirrorsToAssets = result.LiveDataFormat == MirroredDataFormat;
+            result.ChannelDirPath = ChannelDirFor(result.LiveDataFormatVersion);
+            result.MirrorsToAssets = result.LiveDataFormatVersion == MirroredDataFormatVersion;
 
             // Stamp the source before it is hashed or compared, so every downstream
             // number describes a database that declares its own data format. Done here
@@ -305,7 +305,7 @@ public class DataPublishService : IDisposable
     }
 
     /// <summary>
-    /// Writes the live data format into the source database's own header, using SQLite's
+    /// Writes the live data format version into the source database's own header, using SQLite's
     /// user_version: the 32-bit slot SQLite reserves for the application and never reads
     /// itself. A published database then carries its contract with it, so a client can
     /// check what it downloaded against what it can read without having to trust the
@@ -327,7 +327,7 @@ public class DataPublishService : IDisposable
                 // PRAGMA takes no parameters; the value is an int this tool derived from
                 // the repository layout, never user input.
                 command.CommandText =
-                    $"PRAGMA user_version = {result.LiveDataFormat.ToString(CultureInfo.InvariantCulture)}";
+                    $"PRAGMA user_version = {result.LiveDataFormatVersion.ToString(CultureInfo.InvariantCulture)}";
                 await command.ExecuteNonQueryAsync();
             }
 
@@ -628,7 +628,7 @@ public class DataPublishService : IDisposable
 
                 Directory.CreateDirectory(comparison.ChannelDirPath);
                 await CopyFileWithShareAsync(sourceDbPath, channelDbPath);
-                result.CopiedFiles.Add($"{DataChannelDirName}/v{comparison.LiveDataFormat}/{DatabaseFileName}");
+                result.CopiedFiles.Add($"{DataChannelDirName}/v{comparison.LiveDataFormatVersion}/{DatabaseFileName}");
                 result.FilesCopied++;
 
                 if (comparison.MirrorsToAssets)
@@ -709,7 +709,7 @@ public class DataPublishService : IDisposable
 
             await File.WriteAllTextAsync(
                 Path.Combine(comparison.ChannelDirPath, VersionFileName), newVersion);
-            result.CopiedFiles.Add($"{DataChannelDirName}/v{comparison.LiveDataFormat}/{VersionFileName}");
+            result.CopiedFiles.Add($"{DataChannelDirName}/v{comparison.LiveDataFormatVersion}/{VersionFileName}");
 
             if (comparison.MirrorsToAssets)
             {
@@ -722,7 +722,7 @@ public class DataPublishService : IDisposable
             //    time so it cannot drift, and it is the only mutable part of the channel:
             //    superseded endpoint directories are never touched again, which is how a
             //    build learns it was left behind without anyone hand-editing history.
-            await WriteIndexAsync(comparison.LiveDataFormat, result);
+            await WriteIndexAsync(comparison.LiveDataFormatVersion, result);
 
             progress?.Invoke("Publish complete.");
         }
@@ -749,7 +749,7 @@ public class DataPublishService : IDisposable
         var manifest = new
         {
             schemaVersion = ManifestSchemaVersion,
-            dataFormat = comparison.LiveDataFormat,
+            dataFormatVersion = comparison.LiveDataFormatVersion,
             version = newVersion,
             database = new
             {
@@ -761,18 +761,18 @@ public class DataPublishService : IDisposable
 
         var path = Path.Combine(comparison.ChannelDirPath!, ManifestFileName);
         await File.WriteAllTextAsync(path, ToJson(manifest));
-        result.CopiedFiles.Add($"{DataChannelDirName}/v{comparison.LiveDataFormat}/{ManifestFileName}");
+        result.CopiedFiles.Add($"{DataChannelDirName}/v{comparison.LiveDataFormatVersion}/{ManifestFileName}");
         result.FilesCopied++;
     }
 
     /// <summary>
-    /// Writes data/index.json, which names the data format the project publishes right
+    /// Writes data/index.json, which names the data format version the project publishes right
     /// now. Builds pinned to an older format compare against it to learn that nothing
     /// further is coming for them.
     /// </summary>
     private async Task WriteIndexAsync(int liveDataFormat, PublishResult result)
     {
-        var index = new { schemaVersion = IndexSchemaVersion, currentDataFormat = liveDataFormat };
+        var index = new { schemaVersion = IndexSchemaVersion, currentDataFormatVersion = liveDataFormat };
 
         await File.WriteAllTextAsync(Path.Combine(_dataChannelPath, IndexFileName), ToJson(index));
         result.CopiedFiles.Add($"{DataChannelDirName}/{IndexFileName}");

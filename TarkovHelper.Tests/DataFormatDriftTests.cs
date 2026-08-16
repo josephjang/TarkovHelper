@@ -18,8 +18,8 @@ namespace TarkovHelper.Tests;
 /// cannot accidentally stop".
 ///
 /// When a change really does need to break the contract, the fix is not to relax this
-/// test: it is to publish under a new data format (data/v&lt;N+1&gt;) and bump
-/// TarkovDataFormat in the same PR, which gives this test a new baseline file and
+/// test: it is to publish under a new data format version (data/v&lt;N+1&gt;) and bump
+/// TarkovDataFormatVersion in the same PR, which gives this test a new baseline file and
 /// leaves the old builds on the endpoint they can still read.
 /// </summary>
 public sealed class DataFormatDriftTests
@@ -27,13 +27,13 @@ public sealed class DataFormatDriftTests
     /// <summary>Column name to declared SQLite type, per table. Sorted so diffs are readable.</summary>
     private sealed record TableSchema(SortedDictionary<string, string> Columns);
 
-    private static int DataFormat => DatabaseUpdateService.DataFormatVersion;
+    private static int DataFormatVersion => DatabaseUpdateService.DataFormatVersion;
 
     private static string BaselinePath() => Path.Combine(
-        TestRepo.Root(), "TarkovHelper.Tests", $"DataFormatBaseline.v{DataFormat}.json");
+        TestRepo.Root(), "TarkovHelper.Tests", $"DataFormatBaseline.v{DataFormatVersion}.json");
 
     private static string PublishedDatabasePath() => Path.Combine(
-        TestRepo.Root(), "data", $"v{DataFormat}", "tarkov_data.db");
+        TestRepo.Root(), "data", $"v{DataFormatVersion}", "tarkov_data.db");
 
     /// <summary>
     /// Reads the structure that matters for read compatibility: which tables exist and
@@ -96,7 +96,7 @@ public sealed class DataFormatDriftTests
             // deleted it pass against whatever the database happens to hold today.
             File.WriteAllText(baselinePath, JsonSerializer.Serialize(current, options) + "\n");
             Assert.Fail(
-                $"No baseline for data format {DataFormat}, so one was written from the current "
+                $"No baseline for data format {DataFormatVersion}, so one was written from the current "
                 + $"database:\n  {baselinePath}\nReview it, commit it, and re-run.");
         }
 
@@ -127,12 +127,12 @@ public sealed class DataFormatDriftTests
         }
 
         Assert.True(breaks.Count == 0,
-            $"The published database no longer satisfies data format {DataFormat}, so every build "
+            $"The published database no longer satisfies data format {DataFormatVersion}, so every build "
             + "reading it would break and none of them can be fixed after the fact:\n  "
             + string.Join("\n  ", breaks)
             + "\n\nAdditions are free and need no baseline change. If this removal or retype is "
-            + "intended, it is a data format bump: publish it as data/v" + (DataFormat + 1)
-            + ", raise <TarkovDataFormat> in the same PR, and let this test write the new baseline.");
+            + "intended, it is a data format bump: publish it as data/v" + (DataFormatVersion + 1)
+            + ", raise <TarkovDataFormatVersion> in the same PR, and let this test write the new baseline.");
     }
 
     [Fact]

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "dataFormat": 1,
+  "dataFormatVersion": 1,
   "version": "1.0.10",
   "database": {
     "file": "tarkov_data.db",

@@ -19,7 +19,7 @@ public sealed class DataChannelTests
         XDocument.Load(Path.Combine(TestRepo.Root(), "TarkovHelper", "TarkovHelper.csproj"));
 
     private static string CsprojDataFormat() =>
-        AppCsproj().Descendants("TarkovDataFormat").Single().Value.Trim();
+        AppCsproj().Descendants("TarkovDataFormatVersion").Single().Value.Trim();
 
     #region Format pin
 
@@ -36,7 +36,7 @@ public sealed class DataChannelTests
     public void Seed_data_is_sourced_from_this_builds_channel_directory()
     {
         // Assets\ must stop feeding the build: it is the pre-channel endpoint, kept as a
-        // mirror. Sourcing the seed from data/v$(TarkovDataFormat) is what makes
+        // mirror. Sourcing the seed from data/v$(TarkovDataFormatVersion) is what makes
         // "bundled data belongs to the polled channel" true by construction rather than
         // by discipline.
         var seeds = AppCsproj().Descendants("None")
@@ -48,7 +48,7 @@ public sealed class DataChannelTests
         {
             var include = seed.Attribute("Include")?.Value;
             var fileName = Path.GetFileName(seed.Attribute("Link")!.Value);
-            Assert.Equal($"..\\data\\v$(TarkovDataFormat)\\{fileName}", include);
+            Assert.Equal($"..\\data\\v$(TarkovDataFormatVersion)\\{fileName}", include);
             Assert.Equal("PreserveNewest", seed.Element("CopyToOutputDirectory")?.Value);
         }
     }
@@ -101,7 +101,7 @@ public sealed class DataChannelTests
     private const string ValidManifest = """
         {
           "schemaVersion": 1,
-          "dataFormat": 1,
+          "dataFormatVersion": 1,
           "version": "1.0.10",
           "database": { "file": "tarkov_data.db", "sha256": "abc123", "size": 42 }
         }
@@ -114,7 +114,7 @@ public sealed class DataChannelTests
 
         Assert.NotNull(manifest);
         Assert.Equal(1, manifest.SchemaVersion);
-        Assert.Equal(1, manifest.DataFormat);
+        Assert.Equal(1, manifest.DataFormatVersion);
         Assert.Equal("1.0.10", manifest.Version);
         Assert.Equal("tarkov_data.db", manifest.Database.File);
         Assert.Equal("abc123", manifest.Database.Sha256);
@@ -129,7 +129,7 @@ public sealed class DataChannelTests
         // never be taught the new vocabulary.
         var manifest = DatabaseUpdateService.ParseManifest("""
             {
-              "schemaVersion": 1, "dataFormat": 1, "version": "1.0.10",
+              "schemaVersion": 1, "dataFormatVersion": 1, "version": "1.0.10",
               "database": { "file": "tarkov_data.db", "signature": "from-2027" },
               "publishedBy": "someone", "notes": ["a", "b"]
             }
@@ -145,7 +145,7 @@ public sealed class DataChannelTests
         // Absent hash means "install without verifying", not "reject". Capability lives
         // in the presence of a field, not in a version number.
         var manifest = DatabaseUpdateService.ParseManifest("""
-            { "schemaVersion": 1, "dataFormat": 1, "version": "1.0.10",
+            { "schemaVersion": 1, "dataFormatVersion": 1, "version": "1.0.10",
               "database": { "file": "tarkov_data.db" } }
             """);
 
@@ -158,7 +158,7 @@ public sealed class DataChannelTests
     public void The_version_token_is_trimmed()
     {
         var manifest = DatabaseUpdateService.ParseManifest("""
-            { "schemaVersion": 1, "dataFormat": 1, "version": "  1.0.10\n",
+            { "schemaVersion": 1, "dataFormatVersion": 1, "version": "  1.0.10\n",
               "database": { "file": "tarkov_data.db" } }
             """);
 
@@ -177,11 +177,11 @@ public sealed class DataChannelTests
     [InlineData("[]")]
     // Required fields missing or unusable. A null version would compare unequal to every
     // local version and re-download the database on every check, forever.
-    [InlineData("""{ "schemaVersion": 1, "dataFormat": 1, "database": { "file": "tarkov_data.db" } }""")]
-    [InlineData("""{ "schemaVersion": 1, "dataFormat": 1, "version": "  ", "database": { "file": "x.db" } }""")]
-    [InlineData("""{ "schemaVersion": 1, "dataFormat": 1, "version": "1.0.10" }""")]
-    [InlineData("""{ "schemaVersion": 1, "dataFormat": 1, "version": "1.0.10", "database": {} }""")]
-    [InlineData("""{ "dataFormat": 1, "version": "1.0.10", "database": { "file": "x.db" } }""")]
+    [InlineData("""{ "schemaVersion": 1, "dataFormatVersion": 1, "database": { "file": "tarkov_data.db" } }""")]
+    [InlineData("""{ "schemaVersion": 1, "dataFormatVersion": 1, "version": "  ", "database": { "file": "x.db" } }""")]
+    [InlineData("""{ "schemaVersion": 1, "dataFormatVersion": 1, "version": "1.0.10" }""")]
+    [InlineData("""{ "schemaVersion": 1, "dataFormatVersion": 1, "version": "1.0.10", "database": {} }""")]
+    [InlineData("""{ "dataFormatVersion": 1, "version": "1.0.10", "database": { "file": "x.db" } }""")]
     [InlineData("""{ "schemaVersion": 1, "version": "1.0.10", "database": { "file": "x.db" } }""")]
     public void An_unusable_manifest_is_a_failed_check(string? content)
     {
@@ -197,11 +197,11 @@ public sealed class DataChannelTests
     [Fact]
     public void A_valid_index_parses_into_its_fields()
     {
-        var index = DatabaseUpdateService.ParseIndex("""{ "schemaVersion": 1, "currentDataFormat": 3 }""");
+        var index = DatabaseUpdateService.ParseIndex("""{ "schemaVersion": 1, "currentDataFormatVersion": 3 }""");
 
         Assert.NotNull(index);
         Assert.Equal(1, index.SchemaVersion);
-        Assert.Equal(3, index.CurrentDataFormat);
+        Assert.Equal(3, index.CurrentDataFormatVersion);
     }
 
     [Theory]
@@ -209,8 +209,8 @@ public sealed class DataChannelTests
     [InlineData("")]
     [InlineData("not json")]
     [InlineData("""{ "schemaVersion": 1 }""")]
-    [InlineData("""{ "currentDataFormat": 2 }""")]
-    [InlineData("""{ "schemaVersion": 1, "currentDataFormat": 0 }""")]
+    [InlineData("""{ "currentDataFormatVersion": 2 }""")]
+    [InlineData("""{ "schemaVersion": 1, "currentDataFormatVersion": 0 }""")]
     public void An_unusable_index_yields_nothing(string? content)
     {
         // The caller keeps its previous knowledge on null. Returning a default here

@@ -82,7 +82,7 @@ TarkovHelper build already installed, and those builds cannot be fixed after the
 fact. Adding a table or column is free, because readers feature-detect. Removing
 one, or changing its declared type, breaks them all, so `DataFormatDriftTests`
 fails on it. When a break is genuinely intended it is a data format bump: publish
-under a new `data/v<N+1>/` and raise `<TarkovDataFormat>` in the same PR. See
+under a new `data/v<N+1>/` and raise `<TarkovDataFormatVersion>` in the same PR. See
 `../docs/decisions/feature-versioned-data-channel.spec.md`.
 
 ### Database Access

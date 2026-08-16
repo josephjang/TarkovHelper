@@ -104,7 +104,7 @@ public partial class DataPublishWindow : Window
             var mirror = _comparisonResult.MirrorsToAssets
                 ? $" + Assets mirror ({(_comparisonResult.MirrorInSync ? "in sync" : "OUT OF SYNC")})"
                 : "";
-            TxtDbTargetInfo.Text = $"data/v{_comparisonResult.LiveDataFormat}: {target}{mirror}";
+            TxtDbTargetInfo.Text = $"data/v{_comparisonResult.LiveDataFormatVersion}: {target}{mirror}";
         }
         else
         {
@@ -218,8 +218,8 @@ public partial class DataPublishWindow : Window
         }
 
         var dbTargets = _comparisonResult.MirrorsToAssets
-            ? $"data/v{_comparisonResult.LiveDataFormat}/ + Assets mirror"
-            : $"data/v{_comparisonResult.LiveDataFormat}/";
+            ? $"data/v{_comparisonResult.LiveDataFormatVersion}/ + Assets mirror"
+            : $"data/v{_comparisonResult.LiveDataFormatVersion}/";
 
         var confirm = MessageBox.Show(
             $"This will publish the following changes to TarkovHelper:\n\n" +

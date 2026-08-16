@@ -157,7 +157,7 @@ EFT debug.log → LogSyncService (FileSystemWatcher)
 ### Database Updates
 ```
 DatabaseUpdateService (startup, then hourly)
-  → Read data/index.json (is this build's data format still published?)
+  → Read data/index.json (is this build's data format version still published?)
   → Read data/v<N>/manifest.json (version, sha256, size)
   → Download if the version differs, verify the hash, then swap
   → DatabaseUpdated event
@@ -165,7 +165,7 @@ DatabaseUpdateService (startup, then hourly)
   → UI refreshes
 ```
 Each build polls the endpoint for the data format it was built to read, pinned by
-`<TarkovDataFormat>` in `TarkovHelper.csproj` (which also selects the bundled seed
+`<TarkovDataFormatVersion>` in `TarkovHelper.csproj` (which also selects the bundled seed
 database). See `docs/database-update-mechanism.md` for the channel layout and
 `docs/decisions/feature-versioned-data-channel.spec.md` for the design.
 

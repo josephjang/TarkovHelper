@@ -30,10 +30,10 @@ public sealed class DataChannelMirrorTests
     /// mirror is a property of format 1 specifically, and once the app moves to format 2
     /// these files must keep matching each other while the app polls elsewhere.
     /// </summary>
-    private const int MirroredFormat = 1;
+    private const int MirroredFormatVersion = 1;
 
     private static string ChannelDir() =>
-        Path.Combine(TestRepo.Root(), "data", $"v{MirroredFormat}");
+        Path.Combine(TestRepo.Root(), "data", $"v{MirroredFormatVersion}");
 
     private static string AssetsDir() =>
         Path.Combine(TestRepo.Root(), "TarkovHelper", "Assets");
@@ -62,9 +62,9 @@ public sealed class DataChannelMirrorTests
     public void The_channel_directory_holds_both_endpoint_files()
     {
         Assert.True(File.Exists(Path.Combine(ChannelDir(), DatabaseFile)),
-            $"data/v{MirroredFormat}/{DatabaseFile} is missing: the endpoint every format-1 build polls.");
+            $"data/v{MirroredFormatVersion}/{DatabaseFile} is missing: the endpoint every format-1 build polls.");
         Assert.True(File.Exists(Path.Combine(ChannelDir(), VersionFile)),
-            $"data/v{MirroredFormat}/{VersionFile} is missing: without it no build can tell whether its data is current.");
+            $"data/v{MirroredFormatVersion}/{VersionFile} is missing: without it no build can tell whether its data is current.");
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public sealed class DataChannelMirrorTests
         AssertSameBytes(
             Path.Combine(ChannelDir(), DatabaseFile),
             Path.Combine(AssetsDir(), DatabaseFile),
-            $"TarkovHelper/Assets and data/v{MirroredFormat} are two addresses for one data format "
+            $"TarkovHelper/Assets and data/v{MirroredFormatVersion} are two addresses for one data format "
             + "and must serve identical bytes. A publish writes both; if only one moved, publish again.");
     }
 
@@ -83,7 +83,7 @@ public sealed class DataChannelMirrorTests
         AssertSameBytes(
             Path.Combine(ChannelDir(), VersionFile),
             Path.Combine(AssetsDir(), VersionFile),
-            $"The version stamps of TarkovHelper/Assets and data/v{MirroredFormat} disagree, so the two "
+            $"The version stamps of TarkovHelper/Assets and data/v{MirroredFormatVersion} disagree, so the two "
             + "format-1 endpoints would hand different builds different answers about the same data.");
     }
 
@@ -124,7 +124,7 @@ public sealed class DataChannelMirrorTests
         var manifest = DatabaseUpdateService.ParseManifest(File.ReadAllText(manifestPath));
         Assert.True(manifest != null, $"data/v{format}/manifest.json does not satisfy the app's own reader");
 
-        Assert.Equal(format, manifest!.DataFormat);
+        Assert.Equal(format, manifest!.DataFormatVersion);
         Assert.True(manifest.SchemaVersion <= DatabaseUpdateService.MAX_SUPPORTED_SCHEMA_VERSION,
             $"The committed manifest declares schema {manifest.SchemaVersion}, which this build cannot read.");
 
@@ -176,15 +176,15 @@ public sealed class DataChannelMirrorTests
         // every other test here while silently disabling whatever it renamed.
         //
         // The vocabulary is deliberate. schemaVersion is the shape of this document
-        // (Docker's sense); dataFormat is the contract of the database it describes,
+        // (Docker's sense); dataFormatVersion is the contract of the database it describes,
         // which covers field meaning and permitted values, not just structure; version
         // is which publish this is. See feature-versioned-data-channel.spec.md.
         var root = TestRepo.Root();
 
         AssertTopLevelFields(
             Path.Combine(root, "data", $"v{DatabaseUpdateService.DataFormatVersion}", "manifest.json"),
-            "schemaVersion", "dataFormat", "version", "database");
-        AssertTopLevelFields(Path.Combine(root, "data", "index.json"), "schemaVersion", "currentDataFormat");
+            "schemaVersion", "dataFormatVersion", "version", "database");
+        AssertTopLevelFields(Path.Combine(root, "data", "index.json"), "schemaVersion", "currentDataFormatVersion");
 
         using var manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(root, "data", $"v{DatabaseUpdateService.DataFormatVersion}", "manifest.json")));
@@ -212,10 +212,10 @@ public sealed class DataChannelMirrorTests
         var index = DatabaseUpdateService.ParseIndex(File.ReadAllText(indexPath));
         Assert.True(index != null, "data/index.json does not satisfy the app's own reader");
 
-        Assert.True(index!.CurrentDataFormat >= DatabaseUpdateService.DataFormatVersion,
-            $"index.json publishes schema {index.CurrentDataFormat}, below the "
+        Assert.True(index!.CurrentDataFormatVersion >= DatabaseUpdateService.DataFormatVersion,
+            $"index.json publishes schema {index.CurrentDataFormatVersion}, below the "
             + $"{DatabaseUpdateService.DataFormatVersion} this build reads.");
-        Assert.True(Directory.Exists(Path.Combine(TestRepo.Root(), "data", $"v{index.CurrentDataFormat}")),
-            $"index.json points at schema {index.CurrentDataFormat}, which has no directory.");
+        Assert.True(Directory.Exists(Path.Combine(TestRepo.Root(), "data", $"v{index.CurrentDataFormatVersion}")),
+            $"index.json points at schema {index.CurrentDataFormatVersion}, which has no directory.");
     }
 }
