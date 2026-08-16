@@ -226,6 +226,25 @@ public partial class LocalizationService
         _ => "Update check failed — open Settings for details"
     };
 
+    /// <summary>
+    /// Title-bar notice shown when this build's data endpoint has been frozen: game
+    /// data has stopped arriving, and only an app update brings it back. Without it a
+    /// frozen build would keep reporting "up to date" over data that no longer moves.
+    /// </summary>
+    public string HeaderDataFrozen => CurrentLanguage switch
+    {
+        AppLanguage.KO => "데이터 업데이트 종료",
+        AppLanguage.JA => "データ更新は終了",
+        _ => "Data updates ended"
+    };
+
+    public string HeaderDataFrozenTooltip => CurrentLanguage switch
+    {
+        AppLanguage.KO => "이 앱 버전의 데이터 업데이트가 종료되었습니다 — 앱을 업데이트하면 최신 데이터를 받습니다",
+        AppLanguage.JA => "このアプリバージョンのデータ更新は終了しました — アプリを更新すると最新データを受け取れます",
+        _ => "Data updates for this app version have ended — update the app for current data"
+    };
+
     #endregion
 
     #region Sync Status Chip

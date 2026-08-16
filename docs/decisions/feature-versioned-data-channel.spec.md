@@ -281,6 +281,58 @@ Assets while that is v1. Creating the next directory happens only in the
 reviewed PR that bumps the app's pin, so the two sides of a format bump are
 one diff.
 
+### Appended during implementation (2026-08-16)
+
+**The freeze notice strings live in `LocalizationService.Header.cs`, not
+`Core.cs`.** The file list above named the wrong partial: every other title-bar
+string (`HeaderVersionTooltipIdle`, `HeaderChecking`, the sync chip) is in
+`Header.cs`, and `LocalizationHeaderStringsTests` is the completeness guard that
+covers that file. The two new keys (`HeaderDataFrozen`,
+`HeaderDataFrozenTooltip`) went there and into that test's key list.
+
+**The publish tool repairs a drifted mirror, it does not only detect one.** The
+design gave the tool the one-commit rule and left detection to the CI guard. In
+implementation the tool also treats an out-of-sync Assets mirror as a
+publishable change (`ComparisonResult.MirrorNeedsRepair`), so it copies the
+database to both endpoints even when the database itself is unchanged.
+Otherwise the guard could turn CI red with no in-tool way to fix it: with no
+database change, `HasAnyChanges` was false and the Publish button stayed
+disabled, leaving hand-copying as the only repair.
+
+**The local version file is parsed by the same reader as the remote one.** Not
+in the design, and it matters for exactly one install: a user whose pre-channel
+build polled a frozen Assets endpoint wrote the whole body, `frozen` line
+included, into its local `db_version.txt`. After updating to a channel build, a
+raw string comparison would never match the remote token and would re-download
+the database on every check, forever. Reading the token off both sides costs
+nothing and closes that path.
+
+**The endpoint test server is a raw `TcpListener`, not `HttpListener`.**
+`HttpListener` goes through HTTP.sys, which needs elevation or a netsh URL
+reservation, and this suite must run non-elevated. `LocalFileServer.cs`
+implements just what the client under test uses (GET, Content-Length, 404, no
+keep-alive) and records requested paths, which is what lets the tests prove the
+negative that a frozen or up-to-date check never fetches the database.
+
+**The publish side got tests and an explicit-path constructor.** The Test
+Strategy above only covered the app side, which left the tool that produces the
+repository state untested while it grew the rule that one publish leaves both
+format-1 endpoints identical. `DataPublishService` now has a public
+`(sourceBasePath, repoRootPath)` overload (the default one delegates to it), and
+`DataPublishChannelTests` drives real publishes against throwaway trees:
+highest-format resolution including the v10-beats-v9 numeric case, the
+no-channel error, both drift directions repairing to byte-identical endpoints,
+an in-sync pair having nothing to publish (so the drift tests cannot pass
+vacuously), and a format-2 publish leaving the frozen format-1 endpoints and
+their directives untouched.
+
+**The default `None` glob has to give up the Assets pair explicitly.** The
+design said the repo copies "remain auto-included `None` items without a copy
+step". In practice that leaves two items targeting `Assets\tarkov_data.db` in
+the output (the linked channel item and the default-glob one), and which wins is
+MSBuild ordering rather than intent. The csproj now carries `<None Remove>` for
+both, and `DataChannelTests` pins that.
+
 ## Open Questions
 
 - Whether the 1.1 quest-data refresh publishes as format 1 (additive) or

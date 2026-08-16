@@ -83,19 +83,28 @@ public partial class DataPublishWindow : Window
         TxtCurrentVersion.Text = _comparisonResult.CurrentVersion ?? "-";
         TxtNewVersion.Text = _comparisonResult.NewVersion ?? "1.0.0";
 
-        // Database section
+        // Database section. The publish target is the live data-channel endpoint, plus
+        // the Assets mirror while format 1 is live; both are named here so the operator
+        // can see exactly which endpoints a publish will write.
         UpdateSectionStatus(
             DbStatusIcon, DbStatusText,
-            _comparisonResult.DbChanged,
-            _comparisonResult.DbExists ? "Changed" : "Not found",
+            _comparisonResult.DbChanged || _comparisonResult.MirrorNeedsRepair,
+            _comparisonResult.DbExists
+                ? (_comparisonResult.DbChanged ? "Changed" : "Mirror out of sync - will be repaired")
+                : "Not found",
             "No changes");
 
         if (_comparisonResult.DbExists)
         {
             TxtDbSourceInfo.Text = $"{FormatSize(_comparisonResult.SourceDbSize)} - Hash: {_comparisonResult.SourceDbHash?[..8]}...";
-            TxtDbTargetInfo.Text = _comparisonResult.TargetDbHash != null
+
+            var target = _comparisonResult.TargetDbHash != null
                 ? $"{FormatSize(_comparisonResult.TargetDbSize)} - Hash: {_comparisonResult.TargetDbHash[..8]}..."
                 : "Not found (will be created)";
+            var mirror = _comparisonResult.MirrorsToAssets
+                ? $" + Assets mirror ({(_comparisonResult.MirrorInSync ? "in sync" : "OUT OF SYNC")})"
+                : "";
+            TxtDbTargetInfo.Text = $"data/v{_comparisonResult.LiveDataFormat}: {target}{mirror}";
         }
         else
         {
@@ -208,9 +217,14 @@ public partial class DataPublishWindow : Window
             return;
         }
 
+        var dbTargets = _comparisonResult.MirrorsToAssets
+            ? $"data/v{_comparisonResult.LiveDataFormat}/ + Assets mirror"
+            : $"data/v{_comparisonResult.LiveDataFormat}/";
+
         var confirm = MessageBox.Show(
             $"This will publish the following changes to TarkovHelper:\n\n" +
-            $"• Database: {(_comparisonResult.DbChanged ? "Will be updated" : "No changes")}\n" +
+            $"• Database ({dbTargets}): " +
+            $"{(_comparisonResult.DbChanged || _comparisonResult.MirrorNeedsRepair ? "Will be updated" : "No changes")}\n" +
             $"• Map Configs: {(_comparisonResult.MapConfigsChanged ? "Will be updated" : "No changes")}\n" +
             $"• Map SVGs: {_comparisonResult.MapSvgAdded} added, {_comparisonResult.MapSvgUpdated} updated\n" +
             $"• Marker Icons: {_comparisonResult.MarkerIconAdded} added, {_comparisonResult.MarkerIconUpdated} updated\n" +
@@ -246,7 +260,10 @@ public partial class DataPublishWindow : Window
                     $"Files copied: {result.FilesCopied}\n" +
                     $"Icons copied: {result.IconsCopied}\n" +
                     $"New version: {result.NewVersion}\n\n" +
-                    $"Target: {_service.TargetBasePath}",
+                    $"Data channel: {_comparisonResult.ChannelDirPath}\n" +
+                    $"Assets: {_service.TargetBasePath}\n\n" +
+                    "Commit every copied endpoint file together: raw main must never serve " +
+                    "a half-published mirror.",
                     "Publish Complete",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);

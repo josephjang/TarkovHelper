@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -5,25 +6,85 @@ using System.Text;
 namespace TarkovDBEditor.Services;
 
 /// <summary>
-/// Service for publishing DB updates from TarkovDBEditor to TarkovHelper Assets folder.
+/// Service for publishing DB updates from TarkovDBEditor to the repository.
 /// Compares files using MD5 hash and copies changed files.
+///
+/// The database and its version stamp go to the data channel (data/v&lt;N&gt;/), where N is
+/// the highest format directory present in the repo, and are mirrored into
+/// TarkovHelper/Assets while that format is 1 (the pre-channel endpoint fielded builds
+/// poll; the two must stay byte-identical). Everything else (map configs, SVGs, icons)
+/// ships inside app releases and keeps publishing to Assets only.
+///
+/// This tool never creates a format directory: bumping the format is a deliberate act in
+/// the same reviewed PR that teaches the app to read it, so a routine publish cannot bump
+/// it by accident. Design: docs/decisions/feature-versioned-data-channel.spec.md.
 /// </summary>
 public class DataPublishService : IDisposable
 {
+    /// <summary>Repo-relative root of the data channel, holding one v&lt;N&gt; directory per format.</summary>
+    private const string DataChannelDirName = "data";
+    private const string DatabaseFileName = "tarkov_data.db";
+    private const string VersionFileName = "db_version.txt";
+
+    /// <summary>The only format that is also served from the pre-channel Assets endpoint.</summary>
+    private const int MirroredDataFormat = 1;
+
     private readonly string _sourceBasePath;
+    private readonly string _repoRootPath;
     private readonly string _targetBasePath;
+    private readonly string _dataChannelPath;
 
     public DataPublishService()
+        : this(
+            AppDomain.CurrentDomain.BaseDirectory, // TarkovDBEditor Release build output path
+            // Repo root, relative to that build output.
+            Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..")))
     {
-        // TarkovDBEditor Release build output path
-        _sourceBasePath = AppDomain.CurrentDomain.BaseDirectory;
+    }
 
-        // TarkovHelper Assets path (relative to TarkovDBEditor)
-        _targetBasePath = Path.GetFullPath(Path.Combine(_sourceBasePath, "..", "..", "..", "..", "TarkovHelper", "Assets"));
+    /// <summary>
+    /// Explicit-path overload, used by tests to drive a publish against a throwaway tree
+    /// instead of the real repository. The two publish targets are always derived from
+    /// the repo root, so a test cannot accidentally point them at different trees.
+    /// </summary>
+    public DataPublishService(string sourceBasePath, string repoRootPath)
+    {
+        _sourceBasePath = sourceBasePath;
+        _repoRootPath = repoRootPath;
+        _targetBasePath = Path.Combine(_repoRootPath, "TarkovHelper", "Assets");
+        _dataChannelPath = Path.Combine(_repoRootPath, DataChannelDirName);
     }
 
     public string SourceBasePath => _sourceBasePath;
     public string TargetBasePath => _targetBasePath;
+    public string DataChannelPath => _dataChannelPath;
+
+    /// <summary>
+    /// The format this publish writes: the highest data/v&lt;N&gt; directory in the repo.
+    /// Returns 0 when the channel is missing entirely, which callers must treat as an
+    /// error rather than falling back to the Assets-only layout.
+    /// </summary>
+    public int GetLiveDataFormat()
+    {
+        if (!Directory.Exists(_dataChannelPath)) return 0;
+
+        var highest = 0;
+        foreach (var dir in Directory.GetDirectories(_dataChannelPath, "v*"))
+        {
+            var name = Path.GetFileName(dir);
+            if (int.TryParse(name.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out var format)
+                && format > highest)
+            {
+                highest = format;
+            }
+        }
+
+        return highest;
+    }
+
+    /// <summary>Endpoint directory for a format, e.g. &lt;repo&gt;/data/v1.</summary>
+    private string ChannelDirFor(int format) =>
+        Path.Combine(_dataChannelPath, $"v{format.ToString(CultureInfo.InvariantCulture)}");
 
     /// <summary>
     /// Result of a comparison operation
@@ -33,13 +94,31 @@ public class DataPublishService : IDisposable
         public bool Success { get; set; }
         public string? ErrorMessage { get; set; }
 
-        // Database
+        // Database (target = this repo's live data-channel endpoint)
         public bool DbExists { get; set; }
         public bool DbChanged { get; set; }
         public string? SourceDbHash { get; set; }
         public string? TargetDbHash { get; set; }
         public long SourceDbSize { get; set; }
         public long TargetDbSize { get; set; }
+
+        // Data channel
+        /// <summary>Format this publish writes, i.e. the highest data/v&lt;N&gt; in the repo.</summary>
+        public int LiveDataFormat { get; set; }
+        public string? ChannelDirPath { get; set; }
+
+        /// <summary>
+        /// True while the live format is the one the pre-channel Assets endpoint also
+        /// serves, so a publish must write both copies.
+        /// </summary>
+        public bool MirrorsToAssets { get; set; }
+
+        /// <summary>
+        /// Whether the Assets mirror currently matches the channel endpoint. False means
+        /// the repo is mid-skew (a half-published commit); publishing both copies fixes
+        /// it, which is why this is surfaced rather than blocking.
+        /// </summary>
+        public bool MirrorInSync { get; set; } = true;
 
         // Version
         public string? CurrentVersion { get; set; }
@@ -74,14 +153,20 @@ public class DataPublishService : IDisposable
         public int HideoutIconUpdated { get; set; }
         public int HideoutIconUnchanged { get; set; }
 
-        public bool HasAnyChanges => DbChanged || MapConfigsChanged ||
+        /// <summary>
+        /// The Assets mirror must be rewritten even when the database itself is
+        /// unchanged, so a drifted mirror still counts as a publishable change.
+        /// </summary>
+        public bool MirrorNeedsRepair => MirrorsToAssets && !MirrorInSync;
+
+        public bool HasAnyChanges => DbChanged || MirrorNeedsRepair || MapConfigsChanged ||
             MapSvgAdded > 0 || MapSvgUpdated > 0 ||
             MarkerIconAdded > 0 || MarkerIconUpdated > 0 ||
             ItemIconAdded > 0 || ItemIconUpdated > 0 ||
             HideoutIconAdded > 0 || HideoutIconUpdated > 0;
 
         public int TotalChanges =>
-            (DbChanged ? 1 : 0) +
+            (DbChanged || MirrorNeedsRepair ? 1 : 0) +
             (MapConfigsChanged ? 1 : 0) +
             MapSvgAdded + MapSvgUpdated +
             MarkerIconAdded + MarkerIconUpdated +
@@ -142,6 +227,22 @@ public class DataPublishService : IDisposable
                 return result;
             }
 
+            // The channel is where the database is published; without it there is no
+            // correct target, so this fails rather than silently writing Assets only.
+            result.LiveDataFormat = GetLiveDataFormat();
+            if (result.LiveDataFormat == 0)
+            {
+                result.Success = false;
+                result.ErrorMessage =
+                    $"No data channel found under {_dataChannelPath}.\n\n" +
+                    "Expected at least one data/v<N> directory holding tarkov_data.db and " +
+                    "db_version.txt. Creating one is a deliberate change made together with " +
+                    "the app-side format bump, not something this tool does.";
+                return result;
+            }
+            result.ChannelDirPath = ChannelDirFor(result.LiveDataFormat);
+            result.MirrorsToAssets = result.LiveDataFormat == MirroredDataFormat;
+
             // 1. Compare Database
             progress?.Invoke("Comparing database...");
             await CompareDatabase(result);
@@ -183,13 +284,15 @@ public class DataPublishService : IDisposable
 
     private async Task CompareDatabase(ComparisonResult result)
     {
-        var sourceDbPath = Path.Combine(_sourceBasePath, "tarkov_data.db");
-        var targetDbPath = Path.Combine(_targetBasePath, "tarkov_data.db");
+        var sourceDbPath = Path.Combine(_sourceBasePath, DatabaseFileName);
+        var targetDbPath = Path.Combine(result.ChannelDirPath!, DatabaseFileName);
 
         result.DbExists = File.Exists(sourceDbPath);
 
         if (!result.DbExists)
         {
+            // Nothing to publish and nothing to repair a mirror from, so MirrorInSync is
+            // left at its default rather than reporting a drift this run cannot fix.
             return;
         }
 
@@ -206,19 +309,46 @@ public class DataPublishService : IDisposable
         {
             result.DbChanged = true; // New file
         }
+
+        if (!result.MirrorsToAssets) return;
+
+        // Both format-1 endpoints must serve the same bytes; a mismatch here means an
+        // earlier publish reached only one of them.
+        var mirrorDbPath = Path.Combine(_targetBasePath, DatabaseFileName);
+        result.MirrorInSync = File.Exists(mirrorDbPath)
+                              && File.Exists(targetDbPath)
+                              && await ComputeFileHashAsync(mirrorDbPath) == result.TargetDbHash;
     }
 
     private async Task ReadVersionInfo(ComparisonResult result)
     {
-        var versionPath = Path.Combine(_targetBasePath, "db_version.txt");
+        var versionPath = Path.Combine(result.ChannelDirPath!, VersionFileName);
 
         if (File.Exists(versionPath))
         {
-            result.CurrentVersion = (await File.ReadAllTextAsync(versionPath)).Trim();
+            // First non-blank line only: later lines are endpoint directives (e.g.
+            // "frozen"), not part of the version token.
+            var lines = await File.ReadAllLinesAsync(versionPath);
+            result.CurrentVersion = lines
+                .Select(line => line.Trim())
+                .FirstOrDefault(line => line.Length > 0) ?? "0.0.0";
         }
         else
         {
             result.CurrentVersion = "0.0.0";
+        }
+
+        // The stamps are half of what the endpoints serve, so they count toward mirror
+        // sync too: a version-only drift would otherwise leave the tool with nothing to
+        // publish while the two format-1 endpoints answered differently.
+        if (result.MirrorsToAssets)
+        {
+            var mirrorVersionPath = Path.Combine(_targetBasePath, VersionFileName);
+            var stampsMatch = File.Exists(mirrorVersionPath)
+                              && File.Exists(versionPath)
+                              && await ComputeFileHashAsync(mirrorVersionPath)
+                                 == await ComputeFileHashAsync(versionPath);
+            result.MirrorInSync = result.MirrorInSync && stampsMatch;
         }
 
         // Suggest new version (increment patch)
@@ -407,16 +537,37 @@ public class DataPublishService : IDisposable
 
         try
         {
-            // 1. Copy database (using stream to handle files open by other processes)
-            if (comparison.DbChanged)
+            if (comparison.ChannelDirPath == null)
+            {
+                result.Success = false;
+                result.ErrorMessage = "Comparison did not resolve a data channel; re-run the comparison.";
+                return result;
+            }
+
+            // 1. Copy database to the channel endpoint, and to the Assets mirror while
+            //    format 1 is live (using stream to handle files open by other processes).
+            //    Copied even when unchanged if the mirror has drifted, so one publish
+            //    always leaves both endpoints byte-identical.
+            //    DbExists is part of the condition because a mirror can also fall out of
+            //    sync on the version stamp alone, and a repair must never reach for a
+            //    source database this build output does not have.
+            if (comparison.DbExists && (comparison.DbChanged || comparison.MirrorNeedsRepair))
             {
                 progress?.Invoke("Copying database...");
-                var sourceDbPath = Path.Combine(_sourceBasePath, "tarkov_data.db");
-                var targetDbPath = Path.Combine(_targetBasePath, "tarkov_data.db");
+                var sourceDbPath = Path.Combine(_sourceBasePath, DatabaseFileName);
+                var channelDbPath = Path.Combine(comparison.ChannelDirPath, DatabaseFileName);
 
-                await CopyFileWithShareAsync(sourceDbPath, targetDbPath);
-                result.CopiedFiles.Add("tarkov_data.db");
+                Directory.CreateDirectory(comparison.ChannelDirPath);
+                await CopyFileWithShareAsync(sourceDbPath, channelDbPath);
+                result.CopiedFiles.Add($"{DataChannelDirName}/v{comparison.LiveDataFormat}/{DatabaseFileName}");
                 result.FilesCopied++;
+
+                if (comparison.MirrorsToAssets)
+                {
+                    await CopyFileWithShareAsync(sourceDbPath, Path.Combine(_targetBasePath, DatabaseFileName));
+                    result.CopiedFiles.Add(DatabaseFileName);
+                    result.FilesCopied++;
+                }
             }
 
             // 2. Copy map configs
@@ -480,11 +631,21 @@ public class DataPublishService : IDisposable
                 result.IconsCopied++;
             }
 
-            // 7. Update version file
+            // 7. Update version file on every endpoint the live format serves. Written
+            //    last, after the database it describes: an interrupted publish then
+            //    leaves the old version pointing at data that is merely newer, never a
+            //    new version pointing at data that never arrived.
             progress?.Invoke("Updating version...");
-            var versionPath = Path.Combine(_targetBasePath, "db_version.txt");
-            await File.WriteAllTextAsync(versionPath, newVersion);
-            result.CopiedFiles.Add("db_version.txt");
+            await File.WriteAllTextAsync(
+                Path.Combine(comparison.ChannelDirPath, VersionFileName), newVersion);
+            result.CopiedFiles.Add($"{DataChannelDirName}/v{comparison.LiveDataFormat}/{VersionFileName}");
+
+            if (comparison.MirrorsToAssets)
+            {
+                await File.WriteAllTextAsync(
+                    Path.Combine(_targetBasePath, VersionFileName), newVersion);
+                result.CopiedFiles.Add(VersionFileName);
+            }
 
             progress?.Invoke("Publish complete.");
         }

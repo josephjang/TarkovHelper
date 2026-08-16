@@ -24,6 +24,8 @@ public class LocalizationHeaderStringsTests
         "HeaderProfileTooltip", "HeaderProfileName", "HeaderLevelShort", "HeaderVersionTooltipIdle",
         "HeaderVersionTooltipInstall", "HeaderVersionTooltipCheckFailed",
         "HeaderUpdateAvailableFormat", "HeaderChecking",
+        // Data-channel freeze notice (feature-versioned-data-channel.md)
+        "HeaderDataFrozen", "HeaderDataFrozenTooltip",
         // Sync status chip
         "SyncStatusOff", "SyncStatusWatching", "SyncStatusMatching", "SyncStatusInRaid",
         "SyncStatusTooltip",
