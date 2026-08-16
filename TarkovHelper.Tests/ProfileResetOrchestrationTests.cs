@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.IO;
 using System.Text.RegularExpressions;
 using TarkovHelper.Models;
@@ -22,6 +21,7 @@ namespace TarkovHelper.Tests;
 /// <c>ProductionCollaborators</c>, and the singletons behind it are what the e2e tests exercise.
 /// </para>
 /// </summary>
+[Collection(SchedulingSensitiveCollection.Name)]
 public sealed class ProfileResetOrchestrationTests
 {
     private const string ProfileId = "season";
@@ -348,13 +348,17 @@ public sealed class ProfileResetOrchestrationTests
     {
         var wedged = new TaskCompletionSource();
         var budget = TimeSpan.FromMilliseconds(200);
-        var elapsed = Stopwatch.StartNew();
 
         var outcome = await ProfileResetService.RunStoreWithinBudget(
             ProfileId, () => wedged.Task, budget);
 
-        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(10),
-            $"the wedged store was waited on for {elapsed.Elapsed}, so the bound did not apply");
+        // The outcome arrived while the store task was still incomplete, so it can only have
+        // come from the budget cutting the wait short. Asserted this way rather than against a
+        // stopwatch bound: a wall clock measures the CI runner's scheduler as much as the code
+        // (a 10-second ceiling was observed blown by a 200 ms budget on a starved pool), and
+        // this pair proves the same contract on the slowest machine.
+        Assert.False(wedged.Task.IsCompleted,
+            "the wedged store completed on its own, so the outcome proves nothing about the bound");
 
         // Abandoning the wait is not cancelling the transaction, so this must NOT be reported as
         // an ordinary failure: only those may claim PRD R5's "nothing was removed".

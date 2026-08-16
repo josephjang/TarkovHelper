@@ -17,6 +17,7 @@ namespace TarkovHelper.Tests;
 /// subset of the profile-scoped keys, and every profile-scoped key is carried by the settings
 /// snapshot.
 /// </summary>
+[Collection(SchedulingSensitiveCollection.Name)]
 public sealed class ProfileResetHooksTests : IDisposable
 {
     private static readonly TarkovTask Quest = TestTasks.Quest("q-1", "a-quest");
@@ -35,7 +36,10 @@ public sealed class ProfileResetHooksTests : IDisposable
 
     private static async Task WaitUntil(Func<bool> condition, string what)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        // Generous because it bounds only how long a genuinely failing test takes to report: a
+        // passing test returns on the first poll that sees the condition. A loaded CI runner can
+        // stall queued work for seconds at a time, and a tight deadline turns that into a flake.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
         while (!condition())
         {
             Assert.True(DateTime.UtcNow < deadline, $"timed out waiting for: {what}");

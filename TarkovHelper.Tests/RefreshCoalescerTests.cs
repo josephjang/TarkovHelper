@@ -12,6 +12,7 @@ namespace TarkovHelper.Tests;
 /// dispatcher, so the testable part is the coalescer with its scheduler injected.
 /// </para>
 /// </summary>
+[Collection(SchedulingSensitiveCollection.Name)]
 public sealed class RefreshCoalescerTests
 {
     /// <summary>

@@ -20,9 +20,13 @@ public sealed class E2EQuestDataTests
     /// The cascade the app itself would plan for the named quest on a fresh
     /// profile, computed from the loaded asset db.
     /// </summary>
-    private static (IReadOnlyList<string> Prereqs, IReadOnlyList<string> Failures) Cascade(string questName)
+    private static async Task<(IReadOnlyList<string> Prereqs, IReadOnlyList<string> Failures)> Cascade(
+        string questName)
     {
-        Assert.True(QuestDbService.Instance.LoadQuestsAsync().GetAwaiter().GetResult(), "asset db did not load");
+        // Awaited rather than blocked on: a GetResult() here parks one of xunit's few workers
+        // while the load's own continuations queue for another, which on a small CI runner is
+        // seconds of everyone else's budget.
+        Assert.True(await QuestDbService.Instance.LoadQuestsAsync(), "asset db did not load");
         var task = QuestDbService.Instance.AllQuests.Single(q => q.Name == questName);
         var plan = QuestProgressService.ComputeCompletionCascade(
             task, completePrerequisites: true,
@@ -40,7 +44,7 @@ public sealed class E2EQuestDataTests
     }
 
     [Fact]
-    public void Locked_quest_with_active_prereq_exists()
+    public async Task Locked_quest_with_active_prereq_exists()
     {
         var (questName, prereqName) = E2EQuestData.FindLockedQuestWithActivePrereq();
         Assert.False(string.IsNullOrWhiteSpace(questName));
@@ -49,31 +53,31 @@ public sealed class E2EQuestDataTests
 
         // The app's own traversal agrees with the SQL: completing the quest cascades
         // exactly the prerequisite and fails nothing (QuestCascadeConfirmE2ETests).
-        var c = Cascade(questName);
+        var c = await Cascade(questName);
         Assert.Equal(new[] { prereqName }, c.Prereqs);
         Assert.Empty(c.Failures);
 
         // ...and completing the prerequisite cascades nothing at all: the
         // dialog-free guarantee QuestNavigationE2ETests depends on.
-        var p = Cascade(prereqName);
+        var p = await Cascade(prereqName);
         Assert.Empty(p.Prereqs);
         Assert.Empty(p.Failures);
     }
 
     [Fact]
-    public void Standalone_active_quest_exists()
+    public async Task Standalone_active_quest_exists()
     {
         var questName = E2EQuestData.FindStandaloneActiveQuest();
         Assert.False(string.IsNullOrWhiteSpace(questName));
 
         // Completing it must cascade nothing (no dialog in the one-click e2e flow).
-        var c = Cascade(questName);
+        var c = await Cascade(questName);
         Assert.Empty(c.Prereqs);
         Assert.Empty(c.Failures);
     }
 
     [Fact]
-    public void Quest_with_single_alternative_exists_and_resolves_ids()
+    public async Task Quest_with_single_alternative_exists_and_resolves_ids()
     {
         var (questName, altName, questId, altId) = E2EQuestData.FindQuestWithSingleAlternative();
         Assert.False(string.IsNullOrWhiteSpace(altName));
@@ -81,6 +85,6 @@ public sealed class E2EQuestDataTests
         Assert.Equal(altId, E2EQuestData.QuestIdByName(altName));
 
         // The app's traversal previews exactly the one guaranteed auto-failure.
-        Assert.Equal(new[] { altName }, Cascade(questName).Failures);
+        Assert.Equal(new[] { altName }, (await Cascade(questName)).Failures);
     }
 }

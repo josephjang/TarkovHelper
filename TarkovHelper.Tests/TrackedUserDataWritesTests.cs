@@ -12,9 +12,18 @@ namespace TarkovHelper.Tests;
 /// barrier's state is process-global by design (that is what makes it mechanically unavoidable
 /// for every persistence helper).
 /// </summary>
+[Collection(SchedulingSensitiveCollection.Name)]
 public sealed class TrackedUserDataWritesTests
 {
     private static string NewProfileId() => "barrier-test-" + Guid.NewGuid().ToString("N");
+
+    /// <summary>
+    /// The outer bound on waits that are pure hang insurance: it fires only when the code under
+    /// test is genuinely wedged, so its size costs a passing test nothing. Generous because a
+    /// loaded CI runner can stall queued continuations for seconds, and a tight guard turns that
+    /// stall into a flake in whichever test it happens to land on.
+    /// </summary>
+    private static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Reads the running process's error log until <paramref name="needle"/> shows up or the
@@ -25,7 +34,7 @@ public sealed class TrackedUserDataWritesTests
     private static async Task<string> ReadErrorLogUntilAsync(string sessionFolder, string needle)
     {
         var path = Path.Combine(sessionFolder, "error.log");
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        var deadline = DateTime.UtcNow + HangGuard;
         string text;
         while (true)
         {
@@ -107,7 +116,7 @@ public sealed class TrackedUserDataWritesTests
         // The failed write unregistered itself: a reset drains promptly instead of waiting on
         // a task that will never complete.
         var handle = await TrackedUserDataWrites.BeginResetAsync(profileId)
-            .WaitAsync(TimeSpan.FromSeconds(5));
+            .WaitAsync(HangGuard);
         await handle.DisposeAsync();
     }
 
@@ -144,7 +153,7 @@ public sealed class TrackedUserDataWritesTests
 
         // And it unregistered itself on the way out.
         var handle = await TrackedUserDataWrites.BeginResetAsync(profileId)
-            .WaitAsync(TimeSpan.FromSeconds(5));
+            .WaitAsync(HangGuard);
         await handle.DisposeAsync();
     }
 
@@ -158,7 +167,7 @@ public sealed class TrackedUserDataWritesTests
                 profileId, () => throw new InvalidOperationException("database is locked")));
 
         var handle = await TrackedUserDataWrites.BeginResetAsync(profileId)
-            .WaitAsync(TimeSpan.FromSeconds(5));
+            .WaitAsync(HangGuard);
         await handle.DisposeAsync();
     }
 
@@ -174,7 +183,7 @@ public sealed class TrackedUserDataWritesTests
         // The other profile's held write must not block this profile's reset: the barrier is
         // per profile, which is what keeps it free outside a reset.
         var handle = await TrackedUserDataWrites.BeginResetAsync(target)
-            .WaitAsync(TimeSpan.FromSeconds(5));
+            .WaitAsync(HangGuard);
         await handle.DisposeAsync();
 
         release.SetResult();
@@ -217,7 +226,7 @@ public sealed class TrackedUserDataWritesTests
 
         // The caller got control back with the op still running, which an inline op forbids.
         Assert.False(write.IsCompleted);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await entered.Task.WaitAsync(HangGuard);
         Assert.NotEqual(callerThread, opThread);
 
         release.SetResult();
@@ -239,7 +248,7 @@ public sealed class TrackedUserDataWritesTests
         // "The operation has timed out" and names neither the profile nor the drain.
         var timedOut = await Assert.ThrowsAsync<TimeoutException>(() =>
             TrackedUserDataWrites.BeginResetAsync(profileId, TimeSpan.FromMilliseconds(200))
-                .WaitAsync(TimeSpan.FromSeconds(5)));
+                .WaitAsync(HangGuard));
         Assert.Contains(profileId, timedOut.Message);
         Assert.Contains("draining", timedOut.Message);
 
@@ -250,7 +259,7 @@ public sealed class TrackedUserDataWritesTests
         {
             later = true;
             return Task.CompletedTask;
-        }).WaitAsync(TimeSpan.FromSeconds(5));
+        }).WaitAsync(HangGuard);
         Assert.True(later);
 
         wedged.SetResult();
@@ -268,14 +277,14 @@ public sealed class TrackedUserDataWritesTests
         // timeout apart from the harness guard's.
         var timedOut = await Assert.ThrowsAsync<TimeoutException>(() =>
             TrackedUserDataWrites.BeginResetAsync(profileId, TimeSpan.FromMilliseconds(200))
-                .WaitAsync(TimeSpan.FromSeconds(5)));
+                .WaitAsync(HangGuard));
         Assert.Contains(profileId, timedOut.Message);
         Assert.Contains("earlier reset", timedOut.Message);
 
         // The first reset still holds the profile: the loser cleared nothing it did not own.
         await first.DisposeAsync();
         var handle = await TrackedUserDataWrites.BeginResetAsync(profileId)
-            .WaitAsync(TimeSpan.FromSeconds(5));
+            .WaitAsync(HangGuard);
         await handle.DisposeAsync();
     }
 
@@ -289,7 +298,7 @@ public sealed class TrackedUserDataWritesTests
         var drain = TrackedUserDataWrites.BeginResetAsync(profileId, TimeSpan.FromSeconds(10));
         await Task.Delay(100);
         release.SetResult();
-        var handle = await drain.WaitAsync(TimeSpan.FromSeconds(5));
+        var handle = await drain.WaitAsync(HangGuard);
         await write;
 
         // The generous timeout did not turn into a lowered barrier: writes still wait.
@@ -299,6 +308,6 @@ public sealed class TrackedUserDataWritesTests
         Assert.False(blocked.IsCompleted, "a write ran while the reset barrier was up");
 
         await handle.DisposeAsync();
-        await blocked.WaitAsync(TimeSpan.FromSeconds(5));
+        await blocked.WaitAsync(HangGuard);
     }
 }
