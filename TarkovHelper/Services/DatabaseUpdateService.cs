@@ -15,12 +15,12 @@ namespace TarkovHelper.Services;
 /// 한 시간마다 백그라운드에서 업데이트 체크 (시작 시 1회 즉시).
 ///
 /// The endpoint it polls is this build's data-format channel (data/v&lt;N&gt;/), where N
-/// comes from the TarkovDataFormat assembly metadata the csproj stamps in. That same
+/// comes from the TarkovDataFormatVersion assembly metadata the csproj stamps in. That same
 /// property selects the seed database bundled into Assets\, so a build can only ever
 /// poll the channel its own bundled data belongs to.
 ///
 /// Two documents are read. data/v&lt;N&gt;/manifest.json describes the payload this build
-/// should have; data/index.json names the data format the project currently publishes,
+/// should have; data/index.json names the data format version the project currently publishes,
 /// which is how a build learns it has been left behind by a newer format. Endpoint
 /// directories are never rewritten once superseded, so that pointer is the only mutable
 /// part of the channel. Design: feature-versioned-data-channel.spec.md.
@@ -31,7 +31,7 @@ public sealed class DatabaseUpdateService : IDisposable
     private static DatabaseUpdateService? _instance;
     public static DatabaseUpdateService Instance => _instance ??= new DatabaseUpdateService();
 
-    private const string DATA_FORMAT_METADATA_KEY = "TarkovDataFormat";
+    private const string DATA_FORMAT_METADATA_KEY = "TarkovDataFormatVersion";
     private const string DATA_ROOT_URL_VALUE =
         "https://raw.githubusercontent.com/josephjang/TarkovHelper/refs/heads/main/data";
     private const string INDEX_FILE = "index.json";
@@ -61,12 +61,15 @@ public sealed class DatabaseUpdateService : IDisposable
     private const int UPDATE_INTERVAL_MS = 60 * 60 * 1000;
 
     /// <summary>
-    /// The data format this build reads, from assembly metadata: the contract a build
-    /// must satisfy to read tarkov_data.db correctly, covering the SQLite schema, the
-    /// meaning of each field, and the range of values a field may take. It increments
-    /// only when forward compatibility breaks, meaning a build already in the field
-    /// would read the new data with its existing code and show the user something
-    /// wrong. Additions an older build simply ignores do not increment it.
+    /// Which data format this build reads, from assembly metadata.
+    /// <para>
+    /// The data format is the contract a build must satisfy to read tarkov_data.db
+    /// correctly, covering the SQLite schema, the meaning of each field, and the range
+    /// of values a field may take. This number identifies which one, and increments only
+    /// when forward compatibility breaks, meaning a build already in the field would read
+    /// the new data with its existing code and show the user something wrong. Additions
+    /// an older build simply ignores do not increment it.
+    /// </para>
     /// <para>
     /// Named "format" rather than "schema" on purpose: schema versioning in common use
     /// (Avro, JSON Schema, Confluent) compares structure only, and would not catch a
@@ -78,7 +81,7 @@ public sealed class DatabaseUpdateService : IDisposable
     /// </summary>
     internal static readonly int DataFormatVersion = ReadDataFormatVersion();
 
-    /// <summary>Channel root, holding index.json beside one directory per data format.</summary>
+    /// <summary>Channel root, holding index.json beside one directory per data format version.</summary>
     internal static readonly string DATA_ROOT_URL = DATA_ROOT_URL_VALUE;
     internal static readonly string INDEX_URL = $"{DATA_ROOT_URL}/{INDEX_FILE}";
     internal static readonly string CHANNEL_BASE_URL = string.Format(
@@ -116,12 +119,12 @@ public sealed class DatabaseUpdateService : IDisposable
     public string? RemoteVersion { get; private set; }
 
     /// <summary>
-    /// Whether the project has moved on to a data format this build cannot read, which
+    /// Whether the project has moved on to a data format version this build cannot read, which
     /// means this build's endpoint will receive nothing further. Re-derived from every
     /// check that reaches index.json, and deliberately left alone when that fetch
     /// fails: a network blip must not clear a real notice.
     /// <para>
-    /// True implies a newer app build exists, because a new data format can only ship
+    /// True implies a newer app build exists, because a new data format version can only ship
     /// with the build that pins it. The UI therefore escalates the existing app-update
     /// affordance instead of raising a second one.
     /// </para>
@@ -201,7 +204,7 @@ public sealed class DatabaseUpdateService : IDisposable
         {
             throw new InvalidOperationException(
                 $"Assembly metadata '{DATA_FORMAT_METADATA_KEY}' is missing or invalid " +
-                $"(got '{value}'). TarkovHelper.csproj must set <TarkovDataFormat> to the "
+                $"(got '{value}'). TarkovHelper.csproj must set <TarkovDataFormatVersion> to the "
                 + "data format this build reads; it selects both the bundled seed database "
                 + "and the update endpoint, so there is no safe default.");
         }
@@ -216,10 +219,10 @@ public sealed class DatabaseUpdateService : IDisposable
 
     /// <summary>data/v&lt;N&gt;/manifest.json: what this endpoint currently offers.</summary>
     internal sealed record DataChannelManifest(
-        int SchemaVersion, int DataFormat, string Version, DataChannelPayload Database);
+        int SchemaVersion, int DataFormatVersion, string Version, DataChannelPayload Database);
 
-    /// <summary>data/index.json: the data format the project publishes right now.</summary>
-    internal sealed record DataChannelIndex(int SchemaVersion, int CurrentDataFormat);
+    /// <summary>data/index.json: the data format version the project publishes right now.</summary>
+    internal sealed record DataChannelIndex(int SchemaVersion, int CurrentDataFormatVersion);
 
     /// <summary>
     /// Parses a manifest document. Returns null for anything unreadable, which callers
@@ -240,7 +243,7 @@ public sealed class DatabaseUpdateService : IDisposable
             // to every local version and re-download the database forever.
             if (manifest == null
                 || manifest.SchemaVersion < 1
-                || manifest.DataFormat < 1
+                || manifest.DataFormatVersion < 1
                 || string.IsNullOrWhiteSpace(manifest.Version)
                 || string.IsNullOrWhiteSpace(manifest.Database?.File))
             {
@@ -266,7 +269,7 @@ public sealed class DatabaseUpdateService : IDisposable
         try
         {
             var index = JsonSerializer.Deserialize<DataChannelIndex>(content, JsonOptions);
-            return index is { SchemaVersion: >= 1, CurrentDataFormat: >= 1 } ? index : null;
+            return index is { SchemaVersion: >= 1, CurrentDataFormatVersion: >= 1 } ? index : null;
         }
         catch (JsonException)
         {
@@ -383,14 +386,14 @@ public sealed class DatabaseUpdateService : IDisposable
                 return result;
             }
 
-            if (manifest.DataFormat != DataFormatVersion)
+            if (manifest.DataFormatVersion != DataFormatVersion)
             {
                 // The directory is ours but the payload it describes is not. A
                 // mis-published endpoint, fixed by the next publish, so no user notice.
                 _log.Error(
-                    $"Manifest at {_channelBaseUrl} serves data format {manifest.DataFormat}, "
+                    $"Manifest at {_channelBaseUrl} serves data format version {manifest.DataFormatVersion}, "
                     + $"but this build reads {DataFormatVersion}. Refusing to install it.");
-                var result = new UpdateCheckResult(false, false, "Endpoint serves a different data format", IsSuperseded);
+                var result = new UpdateCheckResult(false, false, "Endpoint serves a different data format version", IsSuperseded);
                 UpdateCheckCompleted?.Invoke(this, result);
                 return result;
             }
@@ -466,12 +469,12 @@ public sealed class DatabaseUpdateService : IDisposable
             return;
         }
 
-        var superseded = index.CurrentDataFormat > DataFormatVersion;
+        var superseded = index.CurrentDataFormatVersion > DataFormatVersion;
         if (superseded != IsSuperseded)
         {
             _log.Info(superseded
-                ? $"This build reads data format {DataFormatVersion}, but the channel now publishes "
-                  + $"{index.CurrentDataFormat}: no further data updates will arrive for this app version"
+                ? $"This build reads data format version {DataFormatVersion}, but the channel now publishes "
+                  + $"{index.CurrentDataFormatVersion}: no further data updates will arrive for this app version"
                 : $"This build's data format {DataFormatVersion} is current again");
         }
 
@@ -689,7 +692,7 @@ public sealed class DatabaseUpdateService : IDisposable
         if (stamped != DataFormatVersion)
         {
             _log.Error(
-                $"Downloaded database is stamped data format {stamped}, but this build reads "
+                $"Downloaded database is stamped data format version {stamped}, but this build reads "
                 + $"{DataFormatVersion}. Keeping the current database.");
             return false;
         }

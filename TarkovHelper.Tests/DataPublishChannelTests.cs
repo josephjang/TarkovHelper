@@ -28,7 +28,7 @@ public sealed class DataPublishChannelTests : IDisposable
 
     /// <summary>
     /// Real SQLite databases, not stand-in byte arrays: a publish now stamps the source
-    /// with its data format, so the fixtures have to be openable the way the editor's
+    /// with its data format version, so the fixtures have to be openable the way the editor's
     /// actual output is. The marker table just makes the two distinguishable.
     /// </summary>
     private byte[] NewDatabase(string marker)
@@ -54,13 +54,13 @@ public sealed class DataPublishChannelTests : IDisposable
     /// data format. Fixtures that mean "the channel already holds this exact data" have
     /// to use this, because an unstamped copy is genuinely different data now.
     /// </summary>
-    private byte[] PublishedNewDb => _publishedNewDb ??= Stamped(NewDb, dataFormat: 1);
+    private byte[] PublishedNewDb => _publishedNewDb ??= Stamped(NewDb, dataFormatVersion: 1);
 
     private byte[]? _newDb;
     private byte[]? _oldDb;
     private byte[]? _publishedNewDb;
 
-    private byte[] Stamped(byte[] database, int dataFormat)
+    private byte[] Stamped(byte[] database, int dataFormatVersion)
     {
         var path = Path.Combine(_temp.NewFolder("stamped"), "db.sqlite");
         File.WriteAllBytes(path, database);
@@ -69,7 +69,7 @@ public sealed class DataPublishChannelTests : IDisposable
         {
             connection.Open();
             using var command = connection.CreateCommand();
-            command.CommandText = $"PRAGMA user_version = {dataFormat}";
+            command.CommandText = $"PRAGMA user_version = {dataFormatVersion}";
             command.ExecuteNonQuery();
         }
         SqliteConnection.ClearAllPools();
@@ -148,7 +148,7 @@ public sealed class DataPublishChannelTests : IDisposable
 
         using var service = new DataPublishService(NewSource(NewDb), repo);
 
-        Assert.Equal(10, service.GetLiveDataFormat());
+        Assert.Equal(10, service.GetLiveDataFormatVersion());
     }
 
     [Fact]
@@ -162,7 +162,7 @@ public sealed class DataPublishChannelTests : IDisposable
 
         using var service = new DataPublishService(NewSource(NewDb), repo);
 
-        Assert.Equal(1, service.GetLiveDataFormat());
+        Assert.Equal(1, service.GetLiveDataFormatVersion());
     }
 
     [Fact]
@@ -196,7 +196,7 @@ public sealed class DataPublishChannelTests : IDisposable
         Assert.True(comparison.Success);
         Assert.True(comparison.DbChanged);
         Assert.True(comparison.MirrorsToAssets);
-        Assert.Equal(1, comparison.LiveDataFormat);
+        Assert.Equal(1, comparison.LiveDataFormatVersion);
 
         var published = await service.PublishAsync(comparison, "1.0.11");
 
@@ -223,7 +223,7 @@ public sealed class DataPublishChannelTests : IDisposable
         Assert.True(published.Success, published.ErrorMessage);
 
         var manifest = ReadManifest(ChannelDir(repo, 1));
-        Assert.Equal(1, manifest.DataFormat);
+        Assert.Equal(1, manifest.DataFormatVersion);
         Assert.Equal("1.0.11", manifest.Version);
         Assert.Equal(DatabaseFile, manifest.Database.File);
         // Hashed against what was actually published, which is the stamped source.
@@ -246,7 +246,7 @@ public sealed class DataPublishChannelTests : IDisposable
             await File.ReadAllTextAsync(Path.Combine(repo, "data", "index.json")));
 
         Assert.True(index != null, "data/index.json is not readable by the app's index reader");
-        Assert.Equal(1, index!.CurrentDataFormat);
+        Assert.Equal(1, index!.CurrentDataFormatVersion);
     }
 
     [Fact]
@@ -347,7 +347,7 @@ public sealed class DataPublishChannelTests : IDisposable
         using var service = new DataPublishService(source, repo);
 
         var comparison = await service.CompareAsync();
-        Assert.Equal(2, comparison.LiveDataFormat);
+        Assert.Equal(2, comparison.LiveDataFormatVersion);
         Assert.False(comparison.MirrorsToAssets);
         Assert.False(comparison.MirrorNeedsRepair);
 
@@ -356,7 +356,7 @@ public sealed class DataPublishChannelTests : IDisposable
         Assert.True(published.Success, published.ErrorMessage);
         Assert.Equal(SourceBytes(source), await File.ReadAllBytesAsync(Path.Combine(ChannelDir(repo, 2), DatabaseFile)));
         Assert.Equal("2.0.1", await File.ReadAllTextAsync(Path.Combine(ChannelDir(repo, 2), VersionFile)));
-        Assert.Equal(2, ReadManifest(ChannelDir(repo, 2)).DataFormat);
+        Assert.Equal(2, ReadManifest(ChannelDir(repo, 2)).DataFormatVersion);
 
         // Superseded endpoints are history: byte for byte, nothing about v1 moves. This
         // is what lets a left-behind build keep serving its last compatible data, and
@@ -370,7 +370,7 @@ public sealed class DataPublishChannelTests : IDisposable
         // outside data/v2.
         var index = DatabaseUpdateService.ParseIndex(
             await File.ReadAllTextAsync(Path.Combine(repo, "data", "index.json")));
-        Assert.Equal(2, index!.CurrentDataFormat);
+        Assert.Equal(2, index!.CurrentDataFormatVersion);
     }
 
     #endregion

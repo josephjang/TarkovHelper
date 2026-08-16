@@ -413,14 +413,22 @@ The earlier sections used "data format" and "data schema" for one concept and
 names, in a single assignment. The vocabulary below is normative from here on,
 and the wire field names are pinned by a test so they cannot drift again.
 
-**data format** (`dataFormat`, integer; `<TarkovDataFormat>`; `data/v<N>/`) is the
-contract a build must satisfy to read `tarkov_data.db` correctly. It covers the
-SQLite schema, **the meaning of each field, and the range of values a field may
-take**. It increments only when forward compatibility breaks. The test to apply
-is a single question: *would the previously released build, reading this data
-with its existing code, show the user something wrong?* If yes, it is a bump. If
-an older build simply ignores the change (new tables, new columns, new rows, new
-values inside a field's documented range), it is not.
+**data format** is the contract a build must satisfy to read `tarkov_data.db`
+correctly. It covers the SQLite schema, **the meaning of each field, and the
+range of values a field may take**.
+
+**data format version** (`dataFormatVersion`, `currentDataFormatVersion`,
+`<TarkovDataFormatVersion>`, `data/v<N>/`) is the integer identifying *which*
+data format. It increments only when forward compatibility breaks. The test to
+apply is a single question: *would the previously released build, reading this
+data with its existing code, show the user something wrong?* If yes, it is a
+bump. If an older build simply ignores the change (new tables, new columns, new
+rows, new values inside a field's documented range), it is not.
+
+The two are named separately on purpose, and every place that holds the integer
+says "version" in its name. "Data format" alone always means the contract; the
+number identifying it is always a "data format version". A name should say what
+its slot contains, and `dataFormat = 1` did not.
 
 **schema version** (`schemaVersion`, integer) is the shape of the JSON document
 carrying that information, and nothing else.
@@ -509,7 +517,7 @@ tool was checking.
     `/data/v{DataFormatVersion}/`, so a future bump cannot leave a stale
     hardcoded path behind.
   - Pin integrity: `DataFormatVersion` equals the csproj
-    `<TarkovDataFormat>` value as seen through assembly metadata; the
+    `<TarkovDataFormatVersion>` value as seen through assembly metadata; the
     build-output `Assets/tarkov_data.db` and `Assets/db_version.txt` are
     byte-identical to the repo's `data/v1/` pair, which catches a mis-wired
     seed copy item.

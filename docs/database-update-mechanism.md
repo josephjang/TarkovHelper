@@ -155,7 +155,7 @@ internal const string UpdateXmlUrl = "https://raw.githubusercontent.com/josephja
 
 **Services/DatabaseUpdateService.cs** — 앱 업데이트와 독립적으로 DB만 갱신:
 ```csharp
-// csproj의 <TarkovDataFormat>에서 파생 (AssemblyMetadata 경유). 하드코딩된 상수가 아님
+// csproj의 <TarkovDataFormatVersion>에서 파생 (AssemblyMetadata 경유). 하드코딩된 상수가 아님
 internal static readonly string INDEX_URL    = ".../refs/heads/main/data/index.json";
 internal static readonly string MANIFEST_URL = ".../refs/heads/main/data/v1/manifest.json";
 
@@ -207,13 +207,18 @@ internal static readonly string MANIFEST_URL = ".../refs/heads/main/data/v1/mani
 
 ### 용어
 
-세 가지가 각자 다른 것을 셉니다. 이름을 섞어 쓰지 않는 것이 중요합니다.
+계약 하나와, 그것을 세는 숫자 셋입니다. 이름을 섞어 쓰지 않는 것이 중요합니다.
 
 | 이름 | 코드/필드 | 무엇인가 |
 |---|---|---|
-| **data format** | `dataFormat`, `<TarkovDataFormat>`, `data/v<N>/` | 빌드가 `tarkov_data.db`를 올바르게 읽기 위해 만족해야 하는 계약 |
+| **data format** | (개념) | 빌드가 `tarkov_data.db`를 올바르게 읽기 위해 만족해야 하는 계약 그 자체 |
+| **data format version** | `dataFormatVersion`, `currentDataFormatVersion`, `<TarkovDataFormatVersion>`, `data/v<N>/` | **어느** data format인지 가리키는 정수 |
 | **schema version** | `schemaVersion` | 그 정보를 담은 JSON 문서의 모양 |
 | **version** | `version` | 어느 발행분인가 (동등 비교만 하는 불투명 토큰) |
+
+정수를 담는 자리는 예외 없이 이름에 **version**이 들어갑니다. "data format"이라고만 쓰면 계약
+자체를 가리키는 것이고, 그 계약을 식별하는 숫자는 언제나 "data format version"입니다. 이름만
+보고 그 자리에 무엇이 들어 있는지 알 수 있어야 하기 때문입니다.
 
 **data format**은 SQLite 스키마뿐 아니라 **각 필드의 의미와 필드가 가질 수 있는 값의 범위**
 까지 포함합니다. 올릴지 판단하는 기준은 한 문장입니다.
@@ -257,9 +262,9 @@ Confluent)은 **구조만** 비교하므로 필드의 의미나 허용 범위가
 
 ### 스키마 고정(pin)
 
-`TarkovHelper.csproj`의 `<TarkovDataFormat>` 하나가 두 가지를 동시에 결정합니다:
+`TarkovHelper.csproj`의 `<TarkovDataFormatVersion>` 하나가 두 가지를 동시에 결정합니다:
 
-1. 빌드에 번들되는 시드 DB (`data/v$(TarkovDataFormat)/`에서 `Assets\`로 복사)
+1. 빌드에 번들되는 시드 DB (`data/v$(TarkovDataFormatVersion)/`에서 `Assets\`로 복사)
 2. `DatabaseUpdateService`가 폴링하는 URL (`AssemblyMetadata` 경유)
 
 따라서 번들 데이터와 폴링 채널이 어긋날 수 없습니다. 메타데이터가 없거나 잘못되면
@@ -270,7 +275,7 @@ Confluent)은 **구조만** 비교하므로 필드의 의미나 허용 범위가
 ```json
 {
   "schemaVersion": 1,
-  "dataFormat": 1,
+  "dataFormatVersion": 1,
   "version": "1.0.10",
   "database": { "file": "tarkov_data.db", "sha256": "...", "size": 6889472 }
 }
@@ -310,14 +315,14 @@ Confluent)은 **구조만** 비교하므로 필드의 의미나 허용 범위가
 
 ### 거부 규칙
 
-`schemaVersion`이 이 빌드의 상한보다 크거나 `dataFormat`이 pin과 다르면 **거부하고 로그만 남깁니다.**
+`schemaVersion`이 이 빌드의 상한보다 크거나 `dataFormatVersion`이 pin과 다르면 **거부하고 로그만 남깁니다.**
 사용자에게는 알리지 않습니다. 발행 실수이지 사용자가 할 수 있는 일이 없고, 다음 publish로
 고쳐지기 때문입니다.
 
 ### index.json과 스키마 올리기
 
 ```json
-{ "schemaVersion": 1, "currentDataFormat": 1 }
+{ "schemaVersion": 1, "currentDataFormatVersion": 1 }
 ```
 
 추가 전용으로 만들 수 없는 publish가 처음 필요해질 때:
@@ -325,9 +330,9 @@ Confluent)은 **구조만** 비교하므로 필드의 의미나 허용 범위가
 1. 새 디렉터리 `data/v<N+1>/`를 만들고 새 데이터를 넣습니다 (도구가 아니라 사람이, 앱의 pin을
    올리는 같은 PR에서).
 2. 이하 format 엔드포인트에는 더 이상 쓰지 않습니다. **덧붙이지도 고치지도 않습니다.**
-3. `data/index.json`의 `currentDataFormat`가 새 값을 가리킵니다 (발행 도구가 매번 자동으로 씀).
+3. `data/index.json`의 `currentDataFormatVersion`가 새 값을 가리킵니다 (발행 도구가 매번 자동으로 씀).
 
-뒤에 남은 빌드는 자기 pin과 `currentDataFormat`를 비교해서 스스로 알아냅니다. 그래서 지나간
+뒤에 남은 빌드는 자기 pin과 `currentDataFormatVersion`를 비교해서 스스로 알아냅니다. 그래서 지나간
 엔드포인트 디렉터리는 **다시는 수정되지 않고**, bump 시점에 사람이 손으로 표시를 덧붙이는 단계도
 없습니다(잊어버릴 수가 없습니다). 인덱스를 읽지 못하면 마지막으로 알던 상태를 유지합니다.
 
@@ -496,7 +501,7 @@ WHERE MapName = @MapName
 - `data/v<N>/db_version.txt` - 레거시 프로토콜용 토큰 겸 설치본 북마크의 시드
 - `Assets/db_version.txt` - format 1 미러(저장소) 겸 로컬 버전 기록(설치본)
 - `Assets/DB/Data/map_configs.json` - 맵 설정
-- `TarkovHelper.csproj`의 `<TarkovDataFormat>` - 시드 DB와 폴링 URL을 함께 결정하는 pin
+- `TarkovHelper.csproj`의 `<TarkovDataFormatVersion>` - 시드 DB와 폴링 URL을 함께 결정하는 pin
 
 ---
 

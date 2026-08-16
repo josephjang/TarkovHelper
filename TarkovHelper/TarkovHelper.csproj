@@ -27,7 +27,7 @@
          update endpoint DatabaseUpdateService polls (via AssemblyMetadata), so the
          bundled data and the polled channel can never disagree. Bumping it means
          creating data/v<N>/ in the same PR. See feature-versioned-data-channel.spec.md. -->
-    <TarkovDataFormat>1</TarkovDataFormat>
+    <TarkovDataFormatVersion>1</TarkovDataFormatVersion>
 
     <!-- AutoUpdater.NET 다국어 리소스 제한 (en, ko, ja만 유지) -->
     <SatelliteResourceLanguages>en;ko;ja-jp</SatelliteResourceLanguages>
@@ -41,9 +41,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Surfaces TarkovDataFormat to runtime code (DatabaseUpdateService reads it off
+    <!-- Surfaces TarkovDataFormatVersion to runtime code (DatabaseUpdateService reads it off
          the assembly to build its endpoint URLs). -->
-    <AssemblyMetadata Include="TarkovDataFormat" Value="$(TarkovDataFormat)" />
+    <AssemblyMetadata Include="TarkovDataFormatVersion" Value="$(TarkovDataFormatVersion)" />
   </ItemGroup>
 
   <ItemGroup>
@@ -73,10 +73,10 @@
          DB on its first check. -->
     <None Remove="Assets\tarkov_data.db" />
     <None Remove="Assets\db_version.txt" />
-    <None Include="..\data\v$(TarkovDataFormat)\tarkov_data.db" Link="Assets\tarkov_data.db">
+    <None Include="..\data\v$(TarkovDataFormatVersion)\tarkov_data.db" Link="Assets\tarkov_data.db">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="..\data\v$(TarkovDataFormat)\db_version.txt" Link="Assets\db_version.txt">
+    <None Include="..\data\v$(TarkovDataFormatVersion)\db_version.txt" Link="Assets\db_version.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="Assets\icons\*.png">
