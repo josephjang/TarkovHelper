@@ -33,6 +33,7 @@ namespace TarkovHelper.Tests;
 /// singleton mid-load. The suite deliberately never does that.
 /// </para>
 /// </summary>
+[Collection(SchedulingSensitiveCollection.Name)]
 public sealed class SettingsReloadRaceTests : IDisposable
 {
     private static string IdOf(AppProfile profile) => ProfileService.GetProfileId(profile);

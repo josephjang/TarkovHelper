@@ -24,6 +24,7 @@ namespace TarkovHelper.Tests;
 /// missing guard on one path, which no reachable behavioural test can prove absent.
 /// </para>
 /// </summary>
+[Collection(SchedulingSensitiveCollection.Name)]
 public sealed class RefreshCoalescerSchedulingTests
 {
     #region OnDispatcher scheduling

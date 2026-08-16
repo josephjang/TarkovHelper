@@ -21,6 +21,7 @@ namespace TarkovHelper.Tests;
 /// setter instead - asserting "no event" on a path that cannot raise one would prove nothing.
 /// </para>
 /// </summary>
+[Collection(SchedulingSensitiveCollection.Name)]
 public sealed class SettingsPublishOutcomeTests : IDisposable
 {
     /// <summary>Temp home for the real-SQLite stores the write assertions need.</summary>
@@ -150,8 +151,6 @@ public sealed class SettingsPublishOutcomeTests : IDisposable
         var store = NewStore();
         var onScreen = NewProfileId("onscreen");
         var next = NewProfileId("next");
-        // Warm the store, so the 500 ms below measures the gate and not schema creation.
-        await store.SetProfileSettingAsync(onScreen, "app.scavRep", "1.0");
 
         var service = NewService(Seeded(onScreen), store: store);
         var events = RecordEventNames(service);
@@ -161,15 +160,31 @@ public sealed class SettingsPublishOutcomeTests : IDisposable
         Monitor.Enter(gate);
         try
         {
+            var generationBefore =
+                (long)TestReflection.GetPrivateField(service, "_editGeneration")!;
+
             // Off the test thread, because the gate is reentrant and would not stop an edit
             // running on this one.
             edit = Task.Run(() => service.PlayerLevel = 51);
-            Thread.Sleep(500);
+
+            // The edit bumps the generation right after deriving from the on-screen snapshot,
+            // so the bump moving is proof the derivation is done and the edit is on its way to
+            // the gate this thread holds. A fixed sleep here was a flake: on a starved CI pool
+            // the edit had not even STARTED when the sleep ended, so it derived from the
+            // arrived profile instead and announced. Waited on without an await, which could
+            // resume on another thread and strand the Monitor held above.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (long)TestReflection.GetPrivateField(service, "_editGeneration")!
+                          > generationBefore,
+                    TimeSpan.FromSeconds(30)),
+                "the edit never began deriving");
 
             Assert.False(edit.IsCompleted, "the edit published outside the publish gate");
 
-            // The switch completes entirely while the edit is stopped one statement short of
-            // publishing.
+            // The switch completes entirely while the edit cannot yet have passed the gate.
+            // The write below is ordered before the edit's own gate entry by the Monitor this
+            // thread still holds, so the edit's publish decision must see the arrived profile.
             TestReflection.SetPrivateField(service, "_profileSettings", Seeded(next));
         }
         finally

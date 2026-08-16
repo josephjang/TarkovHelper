@@ -12,6 +12,7 @@ namespace TarkovHelper.Tests;
 /// point: the fake cannot prove all-or-nothing, rollback, or schema migration, so these run
 /// against the real store.
 /// </summary>
+[Collection(SchedulingSensitiveCollection.Name)]
 public sealed class ProfileResetStoreTests : IDisposable
 {
     private const string Season = "season";

@@ -34,4 +34,15 @@ internal static class TestReflection
         Assert.True(field != null, $"{typeof(T).Name} has no private field '{name}'");
         field!.SetValue(instance, value);
     }
+
+    /// <summary>
+    /// Reads a private instance field declared on <typeparamref name="T"/>, failing the test when
+    /// no such field exists so a rename cannot quietly turn an observation into a default value.
+    /// </summary>
+    internal static object? GetPrivateField<T>(T instance, string name)
+    {
+        var field = typeof(T).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.True(field != null, $"{typeof(T).Name} has no private field '{name}'");
+        return field!.GetValue(instance);
+    }
 }

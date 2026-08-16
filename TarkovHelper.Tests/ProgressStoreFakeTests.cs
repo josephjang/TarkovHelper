@@ -11,6 +11,7 @@ namespace TarkovHelper.Tests;
 /// other about something production does not do. Two facts matter, and they disagree:
 /// a quest row is WRITTEN under its Id and READ BACK under its NormalizedName.
 /// </summary>
+[Collection(SchedulingSensitiveCollection.Name)]
 public sealed class ProgressStoreFakeTests
 {
     private const string Profile = "pve";
@@ -138,15 +139,18 @@ public sealed class ProgressStoreFakeTests
     // Enumerating a partition while a writer mutates it used to throw an intermittent
     // InvalidOperationException that read as a flake. The accessors copy under the same lock the
     // writers take.
+    //
+    // The writer runs a fixed iteration count rather than a wall-clock window: a time-boxed
+    // writer on a starved CI pool could be cancelled before its FIRST write ran, which turned
+    // the final NotEmpty into an assertion about machine speed.
     [Fact]
     public async Task Reading_a_partition_while_it_is_written_does_not_throw()
     {
         var store = new ProgressStoreFake();
-        using var done = new CancellationTokenSource(TimeSpan.FromSeconds(2));
 
         var writer = Task.Run(async () =>
         {
-            for (var i = 0; !done.IsCancellationRequested && i < 2_000; i++)
+            for (var i = 0; i < 2_000; i++)
                 await store.SaveQuestProgressAsync($"q-{i}", $"n-{i}", QuestStatus.Done, Profile);
         });
 
@@ -156,6 +160,9 @@ public sealed class ProgressStoreFakeTests
             {
                 store.QuestsOf(Profile);
                 store.QuestRowsOf(Profile);
+                // Lets a starved pool schedule the writer instead of spinning against it; the
+                // reads stay far more frequent than the writes they need to interleave with.
+                Thread.Yield();
             }
         });
 

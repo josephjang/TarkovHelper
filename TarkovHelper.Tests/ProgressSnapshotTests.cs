@@ -8,6 +8,7 @@ namespace TarkovHelper.Tests;
 /// profile it belongs to are one immutable value, so a write always names the profile whose data
 /// the writer actually saw, and a reload that lost a race cannot publish over a newer one.
 /// </summary>
+[Collection(SchedulingSensitiveCollection.Name)]
 public sealed class ProgressSnapshotTests
 {
     private static readonly TarkovTask Quest = TestTasks.Quest("q-1", "a-quest");
@@ -626,7 +627,10 @@ public sealed class ProgressSnapshotTests
 
     private static async Task WaitUntil(Func<bool> condition, string description)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        // Generous because it bounds only how long a genuinely failing test takes to report: a
+        // passing test returns on the first poll that sees the condition. A loaded CI runner can
+        // stall queued work for seconds at a time, and a tight deadline turns that into a flake.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
         while (DateTime.UtcNow < deadline)
         {
             if (condition()) return;

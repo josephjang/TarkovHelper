@@ -9,6 +9,7 @@ namespace TarkovHelper.Tests;
 /// one EFT session folder, and the "which mode was running at time T" lookup over them.
 /// See fix-profile-data-attribution.spec.md.
 /// </summary>
+[Collection(SchedulingSensitiveCollection.Name)]
 public sealed class SessionModeTimelineTests : IDisposable
 {
     private readonly string _root = Path.Combine(

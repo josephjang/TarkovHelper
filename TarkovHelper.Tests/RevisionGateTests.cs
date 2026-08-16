@@ -12,6 +12,7 @@ namespace TarkovHelper.Tests;
 /// `Interlocked.Read(ref _latestRevision) != revision`, so a gate that let the counter regress
 /// would make a stale load look current and publish another profile's data.
 /// </summary>
+[Collection(SchedulingSensitiveCollection.Name)]
 public sealed class RevisionGateTests
 {
     [Fact]
