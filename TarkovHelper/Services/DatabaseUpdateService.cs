@@ -14,13 +14,13 @@ namespace TarkovHelper.Services;
 /// GitHub에서 매니페스트를 확인하고 새 버전이 있으면 자동으로 다운로드.
 /// 한 시간마다 백그라운드에서 업데이트 체크 (시작 시 1회 즉시).
 ///
-/// The endpoint it polls is this build's data-schema channel (data/v&lt;N&gt;/), where N
+/// The endpoint it polls is this build's data-format channel (data/v&lt;N&gt;/), where N
 /// comes from the TarkovDataFormat assembly metadata the csproj stamps in. That same
 /// property selects the seed database bundled into Assets\, so a build can only ever
 /// poll the channel its own bundled data belongs to.
 ///
 /// Two documents are read. data/v&lt;N&gt;/manifest.json describes the payload this build
-/// should have; data/index.json names the data schema the project currently publishes,
+/// should have; data/index.json names the data format the project currently publishes,
 /// which is how a build learns it has been left behind by a newer format. Endpoint
 /// directories are never rewritten once superseded, so that pointer is the only mutable
 /// part of the channel. Design: feature-versioned-data-channel.spec.md.
@@ -40,11 +40,17 @@ public sealed class DatabaseUpdateService : IDisposable
     private const string DATABASE_FILE = "tarkov_data.db";
 
     /// <summary>
-    /// Manifest document shapes this build can read. Only ever compared as an upper
-    /// bound: a lower bound is unnecessary because the endpoint URL already selects
-    /// which documents this build can meet at all.
+    /// Document shapes this build can read. Only ever compared as an upper bound: a
+    /// lower bound is unnecessary because the endpoint URL already selects which
+    /// documents this build can meet at all.
+    /// <para>
+    /// "Schema version" here means the shape of the JSON document itself, the sense
+    /// Docker's manifest <c>schemaVersion</c> and TUF's <c>spec_version</c> use. The
+    /// contract of the database the document describes is the data format, which is a
+    /// different thing and covers more (see <see cref="DataFormatVersion"/>).
+    /// </para>
     /// </summary>
-    internal const int MAX_SUPPORTED_MANIFEST_SCHEMA = 1;
+    internal const int MAX_SUPPORTED_SCHEMA_VERSION = 1;
 
     /// <summary>
     /// One hour. The payload changes a handful of times per game patch, and raw
@@ -55,13 +61,24 @@ public sealed class DatabaseUpdateService : IDisposable
     private const int UPDATE_INTERVAL_MS = 60 * 60 * 1000;
 
     /// <summary>
-    /// The tarkov_data.db contract this build reads, from assembly metadata. Declared
-    /// before the URLs below because they derive from it (static fields initialize in
-    /// declaration order).
+    /// The data format this build reads, from assembly metadata: the contract a build
+    /// must satisfy to read tarkov_data.db correctly, covering the SQLite schema, the
+    /// meaning of each field, and the range of values a field may take. It increments
+    /// only when forward compatibility breaks, meaning a build already in the field
+    /// would read the new data with its existing code and show the user something
+    /// wrong. Additions an older build simply ignores do not increment it.
+    /// <para>
+    /// Named "format" rather than "schema" on purpose: schema versioning in common use
+    /// (Avro, JSON Schema, Confluent) compares structure only, and would not catch a
+    /// field whose meaning or permitted values changed. Apache Iceberg's
+    /// <c>format-version</c> is the same idea under the same name.
+    /// </para>
+    /// Declared before the URLs below because they derive from it (static fields
+    /// initialize in declaration order).
     /// </summary>
     internal static readonly int DataFormatVersion = ReadDataFormatVersion();
 
-    /// <summary>Channel root, holding index.json beside one directory per data schema.</summary>
+    /// <summary>Channel root, holding index.json beside one directory per data format.</summary>
     internal static readonly string DATA_ROOT_URL = DATA_ROOT_URL_VALUE;
     internal static readonly string INDEX_URL = $"{DATA_ROOT_URL}/{INDEX_FILE}";
     internal static readonly string CHANNEL_BASE_URL = string.Format(
@@ -99,12 +116,12 @@ public sealed class DatabaseUpdateService : IDisposable
     public string? RemoteVersion { get; private set; }
 
     /// <summary>
-    /// Whether the project has moved on to a data schema this build cannot read, which
+    /// Whether the project has moved on to a data format this build cannot read, which
     /// means this build's endpoint will receive nothing further. Re-derived from every
     /// check that reaches index.json, and deliberately left alone when that fetch
     /// fails: a network blip must not clear a real notice.
     /// <para>
-    /// True implies a newer app build exists, because a new data schema can only ship
+    /// True implies a newer app build exists, because a new data format can only ship
     /// with the build that pins it. The UI therefore escalates the existing app-update
     /// affordance instead of raising a second one.
     /// </para>
@@ -141,7 +158,7 @@ public sealed class DatabaseUpdateService : IDisposable
     /// Test seam: points an instance at a local channel root and asset directory so the
     /// protocol can be exercised without touching the network or the build output.
     /// Production goes through <see cref="Instance"/>, which pins both to this build's
-    /// data schema.
+    /// data format.
     /// </summary>
     internal DatabaseUpdateService(string dataRootUrl, string assetsPath)
     {
@@ -168,7 +185,7 @@ public sealed class DatabaseUpdateService : IDisposable
     }
 
     /// <summary>
-    /// Reads the data schema off the running assembly. A build whose metadata is
+    /// Reads the data format off the running assembly. A build whose metadata is
     /// missing or unparseable throws here rather than falling back to a default: the
     /// wrong endpoint is exactly the failure this mechanism exists to prevent, and it
     /// must be loud at startup instead of silent in the field.
@@ -185,7 +202,7 @@ public sealed class DatabaseUpdateService : IDisposable
             throw new InvalidOperationException(
                 $"Assembly metadata '{DATA_FORMAT_METADATA_KEY}' is missing or invalid " +
                 $"(got '{value}'). TarkovHelper.csproj must set <TarkovDataFormat> to the "
-                + "data schema this build reads; it selects both the bundled seed database "
+                + "data format this build reads; it selects both the bundled seed database "
                 + "and the update endpoint, so there is no safe default.");
         }
 
@@ -199,10 +216,10 @@ public sealed class DatabaseUpdateService : IDisposable
 
     /// <summary>data/v&lt;N&gt;/manifest.json: what this endpoint currently offers.</summary>
     internal sealed record DataChannelManifest(
-        int Schema, int DataSchema, string Version, DataChannelPayload Database);
+        int SchemaVersion, int DataFormat, string Version, DataChannelPayload Database);
 
-    /// <summary>data/index.json: the data schema the project publishes right now.</summary>
-    internal sealed record DataChannelIndex(int Schema, int CurrentDataSchema);
+    /// <summary>data/index.json: the data format the project publishes right now.</summary>
+    internal sealed record DataChannelIndex(int SchemaVersion, int CurrentDataFormat);
 
     /// <summary>
     /// Parses a manifest document. Returns null for anything unreadable, which callers
@@ -222,8 +239,8 @@ public sealed class DatabaseUpdateService : IDisposable
             // string null rather than failing, and a null version would compare unequal
             // to every local version and re-download the database forever.
             if (manifest == null
-                || manifest.Schema < 1
-                || manifest.DataSchema < 1
+                || manifest.SchemaVersion < 1
+                || manifest.DataFormat < 1
                 || string.IsNullOrWhiteSpace(manifest.Version)
                 || string.IsNullOrWhiteSpace(manifest.Database?.File))
             {
@@ -249,7 +266,7 @@ public sealed class DatabaseUpdateService : IDisposable
         try
         {
             var index = JsonSerializer.Deserialize<DataChannelIndex>(content, JsonOptions);
-            return index is { Schema: >= 1, CurrentDataSchema: >= 1 } ? index : null;
+            return index is { SchemaVersion: >= 1, CurrentDataFormat: >= 1 } ? index : null;
         }
         catch (JsonException)
         {
@@ -353,27 +370,27 @@ public sealed class DatabaseUpdateService : IDisposable
                 return result;
             }
 
-            if (manifest.Schema > MAX_SUPPORTED_MANIFEST_SCHEMA)
+            if (manifest.SchemaVersion > MAX_SUPPORTED_SCHEMA_VERSION)
             {
-                // Newer document shape at our own URL. Not a freeze and not the user's
-                // problem: it means a publish put something here this build was never
-                // taught to read, so refuse loudly and change nothing.
+                // Newer document shape at our own URL. Not a supersession and not the
+                // user's problem: it means a publish put something here this build was
+                // never taught to read, so refuse loudly and change nothing.
                 _log.Error(
-                    $"Manifest at {_channelBaseUrl} declares schema {manifest.Schema}, "
-                    + $"above the {MAX_SUPPORTED_MANIFEST_SCHEMA} this build understands. Ignoring it.");
-                var result = new UpdateCheckResult(false, false, "Manifest schema is newer than this build", IsSuperseded);
+                    $"Manifest at {_channelBaseUrl} declares schema version {manifest.SchemaVersion}, "
+                    + $"above the {MAX_SUPPORTED_SCHEMA_VERSION} this build understands. Ignoring it.");
+                var result = new UpdateCheckResult(false, false, "Manifest schema version is newer than this build", IsSuperseded);
                 UpdateCheckCompleted?.Invoke(this, result);
                 return result;
             }
 
-            if (manifest.DataSchema != DataFormatVersion)
+            if (manifest.DataFormat != DataFormatVersion)
             {
                 // The directory is ours but the payload it describes is not. A
                 // mis-published endpoint, fixed by the next publish, so no user notice.
                 _log.Error(
-                    $"Manifest at {_channelBaseUrl} serves data schema {manifest.DataSchema}, "
+                    $"Manifest at {_channelBaseUrl} serves data format {manifest.DataFormat}, "
                     + $"but this build reads {DataFormatVersion}. Refusing to install it.");
-                var result = new UpdateCheckResult(false, false, "Endpoint serves a different data schema", IsSuperseded);
+                var result = new UpdateCheckResult(false, false, "Endpoint serves a different data format", IsSuperseded);
                 UpdateCheckCompleted?.Invoke(this, result);
                 return result;
             }
@@ -449,13 +466,13 @@ public sealed class DatabaseUpdateService : IDisposable
             return;
         }
 
-        var superseded = index.CurrentDataSchema > DataFormatVersion;
+        var superseded = index.CurrentDataFormat > DataFormatVersion;
         if (superseded != IsSuperseded)
         {
             _log.Info(superseded
-                ? $"This build reads data schema {DataFormatVersion}, but the channel now publishes "
-                  + $"{index.CurrentDataSchema}: no further data updates will arrive for this app version"
-                : $"This build's data schema {DataFormatVersion} is current again");
+                ? $"This build reads data format {DataFormatVersion}, but the channel now publishes "
+                  + $"{index.CurrentDataFormat}: no further data updates will arrive for this app version"
+                : $"This build's data format {DataFormatVersion} is current again");
         }
 
         IsSuperseded = superseded;
@@ -695,7 +712,7 @@ public class UpdateCheckResult
     public string Message { get; }
 
     /// <summary>
-    /// Whether the project has moved past the data schema this build reads. Carried on
+    /// Whether the project has moved past the data format this build reads. Carried on
     /// every result, including failures, where it holds the last known state.
     /// </summary>
     public bool IsSuperseded { get; }

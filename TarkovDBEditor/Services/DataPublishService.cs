@@ -29,9 +29,13 @@ public class DataPublishService : IDisposable
     private const string ManifestFileName = "manifest.json";
     private const string IndexFileName = "index.json";
 
-    /// <summary>Document shapes this tool writes. See feature-versioned-data-channel.spec.md.</summary>
-    private const int ManifestSchema = 1;
-    private const int IndexSchema = 1;
+    /// <summary>
+    /// Shape of the JSON documents this tool writes, in the sense Docker's manifest
+    /// schemaVersion uses. Distinct from the data format, which is the contract of the
+    /// database those documents describe. See feature-versioned-data-channel.spec.md.
+    /// </summary>
+    private const int ManifestSchemaVersion = 1;
+    private const int IndexSchemaVersion = 1;
 
     /// <summary>The only format that is also served from the pre-channel Assets endpoint.</summary>
     private const int MirroredDataFormat = 1;
@@ -686,8 +690,8 @@ public class DataPublishService : IDisposable
 
         var manifest = new
         {
-            schema = ManifestSchema,
-            dataSchema = comparison.LiveDataFormat,
+            schemaVersion = ManifestSchemaVersion,
+            dataFormat = comparison.LiveDataFormat,
             version = newVersion,
             database = new
             {
@@ -704,13 +708,13 @@ public class DataPublishService : IDisposable
     }
 
     /// <summary>
-    /// Writes data/index.json, which names the data schema the project publishes right
-    /// now. Builds pinned to an older schema compare against it to learn that nothing
+    /// Writes data/index.json, which names the data format the project publishes right
+    /// now. Builds pinned to an older format compare against it to learn that nothing
     /// further is coming for them.
     /// </summary>
     private async Task WriteIndexAsync(int liveDataFormat, PublishResult result)
     {
-        var index = new { schema = IndexSchema, currentDataSchema = liveDataFormat };
+        var index = new { schemaVersion = IndexSchemaVersion, currentDataFormat = liveDataFormat };
 
         await File.WriteAllTextAsync(Path.Combine(_dataChannelPath, IndexFileName), ToJson(index));
         result.CopiedFiles.Add($"{DataChannelDirName}/{IndexFileName}");

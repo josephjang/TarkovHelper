@@ -156,8 +156,8 @@ internal const string UpdateXmlUrl = "https://raw.githubusercontent.com/josephja
 **Services/DatabaseUpdateService.cs** — 앱 업데이트와 독립적으로 DB만 갱신:
 ```csharp
 // csproj의 <TarkovDataFormat>에서 파생 (AssemblyMetadata 경유). 하드코딩된 상수가 아님
-internal static readonly string VERSION_URL  = ".../refs/heads/main/data/v1/db_version.txt";
-internal static readonly string DATABASE_URL = ".../refs/heads/main/data/v1/tarkov_data.db";
+internal static readonly string INDEX_URL    = ".../refs/heads/main/data/index.json";
+internal static readonly string MANIFEST_URL = ".../refs/heads/main/data/v1/manifest.json";
 
 // 시작 시 1회 + 1시간 주기로 index.json과 manifest.json을 읽고, version 토큰을 로컬과 비교;
 // 다르면 tarkov_data.db를 .tmp로 내려받아 sha256/size 검증 후 교체하고 DatabaseUpdated 이벤트 발생
@@ -205,23 +205,43 @@ internal static readonly string DATABASE_URL = ".../refs/heads/main/data/v1/tark
 
 설계 문서: `docs/decisions/feature-versioned-data-channel.spec.md`
 
-### 데이터 스키마(data schema)와 엔드포인트
+### 용어
 
-**데이터 스키마**는 앱 빌드가 읽을 수 있는 `tarkov_data.db`의 계약(SQLite 스키마 + 값의 의미)
-입니다. 추가 전용 변경(새 컬럼/테이블, `ColumnExistsAsync`로 feature-detect)은 올리지 않고,
-기존 리더를 깨뜨리는 변경(rename, 용도 변경, 삭제, 의미 변경)만 올립니다.
+세 가지가 각자 다른 것을 셉니다. 이름을 섞어 쓰지 않는 것이 중요합니다.
 
-매니페스트 문서의 모양을 가리키는 `schema`와는 다른 축입니다. 둘 다 리더 계약이고 둘 다
-feature detection이 1차 방어선이지만, **데이터 스키마는 선택자**(어느 엔드포인트와 대화할지를
-URL로 고름)이고 **매니페스트 schema는 검증자**(받아온 문서를 읽을 수 있는지 판정)입니다.
-7 MB짜리 페이로드는 내려받기 전에 걸러야 하므로 버전이 경로에 드러나 있어야 하고,
-매니페스트는 작아서 일단 받아 읽고 판단해도 됩니다.
+| 이름 | 코드/필드 | 무엇인가 |
+|---|---|---|
+| **data format** | `dataFormat`, `<TarkovDataFormat>`, `data/v<N>/` | 빌드가 `tarkov_data.db`를 올바르게 읽기 위해 만족해야 하는 계약 |
+| **schema version** | `schemaVersion` | 그 정보를 담은 JSON 문서의 모양 |
+| **version** | `version` | 어느 발행분인가 (동등 비교만 하는 불투명 토큰) |
+
+**data format**은 SQLite 스키마뿐 아니라 **각 필드의 의미와 필드가 가질 수 있는 값의 범위**
+까지 포함합니다. 올릴지 판단하는 기준은 한 문장입니다.
+
+> 직전 릴리즈 빌드가 이 데이터를 자기 코드로 읽었을 때 사용자에게 틀린 답을 보여주는가?
+
+그렇다면 올립니다. 옛 빌드가 그냥 무시할 수 있는 변경(새 테이블, 새 컬럼, 새 행, 문서화된
+범위 안의 새 값)이면 올리지 않습니다. 후자를 Confluent 용어로 **forward compatibility**라고
+하며, 이 저장소에서 "additive"라고 부르던 규칙의 정식 이름입니다.
+
+"schema"가 아니라 "format"인 이유가 있습니다. 통용되는 schema versioning(Avro, JSON Schema,
+Confluent)은 **구조만** 비교하므로 필드의 의미나 허용 범위가 바뀐 것을 잡지 못합니다. 이
+버전에는 바로 그 실명이 있으면 안 됩니다. Apache Iceberg의 `format-version`이 같은 개념을
+같은 이름으로 씁니다. 반대로 `schemaVersion`은 Docker 매니페스트가 쓰는 그 의미, 즉 문서
+자신의 모양이며 그 이상을 뜻하지 않습니다.
+
+축이 다른 만큼 위치도 다릅니다. **data format은 선택자**(어느 엔드포인트와 대화할지를 URL로
+고름)이고 **schemaVersion은 검증자**(받아온 문서를 읽을 수 있는지 판정)입니다. 7 MB짜리
+페이로드는 내려받기 전에 걸러야 하므로 버전이 경로에 드러나 있어야 하고, 매니페스트는 작아서
+일단 받아 읽고 판단해도 됩니다.
+
+### 엔드포인트 배치
 
 ```
 <repo>/
 ├── data/
-│   ├── index.json                 # 지금 발행 중인 데이터 스키마 (채널의 유일한 가변 부분)
-│   └── v1/                        # 스키마 1 엔드포인트 (앱이 폴링하는 곳)
+│   ├── index.json                 # 지금 발행 중인 data format (채널의 유일한 가변 부분)
+│   └── v1/                        # format 1 엔드포인트 (앱이 폴링하는 곳)
 │       ├── manifest.json          # 새 빌드가 읽는 문서
 │       ├── tarkov_data.db
 │       └── db_version.txt         # 레거시 프로토콜용 + 설치본 북마크의 시드
@@ -249,8 +269,8 @@ URL로 고름)이고 **매니페스트 schema는 검증자**(받아온 문서를
 
 ```json
 {
-  "schema": 1,
-  "dataSchema": 1,
+  "schemaVersion": 1,
+  "dataFormat": 1,
   "version": "1.0.10",
   "database": { "file": "tarkov_data.db", "sha256": "...", "size": 6889472 }
 }
@@ -270,24 +290,24 @@ URL로 고름)이고 **매니페스트 schema는 검증자**(받아온 문서를
 - 읽을 수 없는 문서(빈 본문, 깨진 JSON, 필수 필드 누락)는 실패한 체크로 처리합니다.
   다운로드도 로컬 상태 변경도 없습니다.
 
-`schema`가 이 빌드의 상한보다 크거나 `dataSchema`가 pin과 다르면 **거부하고 로그만 남깁니다.**
+`schema`가 이 빌드의 상한보다 크거나 `dataFormat`가 pin과 다르면 **거부하고 로그만 남깁니다.**
 사용자에게는 알리지 않습니다. 발행 실수이지 사용자가 할 수 있는 일이 없고, 다음 publish로
 고쳐지기 때문입니다.
 
 ### index.json과 스키마 올리기
 
 ```json
-{ "schema": 1, "currentDataSchema": 1 }
+{ "schemaVersion": 1, "currentDataFormat": 1 }
 ```
 
 추가 전용으로 만들 수 없는 publish가 처음 필요해질 때:
 
 1. 새 디렉터리 `data/v<N+1>/`를 만들고 새 데이터를 넣습니다 (도구가 아니라 사람이, 앱의 pin을
    올리는 같은 PR에서).
-2. 이하 스키마 엔드포인트에는 더 이상 쓰지 않습니다. **덧붙이지도 고치지도 않습니다.**
-3. `data/index.json`의 `currentDataSchema`가 새 값을 가리킵니다 (발행 도구가 매번 자동으로 씀).
+2. 이하 format 엔드포인트에는 더 이상 쓰지 않습니다. **덧붙이지도 고치지도 않습니다.**
+3. `data/index.json`의 `currentDataFormat`가 새 값을 가리킵니다 (발행 도구가 매번 자동으로 씀).
 
-뒤에 남은 빌드는 자기 pin과 `currentDataSchema`를 비교해서 스스로 알아냅니다. 그래서 지나간
+뒤에 남은 빌드는 자기 pin과 `currentDataFormat`를 비교해서 스스로 알아냅니다. 그래서 지나간
 엔드포인트 디렉터리는 **다시는 수정되지 않고**, bump 시점에 사람이 손으로 표시를 덧붙이는 단계도
 없습니다(잊어버릴 수가 없습니다). 인덱스를 읽지 못하면 마지막으로 알던 상태를 유지합니다.
 
@@ -397,10 +417,10 @@ WHERE MapName = @MapName
    - tarkov_data.db 업데이트
 2. Map Editor에서 마커 편집 (필요시)
 3. Data Publish 창에서 publish
-   - DB, manifest.json, db_version.txt를 live 스키마(`data/v<N>/`, 저장소에 있는 가장 높은
+   - DB, manifest.json, db_version.txt를 live format(`data/v<N>/`, 저장소에 있는 가장 높은
      v 디렉터리)에 씀
-   - `data/index.json`의 currentDataSchema를 갱신
-   - 스키마가 1이면 `TarkovHelper/Assets/`에도 DB와 db_version.txt를 미러링
+   - `data/index.json`의 currentDataFormat를 갱신
+   - format이 1이면 `TarkovHelper/Assets/`에도 DB와 db_version.txt를 미러링
    - 아이콘/맵/설정은 기존대로 Assets/에만 (앱 릴리즈로 배포되는 자산)
 4. **복사된 엔드포인트 파일을 한 커밋에 함께** main에 커밋/push
    → 사용자 앱의 DatabaseUpdateService가 다음 체크(최대 1시간, 앱 재시작 시 즉시)에 자동 반영
@@ -451,10 +471,10 @@ WHERE MapName = @MapName
 
 ### 설정 파일
 - `update.xml` - AutoUpdater 설정
-- `data/index.json` - 지금 발행 중인 데이터 스키마
+- `data/index.json` - 지금 발행 중인 data format
 - `data/v<N>/manifest.json` - 그 스키마 엔드포인트가 서빙하는 것 (버전, 해시, 크기)
 - `data/v<N>/db_version.txt` - 레거시 프로토콜용 토큰 겸 설치본 북마크의 시드
-- `Assets/db_version.txt` - 스키마 1 미러(저장소) 겸 로컬 버전 기록(설치본)
+- `Assets/db_version.txt` - format 1 미러(저장소) 겸 로컬 버전 기록(설치본)
 - `Assets/DB/Data/map_configs.json` - 맵 설정
 - `TarkovHelper.csproj`의 `<TarkovDataFormat>` - 시드 DB와 폴링 URL을 함께 결정하는 pin
 

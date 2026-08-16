@@ -227,7 +227,7 @@ public partial class LocalizationService
     };
 
     /// <summary>
-    /// Update pill label when this build has been left behind by a newer data schema.
+    /// Update pill label when this build has been left behind by a newer data format.
     /// It replaces the neutral "Update vX" wording because at that point the update is
     /// not optional maintenance: it is the only thing that restores game data updates,
     /// and a pill the user has learned to ignore has to say why it matters now.
@@ -442,7 +442,7 @@ public partial class LocalizationService
 
     /// <summary>
     /// Settings status when an update is available and this build has also been left
-    /// behind by a newer data schema, so the update is what restores game data.
+    /// behind by a newer data format, so the update is what restores game data.
     /// </summary>
     public string UpdateStatusDataEnded => CurrentLanguage switch
     {

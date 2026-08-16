@@ -124,8 +124,8 @@ Databases (SQLite)
 - Located: `TarkovHelper/Assets/tarkov_data.db` in an install; served from
   `data/v<N>/` in the repo, and `TarkovHelper/Assets/` there is the byte-identical
   endpoint that pre-channel builds still poll (a guard test enforces the match)
-- Schema changes stay additive within a data schema, feature-detected on read;
-  `DataSchemaDriftTests` fails a removal or retype
+- Schema changes stay additive within a data format, feature-detected on read;
+  `DataFormatDriftTests` fails a removal or retype
 
 **user_data.db** (User persistence):
 - Quest/hideout progress, item inventory, settings
@@ -157,14 +157,14 @@ EFT debug.log → LogSyncService (FileSystemWatcher)
 ### Database Updates
 ```
 DatabaseUpdateService (startup, then hourly)
-  → Read data/index.json (is this build's data schema still published?)
+  → Read data/index.json (is this build's data format still published?)
   → Read data/v<N>/manifest.json (version, sha256, size)
   → Download if the version differs, verify the hash, then swap
   → DatabaseUpdated event
   → Services reload data
   → UI refreshes
 ```
-Each build polls the endpoint for the data schema it was built to read, pinned by
+Each build polls the endpoint for the data format it was built to read, pinned by
 `<TarkovDataFormat>` in `TarkovHelper.csproj` (which also selects the bundled seed
 database). See `docs/database-update-mechanism.md` for the channel layout and
 `docs/decisions/feature-versioned-data-channel.spec.md` for the design.
