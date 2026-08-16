@@ -116,6 +116,46 @@ first 1.1 data publish, riding the quest-data phase's app release or shipping
 earlier in its own release if ready well before the data. This phase records
 no new decision there.
 
+### Appended after review (2026-08-16): how the notice is delivered
+
+Review before implementation changed how a build learns its channel has ended and
+how it says so. The goals and R1 to R5 stand as written; what follows records
+where the delivered behavior differs from the description above, and one risk that
+no longer exists. The technical shape is in the sibling spec.
+
+**Nothing is written to an ended endpoint any more.** The design above had a
+publish mark each superseded endpoint so builds polling it would notice. That
+meant editing documents this design otherwise calls immutable, and it left a step
+someone could forget. Instead the project publishes, at one stable address, which
+data version it currently serves; a build compares that against its own and draws
+its own conclusion. Ended endpoints are never touched again. R4's substance is
+unchanged, and it is now impossible to ship a bump that forgets to announce
+itself.
+
+**The notice is the app-update button, not a separate one.** A build can only be
+left behind by a version of the data that ships with a newer app, so whenever this
+state occurs the update button is already on screen. Adding a second notice beside
+it would have split one situation into two things to read and left the user's only
+action in the quieter of the two. The button now says why the update matters
+(current data, rather than just a version number) and changes from the green
+"available" tone to a warning one. It is still one click, still no dialog, and
+still nothing that interrupts play, which is what the decision above was
+protecting.
+
+**The one-time re-download risk below is retired.** It assumed a marker written
+into the old endpoint, which changed what pre-channel builds compare. With nothing
+written there, those builds see no change and download nothing. They also learn
+nothing, exactly as the Non-Goals already accept.
+
+**Data now arrives within an hour rather than within minutes.** Five-minute
+polling was 288 checks a day for something that changes a few times per game
+patch, and it sat below the cache window of the service that serves it, so the
+extra checks could not return anything new. The check when the app starts is
+unchanged and immediate, which is the one that matters for how people actually
+use the app. Deliberately deferred: a manual data check. The Settings update
+button still checks only for app updates, so restarting is the way to force a data
+check; this is left to the next settings pass.
+
 ## Risks
 
 - A user who keeps running a pre-channel build after its endpoint freezes
