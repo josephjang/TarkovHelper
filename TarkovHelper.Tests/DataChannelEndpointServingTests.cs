@@ -2,6 +2,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using TarkovHelper.Services;
 
 namespace TarkovHelper.Tests;
@@ -265,6 +266,80 @@ public sealed class DataChannelEndpointServingTests : IDisposable
 
         Assert.True(afterFailure.IsSuperseded);
         Assert.True(service.IsSuperseded);
+    }
+
+    #endregion
+
+    #region Data format stamp
+
+    /// <summary>
+    /// A real SQLite database carrying a given user_version, returned as the bytes an
+    /// endpoint would serve. Real rather than fabricated because the check under test
+    /// opens it with SQLite.
+    /// </summary>
+    private byte[] NewStampedDatabase(int userVersion)
+    {
+        var path = Path.Combine(_temp.NewFolder("stamped-db"), "built.db");
+        using (var connection = new SqliteConnection($"Data Source={path}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                $"CREATE TABLE Marker (Id INTEGER); PRAGMA user_version = {userVersion};";
+            command.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        return File.ReadAllBytes(path);
+    }
+
+    [Fact]
+    public async Task A_database_stamped_for_another_data_format_is_refused()
+    {
+        // The payload contradicting its own endpoint. The manifest can be internally
+        // consistent and still describe the wrong file, so the database has to be able
+        // to speak for itself.
+        var wrongFormat = NewStampedDatabase(Pin + 1);
+        using var server = new LocalFileServer(NewServedChannel("2.0.0", wrongFormat));
+        var assets = NewInstalledAssets("1.0.10", InstalledDb);
+        using var service = new DatabaseUpdateService(server.BaseUrl, assets);
+
+        var result = await service.CheckAndUpdateAsync();
+
+        Assert.False(result.Success);
+        Assert.Equal(InstalledDb, await File.ReadAllBytesAsync(Path.Combine(assets, DatabaseFile)));
+        Assert.Equal("1.0.10", service.LocalVersion);
+        Assert.False(File.Exists(Path.Combine(assets, DatabaseFile + ".tmp")));
+    }
+
+    [Fact]
+    public async Task A_database_stamped_for_this_data_format_installs()
+    {
+        var rightFormat = NewStampedDatabase(Pin);
+        using var server = new LocalFileServer(NewServedChannel("2.0.0", rightFormat));
+        var assets = NewInstalledAssets("1.0.10", InstalledDb);
+        using var service = new DatabaseUpdateService(server.BaseUrl, assets);
+
+        var result = await service.CheckAndUpdateAsync();
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(rightFormat, await File.ReadAllBytesAsync(Path.Combine(assets, DatabaseFile)));
+    }
+
+    [Fact]
+    public async Task An_unstamped_database_installs()
+    {
+        // user_version defaults to 0, which means "no claim" rather than "format 0".
+        // Databases published before stamping existed must keep working.
+        var unstamped = NewStampedDatabase(0);
+        using var server = new LocalFileServer(NewServedChannel("2.0.0", unstamped));
+        var assets = NewInstalledAssets("1.0.10", InstalledDb);
+        using var service = new DatabaseUpdateService(server.BaseUrl, assets);
+
+        var result = await service.CheckAndUpdateAsync();
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(unstamped, await File.ReadAllBytesAsync(Path.Combine(assets, DatabaseFile)));
     }
 
     #endregion

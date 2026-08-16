@@ -461,6 +461,36 @@ judgement made against the question above, and a green test run is therefore not
 evidence that forward compatibility holds. Recorded here so the guard is not read
 as more than it is.
 
+### Appended (2026-08-16): the database states its own data format
+
+Until now the data format was asserted only from outside the payload, by the
+directory path and by the manifest, and the database itself said nothing. SQLite
+reserves a 32-bit slot for exactly this (`PRAGMA user_version`, which SQLite never
+reads itself; `application_id` is the neighbouring slot for file-type magic), so a
+publish now stamps the live format into the database it publishes, and a client
+checks the stamp after the hash passes.
+
+What this catches that the manifest cannot: a manifest can be internally
+consistent and still describe the wrong file. A directory populated by hand, a
+copy from the wrong build, a half-finished format bump. The manifest is the
+publisher describing the payload; the stamp is the payload describing itself, and
+disagreement between them is now visible instead of silent.
+
+Rules, matching the integrity fields above: `user_version` 0 means "no claim" and
+is accepted, because databases published before stamping existed have to keep
+working and capability is judged by what a field says rather than by a version
+number. A non-zero value that disagrees with the build's pin is refused, and the
+working database and its bookmark are both left alone. Failing to read the stamp
+at all is not a rejection: the bytes already matched the manifest's hash, so the
+file is what the publisher meant to serve, and discarding a verified download over
+our own inability to read a pragma would be the worse outcome.
+
+The stamp is written to the source before it is hashed or copied, so both format-1
+endpoints receive one stamped file and stay byte-identical. A source SQLite cannot
+open now fails the publish rather than being stamped silently or skipped: a file
+that is not a database should never reach the channel, and nothing else in the
+tool was checking.
+
 ## Open Questions
 
 - Whether the 1.1 quest-data refresh publishes as format 1 (additive) or
