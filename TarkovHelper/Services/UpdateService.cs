@@ -17,7 +17,14 @@ namespace TarkovHelper.Services
         public static UpdateService Instance => _instance.Value;
 
         internal const string UpdateXmlUrl = "https://raw.githubusercontent.com/josephjang/TarkovHelper/main/update.xml";
-        private const int CheckIntervalMinutes = 3;
+        /// <summary>
+        /// One hour, matching the data channel's interval. Releases happen a few times a
+        /// year, so a three-minute timer was 480 checks a day against a feed that raw
+        /// GitHub caches for minutes at a time anyway; the check that finds anything is
+        /// almost always the one at startup, which still runs immediately. Settings also
+        /// keeps a manual check button for anyone who wants an answer sooner.
+        /// </summary>
+        private const int CheckIntervalMinutes = 60;
 
         private readonly HttpClient _httpClient;
         private readonly System.Timers.Timer _checkTimer;
