@@ -21,6 +21,14 @@
     <Copyright>Copyright (c) 2025 Zeliper, (c) 2026 Jeongho Jang</Copyright>
     <RepositoryUrl>https://github.com/josephjang/TarkovHelper</RepositoryUrl>
 
+    <!-- Data format this build reads: the contract (schema + value semantics) of
+         tarkov_data.db, bumped only by a publish that cannot stay additive. It is the
+         single source for BOTH the seed database copied into the output below AND the
+         update endpoint DatabaseUpdateService polls (via AssemblyMetadata), so the
+         bundled data and the polled channel can never disagree. Bumping it means
+         creating data/v<N>/ in the same PR. See feature-versioned-data-channel.spec.md. -->
+    <TarkovDataFormat>1</TarkovDataFormat>
+
     <!-- AutoUpdater.NET 다국어 리소스 제한 (en, ko, ja만 유지) -->
     <SatelliteResourceLanguages>en;ko;ja-jp</SatelliteResourceLanguages>
 
@@ -30,6 +38,12 @@
 
   <ItemGroup>
     <Content Include="1764579946.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Surfaces TarkovDataFormat to runtime code (DatabaseUpdateService reads it off
+         the assembly to build its endpoint URLs). -->
+    <AssemblyMetadata Include="TarkovDataFormat" Value="$(TarkovDataFormat)" />
   </ItemGroup>
 
   <ItemGroup>
@@ -48,11 +62,21 @@
     <None Update="Assets\Maps\*.svg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Update="Assets\tarkov_data.db">
+    <!-- Seed data, sourced from this build's data-format endpoint rather than from
+         Assets\, so the bundled database is by construction the one the build's own
+         channel serves. The Assets\ copies stay in the repo as the pre-channel endpoint
+         that fielded builds poll (they hardcode those URLs and cannot be repointed);
+         they are removed from the default None glob so exactly one item copies to
+         Assets\ in the output. Link keeps the output layout unchanged: runtime paths,
+         packaging, and e2e expectations all still find Assets\tarkov_data.db.
+         The version stamp must ship: without it a fresh install re-downloads the full
+         DB on its first check. -->
+    <None Remove="Assets\tarkov_data.db" />
+    <None Remove="Assets\db_version.txt" />
+    <None Include="..\data\v$(TarkovDataFormat)\tarkov_data.db" Link="Assets\tarkov_data.db">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <!-- Local DB version stamp; without it a fresh install re-downloads the full DB on first check -->
-    <None Update="Assets\db_version.txt">
+    <None Include="..\data\v$(TarkovDataFormat)\db_version.txt" Link="Assets\db_version.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="Assets\icons\*.png">

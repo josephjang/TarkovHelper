@@ -195,6 +195,7 @@ public partial class MainWindow : Window
         UpdateProfileUI(ProfileService.Instance.ActiveProfile);
         UpdateSyncStatusChip();
         UpdateVersionChipUI();
+        UpdateDataChannelChipUI();
     }
 
     private void CmbLanguage_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -283,10 +284,38 @@ public partial class MainWindow : Window
         // 업데이트 완료 이벤트 구독 (UI 새로고침용)
         dbUpdateService.DatabaseUpdated += OnDatabaseUpdated;
 
+        // Every completed check re-reports whether this build's data endpoint is
+        // frozen, which is the only signal that the silent data channel has stopped.
+        dbUpdateService.UpdateCheckCompleted += OnDatabaseCheckCompleted;
+
         // 백그라운드 업데이트 체크 시작 (5분마다)
         dbUpdateService.StartBackgroundUpdates();
 
         _log.Info("Database update service started");
+    }
+
+    /// <summary>
+    /// DB 업데이트 체크 완료 처리: 엔드포인트 동결 여부만 UI에 반영.
+    /// </summary>
+    private void OnDatabaseCheckCompleted(object? sender, UpdateCheckResult e)
+    {
+        Dispatcher.Invoke(UpdateDataChannelChipUI);
+    }
+
+    /// <summary>
+    /// Renders the data-channel freeze notice from
+    /// <see cref="DatabaseUpdateService.IsEndpointFrozen"/>: the single writer for the
+    /// chip. Hidden in the normal case, so the title bar gains nothing until the
+    /// channel actually ends.
+    /// </summary>
+    private void UpdateDataChannelChipUI()
+    {
+        var frozen = DatabaseUpdateService.Instance.IsEndpointFrozen;
+
+        TxtDataFrozen.Text = _loc.HeaderDataFrozen;
+        ChipDataFrozen.ToolTip = _loc.HeaderDataFrozenTooltip;
+        AutomationProperties.SetName(ChipDataFrozen, _loc.HeaderDataFrozenTooltip);
+        ChipDataFrozen.Visibility = frozen ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>
@@ -2812,6 +2841,10 @@ public partial class MainWindow : Window
         _profileTransitionCueTimer.Tick -= ProfileTransitionCueTimer_Tick;
         UpdateService.Instance.UpdateCheckStarted -= OnUpdateCheckStarted;
         UpdateService.Instance.UpdateCheckCompleted -= OnUpdateCheckCompleted;
+        // Same reason as the update timer above: the DB check runs on a 5-minute
+        // background timer and would otherwise dispatch onto a closed window.
+        DatabaseUpdateService.Instance.DatabaseUpdated -= OnDatabaseUpdated;
+        DatabaseUpdateService.Instance.UpdateCheckCompleted -= OnDatabaseCheckCompleted;
 
         // WPF does not guarantee Unloaded at shutdown, so the map page's view
         // state (map/zoom/pan) gets its close-time save here as a backstop.

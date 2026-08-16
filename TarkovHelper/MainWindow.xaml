@@ -302,6 +302,28 @@
                                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                             </StackPanel>
                         </Button>
+
+                        <!-- Data-channel freeze notice: passive, and visible only once this
+                             build's data endpoint says it has stopped receiving updates.
+                             Deliberately not a dialog: a frozen build still works fully, so
+                             this states the fact and points at the app update, without
+                             nagging a user who has a reason not to update yet. -->
+                        <Border x:Name="ChipDataFrozen" Background="{StaticResource BackgroundLightBrush}"
+                                CornerRadius="4" Padding="8,4" Margin="8,0,0,0"
+                                VerticalAlignment="Center"
+                                Visibility="Collapsed">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE7BA;"
+                                           FontFamily="{StaticResource IconFont}"
+                                           FontSize="{DynamicResource FontSizeTiny}"
+                                           Foreground="{StaticResource WarningBrush}"
+                                           VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                <TextBlock x:Name="TxtDataFrozen" Text="Data updates ended"
+                                           FontSize="{DynamicResource FontSizeTiny}"
+                                           Foreground="{StaticResource WarningBrush}"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
 
                     <!-- Right Side Controls -->
