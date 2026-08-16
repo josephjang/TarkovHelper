@@ -1,5 +1,6 @@
 using System.IO;
 using System.Security.Cryptography;
+using System.Text.Json;
 using TarkovHelper.Services;
 
 namespace TarkovHelper.Tests;
@@ -122,9 +123,9 @@ public sealed class DataChannelMirrorTests
         var manifest = DatabaseUpdateService.ParseManifest(File.ReadAllText(manifestPath));
         Assert.True(manifest != null, $"data/v{format}/manifest.json does not satisfy the app's own reader");
 
-        Assert.Equal(format, manifest!.DataSchema);
-        Assert.True(manifest.Schema <= DatabaseUpdateService.MAX_SUPPORTED_MANIFEST_SCHEMA,
-            $"The committed manifest declares schema {manifest.Schema}, which this build cannot read.");
+        Assert.Equal(format, manifest!.DataFormat);
+        Assert.True(manifest.SchemaVersion <= DatabaseUpdateService.MAX_SUPPORTED_SCHEMA_VERSION,
+            $"The committed manifest declares schema {manifest.SchemaVersion}, which this build cannot read.");
 
         var databasePath = Path.Combine(channelDir, manifest.Database.File);
         Assert.True(File.Exists(databasePath), $"The manifest names {manifest.Database.File}, which is not there");
@@ -141,6 +142,40 @@ public sealed class DataChannelMirrorTests
     }
 
     [Fact]
+    public void The_channel_documents_use_the_agreed_field_names()
+    {
+        // The field names ARE the contract: once a build ships reading them, renaming one
+        // breaks every install that already trusts it, and the app's own reader is
+        // case-insensitive and ignores unknown fields, so a rename would sail through
+        // every other test here while silently disabling whatever it renamed.
+        //
+        // The vocabulary is deliberate. schemaVersion is the shape of this document
+        // (Docker's sense); dataFormat is the contract of the database it describes,
+        // which covers field meaning and permitted values, not just structure; version
+        // is which publish this is. See feature-versioned-data-channel.spec.md.
+        var root = TestRepo.Root();
+
+        AssertTopLevelFields(
+            Path.Combine(root, "data", $"v{DatabaseUpdateService.DataFormatVersion}", "manifest.json"),
+            "schemaVersion", "dataFormat", "version", "database");
+        AssertTopLevelFields(Path.Combine(root, "data", "index.json"), "schemaVersion", "currentDataFormat");
+
+        using var manifest = JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(root, "data", $"v{DatabaseUpdateService.DataFormatVersion}", "manifest.json")));
+        Assert.Equal(
+            new[] { "file", "sha256", "size" },
+            manifest.RootElement.GetProperty("database").EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal));
+    }
+
+    private static void AssertTopLevelFields(string path, params string[] expected)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal(
+            expected.OrderBy(n => n, StringComparer.Ordinal),
+            document.RootElement.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void The_channel_index_covers_the_schema_this_build_polls()
     {
         // A build must never ship pointing at a schema the index does not acknowledge:
@@ -151,10 +186,10 @@ public sealed class DataChannelMirrorTests
         var index = DatabaseUpdateService.ParseIndex(File.ReadAllText(indexPath));
         Assert.True(index != null, "data/index.json does not satisfy the app's own reader");
 
-        Assert.True(index!.CurrentDataSchema >= DatabaseUpdateService.DataFormatVersion,
-            $"index.json publishes schema {index.CurrentDataSchema}, below the "
+        Assert.True(index!.CurrentDataFormat >= DatabaseUpdateService.DataFormatVersion,
+            $"index.json publishes schema {index.CurrentDataFormat}, below the "
             + $"{DatabaseUpdateService.DataFormatVersion} this build reads.");
-        Assert.True(Directory.Exists(Path.Combine(TestRepo.Root(), "data", $"v{index.CurrentDataSchema}")),
-            $"index.json points at schema {index.CurrentDataSchema}, which has no directory.");
+        Assert.True(Directory.Exists(Path.Combine(TestRepo.Root(), "data", $"v{index.CurrentDataFormat}")),
+            $"index.json points at schema {index.CurrentDataFormat}, which has no directory.");
     }
 }

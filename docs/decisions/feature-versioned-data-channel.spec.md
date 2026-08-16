@@ -405,6 +405,62 @@ reader cannot observe, and not row contents, which change every publish. When a
 break is genuinely intended it is a data schema bump, not a relaxed test, and the
 new schema gets its own baseline file.
 
+### Appended (2026-08-16): vocabulary, fixed
+
+The earlier sections used "data format" and "data schema" for one concept and
+"schema" for a second, which had already produced
+`dataSchema = comparison.LiveDataFormat` in the publish tool: one integer, two
+names, in a single assignment. The vocabulary below is normative from here on,
+and the wire field names are pinned by a test so they cannot drift again.
+
+**data format** (`dataFormat`, integer; `<TarkovDataFormat>`; `data/v<N>/`) is the
+contract a build must satisfy to read `tarkov_data.db` correctly. It covers the
+SQLite schema, **the meaning of each field, and the range of values a field may
+take**. It increments only when forward compatibility breaks. The test to apply
+is a single question: *would the previously released build, reading this data
+with its existing code, show the user something wrong?* If yes, it is a bump. If
+an older build simply ignores the change (new tables, new columns, new rows, new
+values inside a field's documented range), it is not.
+
+**schema version** (`schemaVersion`, integer) is the shape of the JSON document
+carrying that information, and nothing else.
+
+**version** (`version`, opaque string) is which publish the data is, compared for
+equality only.
+
+Why "format" and not "schema" for the first one, given the sibling PRD and this
+spec originally said either: schema versioning as practised (Avro, JSON Schema,
+Confluent Schema Registry) compares **structure**, and is blind to a field whose
+meaning or permitted value range changed. That blindness is exactly what this
+version must not have. The name follows [Apache Iceberg's
+`format-version`](https://iceberg.apache.org/spec/), defined as incrementing when
+older readers would no longer read newer tables correctly, with readers required
+to refuse versions above what they support: the same concept, the same shape, the
+same name. Delta Lake calls its equivalent a protocol version
+(`minReaderVersion`/`minWriterVersion`) and has since moved to named table
+features because one integer proved too coarse across many engines; that is the
+recorded escape hatch if a single integer ever stops being enough here, though
+with one reader it is not close. `schemaVersion` for a document's own shape
+follows Docker's manifest field of that name and TUF's `spec_version`.
+CloudEvents' `dataschema` is deliberately not followed: that attribute is
+informational by specification and is not a compatibility gate.
+
+"Forward compatibility" is [Confluent's
+term](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html)
+and is used here in their sense: consumers on the old contract can read data
+written under the new one. That is our situation exactly, since the readers we
+cannot fix are the builds already installed. The additive-only rule stated
+earlier in this spec is forward compatibility; those are the same rule under two
+names, and this is the name to use.
+
+**What the drift guard does and does not cover.** `DataFormatDriftTests` compares
+tables and declared column types, so it catches the structural half mechanically.
+It cannot catch a field whose meaning changed or whose permitted range narrowed,
+because nothing in the file says what a value means. Those remain a human
+judgement made against the question above, and a green test run is therefore not
+evidence that forward compatibility holds. Recorded here so the guard is not read
+as more than it is.
+
 ## Open Questions
 
 - Whether the 1.1 quest-data refresh publishes as format 1 (additive) or

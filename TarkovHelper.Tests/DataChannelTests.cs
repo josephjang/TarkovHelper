@@ -100,8 +100,8 @@ public sealed class DataChannelTests
 
     private const string ValidManifest = """
         {
-          "schema": 1,
-          "dataSchema": 1,
+          "schemaVersion": 1,
+          "dataFormat": 1,
           "version": "1.0.10",
           "database": { "file": "tarkov_data.db", "sha256": "abc123", "size": 42 }
         }
@@ -113,8 +113,8 @@ public sealed class DataChannelTests
         var manifest = DatabaseUpdateService.ParseManifest(ValidManifest);
 
         Assert.NotNull(manifest);
-        Assert.Equal(1, manifest.Schema);
-        Assert.Equal(1, manifest.DataSchema);
+        Assert.Equal(1, manifest.SchemaVersion);
+        Assert.Equal(1, manifest.DataFormat);
         Assert.Equal("1.0.10", manifest.Version);
         Assert.Equal("tarkov_data.db", manifest.Database.File);
         Assert.Equal("abc123", manifest.Database.Sha256);
@@ -129,7 +129,7 @@ public sealed class DataChannelTests
         // never be taught the new vocabulary.
         var manifest = DatabaseUpdateService.ParseManifest("""
             {
-              "schema": 1, "dataSchema": 1, "version": "1.0.10",
+              "schemaVersion": 1, "dataFormat": 1, "version": "1.0.10",
               "database": { "file": "tarkov_data.db", "signature": "from-2027" },
               "publishedBy": "someone", "notes": ["a", "b"]
             }
@@ -145,7 +145,7 @@ public sealed class DataChannelTests
         // Absent hash means "install without verifying", not "reject". Capability lives
         // in the presence of a field, not in a version number.
         var manifest = DatabaseUpdateService.ParseManifest("""
-            { "schema": 1, "dataSchema": 1, "version": "1.0.10",
+            { "schemaVersion": 1, "dataFormat": 1, "version": "1.0.10",
               "database": { "file": "tarkov_data.db" } }
             """);
 
@@ -158,7 +158,7 @@ public sealed class DataChannelTests
     public void The_version_token_is_trimmed()
     {
         var manifest = DatabaseUpdateService.ParseManifest("""
-            { "schema": 1, "dataSchema": 1, "version": "  1.0.10\n",
+            { "schemaVersion": 1, "dataFormat": 1, "version": "  1.0.10\n",
               "database": { "file": "tarkov_data.db" } }
             """);
 
@@ -177,12 +177,12 @@ public sealed class DataChannelTests
     [InlineData("[]")]
     // Required fields missing or unusable. A null version would compare unequal to every
     // local version and re-download the database on every check, forever.
-    [InlineData("""{ "schema": 1, "dataSchema": 1, "database": { "file": "tarkov_data.db" } }""")]
-    [InlineData("""{ "schema": 1, "dataSchema": 1, "version": "  ", "database": { "file": "x.db" } }""")]
-    [InlineData("""{ "schema": 1, "dataSchema": 1, "version": "1.0.10" }""")]
-    [InlineData("""{ "schema": 1, "dataSchema": 1, "version": "1.0.10", "database": {} }""")]
-    [InlineData("""{ "dataSchema": 1, "version": "1.0.10", "database": { "file": "x.db" } }""")]
-    [InlineData("""{ "schema": 1, "version": "1.0.10", "database": { "file": "x.db" } }""")]
+    [InlineData("""{ "schemaVersion": 1, "dataFormat": 1, "database": { "file": "tarkov_data.db" } }""")]
+    [InlineData("""{ "schemaVersion": 1, "dataFormat": 1, "version": "  ", "database": { "file": "x.db" } }""")]
+    [InlineData("""{ "schemaVersion": 1, "dataFormat": 1, "version": "1.0.10" }""")]
+    [InlineData("""{ "schemaVersion": 1, "dataFormat": 1, "version": "1.0.10", "database": {} }""")]
+    [InlineData("""{ "dataFormat": 1, "version": "1.0.10", "database": { "file": "x.db" } }""")]
+    [InlineData("""{ "schemaVersion": 1, "version": "1.0.10", "database": { "file": "x.db" } }""")]
     public void An_unusable_manifest_is_a_failed_check(string? content)
     {
         // Null, not a fabricated document: an unreadable manifest must behave like a
@@ -197,20 +197,20 @@ public sealed class DataChannelTests
     [Fact]
     public void A_valid_index_parses_into_its_fields()
     {
-        var index = DatabaseUpdateService.ParseIndex("""{ "schema": 1, "currentDataSchema": 3 }""");
+        var index = DatabaseUpdateService.ParseIndex("""{ "schemaVersion": 1, "currentDataFormat": 3 }""");
 
         Assert.NotNull(index);
-        Assert.Equal(1, index.Schema);
-        Assert.Equal(3, index.CurrentDataSchema);
+        Assert.Equal(1, index.SchemaVersion);
+        Assert.Equal(3, index.CurrentDataFormat);
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("not json")]
-    [InlineData("""{ "schema": 1 }""")]
-    [InlineData("""{ "currentDataSchema": 2 }""")]
-    [InlineData("""{ "schema": 1, "currentDataSchema": 0 }""")]
+    [InlineData("""{ "schemaVersion": 1 }""")]
+    [InlineData("""{ "currentDataFormat": 2 }""")]
+    [InlineData("""{ "schemaVersion": 1, "currentDataFormat": 0 }""")]
     public void An_unusable_index_yields_nothing(string? content)
     {
         // The caller keeps its previous knowledge on null. Returning a default here

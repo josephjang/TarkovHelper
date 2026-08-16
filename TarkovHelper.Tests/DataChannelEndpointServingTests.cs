@@ -42,11 +42,11 @@ public sealed class DataChannelEndpointServingTests : IDisposable
     private string NewServedChannel(
         string version,
         byte[] database,
-        int? currentDataSchema = null,
+        int? currentDataFormat = null,
         string? sha256 = null,
         long? size = null,
-        int manifestSchema = 1,
-        int? dataSchema = null)
+        int manifestSchemaVersion = 1,
+        int? dataFormat = null)
     {
         var root = _temp.NewFolder("served-channel");
         var endpoint = Path.Combine(root, $"v{Pin}");
@@ -55,8 +55,8 @@ public sealed class DataChannelEndpointServingTests : IDisposable
         File.WriteAllBytes(Path.Combine(endpoint, DatabaseFile), database);
         File.WriteAllText(Path.Combine(endpoint, "manifest.json"), JsonSerializer.Serialize(new
         {
-            schema = manifestSchema,
-            dataSchema = dataSchema ?? Pin,
+            schemaVersion = manifestSchemaVersion,
+            dataFormat = dataFormat ?? Pin,
             version,
             database = new
             {
@@ -67,8 +67,8 @@ public sealed class DataChannelEndpointServingTests : IDisposable
         }));
         File.WriteAllText(Path.Combine(root, "index.json"), JsonSerializer.Serialize(new
         {
-            schema = 1,
-            currentDataSchema = currentDataSchema ?? Pin,
+            schemaVersion = 1,
+            currentDataFormat = currentDataFormat ?? Pin,
         }));
 
         return root;
@@ -185,9 +185,9 @@ public sealed class DataChannelEndpointServingTests : IDisposable
         Directory.CreateDirectory(endpoint);
         await File.WriteAllBytesAsync(Path.Combine(endpoint, DatabaseFile), PublishedDb);
         await File.WriteAllTextAsync(Path.Combine(endpoint, "manifest.json"),
-            $$"""{ "schema": 1, "dataSchema": {{Pin}}, "version": "2.0.0", "database": { "file": "{{DatabaseFile}}" } }""");
+            $$"""{ "schemaVersion": 1, "dataFormat": {{Pin}}, "version": "2.0.0", "database": { "file": "{{DatabaseFile}}" } }""");
         await File.WriteAllTextAsync(Path.Combine(root, "index.json"),
-            $$"""{ "schema": 1, "currentDataSchema": {{Pin}} }""");
+            $$"""{ "schemaVersion": 1, "currentDataFormat": {{Pin}} }""");
 
         using var server = new LocalFileServer(root);
         var assets = NewInstalledAssets("1.0.10", InstalledDb);
@@ -207,7 +207,7 @@ public sealed class DataChannelEndpointServingTests : IDisposable
     public async Task The_index_tells_a_build_it_has_been_left_behind()
     {
         using var server = new LocalFileServer(
-            NewServedChannel("1.0.10", PublishedDb, currentDataSchema: Pin + 1));
+            NewServedChannel("1.0.10", PublishedDb, currentDataFormat: Pin + 1));
         var assets = NewInstalledAssets("1.0.10", InstalledDb);
         using var service = new DatabaseUpdateService(server.BaseUrl, assets);
 
@@ -226,7 +226,7 @@ public sealed class DataChannelEndpointServingTests : IDisposable
         // Being left behind ends future publishes; it does not strip an install of the
         // last compatible version it never got.
         using var server = new LocalFileServer(
-            NewServedChannel("2.0.0", PublishedDb, currentDataSchema: Pin + 1));
+            NewServedChannel("2.0.0", PublishedDb, currentDataFormat: Pin + 1));
         var assets = NewInstalledAssets("1.0.10", InstalledDb);
         using var service = new DatabaseUpdateService(server.BaseUrl, assets);
 
@@ -241,7 +241,7 @@ public sealed class DataChannelEndpointServingTests : IDisposable
     [Fact]
     public async Task A_current_build_is_not_superseded_by_its_own_schema()
     {
-        using var server = new LocalFileServer(NewServedChannel("1.0.10", PublishedDb, currentDataSchema: Pin));
+        using var server = new LocalFileServer(NewServedChannel("1.0.10", PublishedDb, currentDataFormat: Pin));
         var assets = NewInstalledAssets("1.0.10", InstalledDb);
         using var service = new DatabaseUpdateService(server.BaseUrl, assets);
 
@@ -253,7 +253,7 @@ public sealed class DataChannelEndpointServingTests : IDisposable
     {
         // A build that stopped receiving data has more failing checks by nature, and a
         // transient failure must not flicker the notice off and back on.
-        var root = NewServedChannel("1.0.10", PublishedDb, currentDataSchema: Pin + 1);
+        var root = NewServedChannel("1.0.10", PublishedDb, currentDataFormat: Pin + 1);
         var assets = NewInstalledAssets("1.0.10", InstalledDb);
 
         using var server = new LocalFileServer(root);
@@ -277,7 +277,7 @@ public sealed class DataChannelEndpointServingTests : IDisposable
         // Someone published a shape this build was never taught to read at its own URL.
         // Refuse and change nothing; this is an operator error, not a user's problem.
         using var server = new LocalFileServer(
-            NewServedChannel("2.0.0", PublishedDb, manifestSchema: DatabaseUpdateService.MAX_SUPPORTED_MANIFEST_SCHEMA + 1));
+            NewServedChannel("2.0.0", PublishedDb, manifestSchemaVersion: DatabaseUpdateService.MAX_SUPPORTED_SCHEMA_VERSION + 1));
         var assets = NewInstalledAssets("1.0.10", InstalledDb);
         using var service = new DatabaseUpdateService(server.BaseUrl, assets);
 
@@ -295,7 +295,7 @@ public sealed class DataChannelEndpointServingTests : IDisposable
         // The directory is ours but the payload it describes is not: a mis-published
         // endpoint, and installing it would hand this build a database it cannot read.
         using var server = new LocalFileServer(
-            NewServedChannel("2.0.0", PublishedDb, dataSchema: Pin + 1));
+            NewServedChannel("2.0.0", PublishedDb, dataFormat: Pin + 1));
         var assets = NewInstalledAssets("1.0.10", InstalledDb);
         using var service = new DatabaseUpdateService(server.BaseUrl, assets);
 

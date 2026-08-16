@@ -165,7 +165,7 @@ public sealed class DataPublishChannelTests : IDisposable
         Assert.True(published.Success, published.ErrorMessage);
 
         var manifest = ReadManifest(ChannelDir(repo, 1));
-        Assert.Equal(1, manifest.DataSchema);
+        Assert.Equal(1, manifest.DataFormat);
         Assert.Equal("1.0.11", manifest.Version);
         Assert.Equal(DatabaseFile, manifest.Database.File);
         Assert.Equal(Sha256Hex(NewDb), manifest.Database.Sha256);
@@ -187,7 +187,7 @@ public sealed class DataPublishChannelTests : IDisposable
             await File.ReadAllTextAsync(Path.Combine(repo, "data", "index.json")));
 
         Assert.True(index != null, "data/index.json is not readable by the app's index reader");
-        Assert.Equal(1, index!.CurrentDataSchema);
+        Assert.Equal(1, index!.CurrentDataFormat);
     }
 
     [Fact]
@@ -296,7 +296,7 @@ public sealed class DataPublishChannelTests : IDisposable
         Assert.True(published.Success, published.ErrorMessage);
         Assert.Equal(NewDb, await File.ReadAllBytesAsync(Path.Combine(ChannelDir(repo, 2), DatabaseFile)));
         Assert.Equal("2.0.1", await File.ReadAllTextAsync(Path.Combine(ChannelDir(repo, 2), VersionFile)));
-        Assert.Equal(2, ReadManifest(ChannelDir(repo, 2)).DataSchema);
+        Assert.Equal(2, ReadManifest(ChannelDir(repo, 2)).DataFormat);
 
         // Superseded endpoints are history: byte for byte, nothing about v1 moves. This
         // is what lets a left-behind build keep serving its last compatible data, and
@@ -310,7 +310,7 @@ public sealed class DataPublishChannelTests : IDisposable
         // outside data/v2.
         var index = DatabaseUpdateService.ParseIndex(
             await File.ReadAllTextAsync(Path.Combine(repo, "data", "index.json")));
-        Assert.Equal(2, index!.CurrentDataSchema);
+        Assert.Equal(2, index!.CurrentDataFormat);
     }
 
     #endregion
