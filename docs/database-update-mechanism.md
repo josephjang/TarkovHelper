@@ -9,7 +9,7 @@ TarkovHelper의 데이터베이스 업데이트 메커니즘에 대한 상세 �
 TarkovHelper는 두 가지 자동 업데이트 채널을 가집니다:
 
 1. **앱 업데이트** — AutoUpdater.NET이 GitHub Release의 `TarkovHelper.zip`으로 앱 전체를 교체
-   (`Services/UpdateService.cs`, 3분 주기 체크)
+   (`Services/UpdateService.cs`, 시작 시 1회 + 1시간 주기 체크)
 2. **DB 업데이트** — `Services/DatabaseUpdateService.cs`가 시작 시 1회 + 이후 1시간 주기로
    GitHub raw의 매니페스트를 확인하고, 버전이 다르면 `tarkov_data.db`만 다운로드해 교체
    (앱 업데이트 없이 DB만 갱신됨). 폴링 대상은 그 빌드의 **데이터 채널**
@@ -147,7 +147,7 @@ public async Task<RefreshResult> RefreshDataFromCacheAsync(
 ```csharp
 internal const string UpdateXmlUrl = "https://raw.githubusercontent.com/josephjang/TarkovHelper/main/update.xml";
 
-// 3분 주기 + 수동 버튼으로 update.xml 체크; 새 버전 발견 시 UI에 표시.
+// 시작 시 1회 + 1시간 주기 + 수동 버튼으로 update.xml 체크; 새 버전 발견 시 UI에 표시.
 // 사용자가 업데이트 버튼을 누르면 AutoUpdater.Start(UpdateXmlUrl)로 교체 수행.
 ```
 
