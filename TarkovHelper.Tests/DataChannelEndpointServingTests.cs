@@ -44,7 +44,7 @@ public sealed class DataChannelEndpointServingTests : IDisposable
         string version,
         byte[] database,
         int? currentDataFormatVersion = null,
-        string? sha256 = null,
+        string? digest = null,
         long? size = null,
         int manifestSchemaVersion = 1,
         int? dataFormatVersion = null)
@@ -62,7 +62,7 @@ public sealed class DataChannelEndpointServingTests : IDisposable
             database = new
             {
                 file = DatabaseFile,
-                sha256 = sha256 ?? Sha256Hex(database),
+                digest = digest ?? $"sha256:{Sha256Hex(database)}",
                 size = size ?? database.Length,
             },
         }));
@@ -147,7 +147,7 @@ public sealed class DataChannelEndpointServingTests : IDisposable
         // The CDN skew case: each file is cached separately, so a fresh manifest can be
         // served beside a stale database. The install must keep what it has.
         using var server = new LocalFileServer(
-            NewServedChannel("2.0.0", PublishedDb, sha256: Sha256Hex(Encoding.UTF8.GetBytes("different"))));
+            NewServedChannel("2.0.0", PublishedDb, digest: $"sha256:{Sha256Hex(Encoding.UTF8.GetBytes("different"))}"));
         var assets = NewInstalledAssets("1.0.10", InstalledDb);
         using var service = new DatabaseUpdateService(server.BaseUrl, assets);
 
@@ -161,6 +161,42 @@ public sealed class DataChannelEndpointServingTests : IDisposable
         Assert.Equal("1.0.10", service.LocalVersion);
         Assert.Equal("1.0.10", await File.ReadAllTextAsync(Path.Combine(assets, VersionFile)));
         Assert.False(File.Exists(Path.Combine(assets, DatabaseFile + ".tmp")));
+    }
+
+    [Theory]
+    [InlineData("sha512:0badc0de")]   // an algorithm this build does not implement
+    [InlineData("blake3:0badc0de")]
+    [InlineData("0badc0de")]          // no algorithm named at all
+    [InlineData("sha256:")]           // named but empty
+    public async Task A_digest_this_build_cannot_check_installs_without_verifying(string digest)
+    {
+        // The reason the algorithm prefix exists: a build that only knows sha256 can
+        // tell "I cannot check this" apart from "there is nothing to check", and says so
+        // in the log instead of silently skipping. It still installs, because refusing
+        // would turn a future hash upgrade into a breaking change for every build already
+        // in the field, which is the outcome this channel exists to avoid.
+        using var server = new LocalFileServer(NewServedChannel("2.0.0", PublishedDb, digest: digest));
+        var assets = NewInstalledAssets("1.0.10", InstalledDb);
+        using var service = new DatabaseUpdateService(server.BaseUrl, assets);
+
+        var result = await service.CheckAndUpdateAsync();
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(PublishedDb, await File.ReadAllBytesAsync(Path.Combine(assets, DatabaseFile)));
+    }
+
+    [Fact]
+    public async Task A_sha256_digest_is_matched_case_insensitively()
+    {
+        // Hex case is not part of the contract, and a publisher writing uppercase must
+        // not silently invalidate every download.
+        var upper = $"sha256:{Sha256Hex(PublishedDb).ToUpperInvariant()}";
+        using var server = new LocalFileServer(NewServedChannel("2.0.0", PublishedDb, digest: upper));
+        var assets = NewInstalledAssets("1.0.10", InstalledDb);
+        using var service = new DatabaseUpdateService(server.BaseUrl, assets);
+
+        Assert.True((await service.CheckAndUpdateAsync()).Success);
+        Assert.Equal(PublishedDb, await File.ReadAllBytesAsync(Path.Combine(assets, DatabaseFile)));
     }
 
     [Fact]

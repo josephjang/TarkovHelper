@@ -132,11 +132,14 @@ public sealed class DataChannelMirrorTests
         Assert.True(File.Exists(databasePath), $"The manifest names {manifest.Database.File}, which is not there");
 
         // Integrity fields are optional to the reader, but the repository must carry
-        // them: shipping without a hash silently turns off download verification.
-        Assert.False(string.IsNullOrWhiteSpace(manifest.Database.Sha256),
-            "The committed manifest has no sha256, which would disable download verification for every client.");
+        // them: shipping without a digest silently turns off download verification, and
+        // shipping one the reader cannot check does the same thing more quietly still.
+        Assert.False(string.IsNullOrWhiteSpace(manifest.Database.Digest),
+            "The committed manifest has no digest, which would disable download verification for every client.");
         Assert.Equal(new FileInfo(databasePath).Length, manifest.Database.Size);
-        Assert.Equal(Sha256Of(databasePath), manifest.Database.Sha256!.ToUpperInvariant());
+        Assert.Equal(
+            $"sha256:{Sha256Of(databasePath).ToLowerInvariant()}",
+            manifest.Database.Digest!.ToLowerInvariant());
 
         // The bookmark seeded into installs has to name the same version the manifest does.
         Assert.Equal(File.ReadAllText(Path.Combine(channelDir, VersionFile)).Trim(), manifest.Version);
@@ -189,7 +192,7 @@ public sealed class DataChannelMirrorTests
         using var manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(root, "data", $"v{DatabaseUpdateService.DataFormatVersion}", "manifest.json")));
         Assert.Equal(
-            new[] { "file", "sha256", "size" },
+            new[] { "digest", "file", "size" },
             manifest.RootElement.GetProperty("database").EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal));
     }
 

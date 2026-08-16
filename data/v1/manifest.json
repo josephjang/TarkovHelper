@@ -4,7 +4,7 @@
   "version": "1.0.10",
   "database": {
     "file": "tarkov_data.db",
-    "sha256": "1fdb928c9e1c7912a491244bfd1b4dc5607aaa7c6dd6b4ec0eda5986e91313c7",
+    "digest": "sha256:1fdb928c9e1c7912a491244bfd1b4dc5607aaa7c6dd6b4ec0eda5986e91313c7",
     "size": 6889472
   }
 }

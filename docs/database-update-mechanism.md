@@ -160,7 +160,7 @@ internal static readonly string INDEX_URL    = ".../refs/heads/main/data/index.j
 internal static readonly string MANIFEST_URL = ".../refs/heads/main/data/v1/manifest.json";
 
 // 시작 시 1회 + 1시간 주기로 index.json과 manifest.json을 읽고, version 토큰을 로컬과 비교;
-// 다르면 tarkov_data.db를 .tmp로 내려받아 sha256/size 검증 후 교체하고 DatabaseUpdated 이벤트 발생
+// 다르면 tarkov_data.db를 .tmp로 내려받아 digest/size 검증 후 교체하고 DatabaseUpdated 이벤트 발생
 ```
 
 > **참고 (앱 업데이트와 DB의 상호작용):** 앱 self-update zip에는 릴리즈 시점의
@@ -277,17 +277,22 @@ Confluent)은 **구조만** 비교하므로 필드의 의미나 허용 범위가
   "schemaVersion": 1,
   "dataFormatVersion": 1,
   "version": "1.0.10",
-  "database": { "file": "tarkov_data.db", "sha256": "...", "size": 6889472 }
+  "database": { "file": "tarkov_data.db", "digest": "sha256:...", "size": 6889472 }
 }
 ```
 
 - `version`은 여전히 **불투명한 동등 비교 토큰**입니다. 순서 비교를 하지 않으므로 이전 내용을
   새 토큰으로 다시 발행하면 그대로 롤백이 됩니다.
-- `sha256`/`size`는 다운로드 후 검증합니다. 불일치하면 임시 파일을 버리고 기존 DB를 유지하며
+- `digest`/`size`는 다운로드 후 검증합니다. 불일치하면 임시 파일을 버리고 기존 DB를 유지하며
   북마크도 올리지 않습니다. raw GitHub이 파일별로 캐시하기 때문에 새 매니페스트와 낡은 DB가
   짝지어질 수 있는데, **버전과 해시가 같은 문서에 있어야** 그 짝이 원자적으로 검증됩니다.
+- `digest`는 OCI/Sigstore처럼 **알고리즘을 앞에 붙입니다**(`sha256:<hex>`). 이 접두사가 있어야
+  sha256만 아는 빌드가 "검증할 수 없는 digest"와 "digest가 아예 없음"을 구별할 수 있습니다.
+  모르는 알고리즘이면 경고를 남기고 검증 없이 설치합니다. 거부하면 나중에 해시 알고리즘을
+  바꾸는 일이 이미 배포된 모든 빌드에게 breaking change가 되는데, 그게 이 채널이 피하려는
+  결과입니다.
 - 두 필드는 리더 입장에서 **선택적**입니다. 없으면 검증 없이 설치합니다. 능력은 버전 숫자가
-  아니라 필드의 존재로 판단한다는 원칙이고, 덕분에 `schema`는 거의 오를 일이 없습니다.
+  아니라 필드의 존재로 판단한다는 원칙이고, 덕분에 `schemaVersion`은 거의 오를 일이 없습니다.
 - `database.file`도 상수가 아니라 데이터입니다. 나중에 페이로드 파일명에 버전을 넣어 URL을
   불변으로 만드는 선택지를 막지 않습니다.
 - 모르는 필드는 무시합니다. 이미 배포된 빌드는 새 어휘를 배울 수 없으므로, 엔드포인트가 새
