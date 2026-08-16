@@ -195,7 +195,6 @@ public partial class MainWindow : Window
         UpdateProfileUI(ProfileService.Instance.ActiveProfile);
         UpdateSyncStatusChip();
         UpdateVersionChipUI();
-        UpdateDataChannelChipUI();
     }
 
     private void CmbLanguage_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -295,27 +294,16 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// DB 업데이트 체크 완료 처리: 엔드포인트 동결 여부만 UI에 반영.
+    /// DB 업데이트 체크 완료 처리. 데이터 업데이트 자체는 조용히 두고, 이 빌드가 뒤에
+    /// 남았는지만 UI에 반영한다 (그때 사용자가 할 수 있는 일은 앱 업데이트뿐이므로).
     /// </summary>
     private void OnDatabaseCheckCompleted(object? sender, UpdateCheckResult e)
     {
-        Dispatcher.Invoke(UpdateDataChannelChipUI);
-    }
-
-    /// <summary>
-    /// Renders the data-channel freeze notice from
-    /// <see cref="DatabaseUpdateService.IsEndpointFrozen"/>: the single writer for the
-    /// chip. Hidden in the normal case, so the title bar gains nothing until the
-    /// channel actually ends.
-    /// </summary>
-    private void UpdateDataChannelChipUI()
-    {
-        var frozen = DatabaseUpdateService.Instance.IsEndpointFrozen;
-
-        TxtDataFrozen.Text = _loc.HeaderDataFrozen;
-        ChipDataFrozen.ToolTip = _loc.HeaderDataFrozenTooltip;
-        AutomationProperties.SetName(ChipDataFrozen, _loc.HeaderDataFrozenTooltip);
-        ChipDataFrozen.Visibility = frozen ? Visibility.Visible : Visibility.Collapsed;
+        Dispatcher.Invoke(() =>
+        {
+            UpdateVersionChipUI();
+            UpdateSettingsUpdateSectionUI();
+        });
     }
 
     /// <summary>
@@ -2315,7 +2303,10 @@ public partial class MainWindow : Window
     // Semantic status brushes resolved once from the App.xaml palette. Reusing the
     // shared brush instances makes repeated chip renders allocation-free: assigning
     // the same instance to Fill/Foreground is a no-op for WPF.
-    private Brush? _successBrush, _warningBrush, _errorBrush, _neutralBrush, _accentBrush, _textSecondaryBrush;
+    private Brush? _successBrush, _warningBrush, _errorBrush, _neutralBrush, _accentBrush,
+        _textSecondaryBrush, _backgroundDarkBrush;
+    /// <summary>Readable text color on top of a filled warning surface (white is not).</summary>
+    private Brush BackgroundDarkStatusBrush => _backgroundDarkBrush ??= (Brush)FindResource("BackgroundDarkBrush");
     private Brush SuccessStatusBrush => _successBrush ??= (Brush)FindResource("SuccessBrush");
     private Brush WarningStatusBrush => _warningBrush ??= (Brush)FindResource("WarningBrush");
     private Brush ErrorStatusBrush => _errorBrush ??= (Brush)FindResource("ErrorBrush");
@@ -2656,9 +2647,28 @@ public partial class MainWindow : Window
         if (update != null)
         {
             var version = UpdateService.FormatVersion(update.Version);
-            TxtUpdatePillLabel.Text = string.Format(_loc.HeaderUpdateAvailableFormat, version);
-            BtnVersionChip.ToolTip = string.Format(_loc.HeaderVersionTooltipInstall, version);
-            AutomationProperties.SetName(BtnVersionChip, TxtUpdatePillLabel.Text);
+
+            // Superseded means this build's data channel has stopped, and the only thing
+            // that restores it is this very button. So the pill escalates rather than a
+            // second notice appearing elsewhere: it says why the update matters now, and
+            // trades the green "nice to have" tone for a warning one. Dark text on amber
+            // rather than the usual white, which would be unreadable at this size.
+            if (DatabaseUpdateService.Instance.IsSuperseded)
+            {
+                TxtUpdatePillLabel.Text = _loc.HeaderUpdateForDataLabel;
+                BtnVersionChip.Background = WarningStatusBrush;
+                BtnVersionChip.Foreground = BackgroundDarkStatusBrush;
+                BtnVersionChip.ToolTip = string.Format(_loc.HeaderUpdateForDataTooltipFormat, version);
+            }
+            else
+            {
+                TxtUpdatePillLabel.Text = string.Format(_loc.HeaderUpdateAvailableFormat, version);
+                BtnVersionChip.Background = SuccessStatusBrush;
+                BtnVersionChip.Foreground = System.Windows.Media.Brushes.White;
+                BtnVersionChip.ToolTip = string.Format(_loc.HeaderVersionTooltipInstall, version);
+            }
+
+            AutomationProperties.SetName(BtnVersionChip, (string)BtnVersionChip.ToolTip);
             BtnVersionChip.Visibility = Visibility.Visible;
             ChipVersion.Visibility = Visibility.Collapsed;
             return;
@@ -2724,6 +2734,14 @@ public partial class MainWindow : Window
             UpdateStatusKind.UpToDate => (_loc.UpdateStatusUpToDate, SuccessStatusBrush),
             _ => ("", TextSecondaryStatusBrush), // no check has completed yet
         };
+
+        // Superseded turns an optional update into the thing that restores data updates,
+        // so the wording says that. Only the text changes: the status vocabulary and its
+        // pinned oracle stay untouched.
+        if (kind == UpdateStatusKind.UpdateAvailable && DatabaseUpdateService.Instance.IsSuperseded)
+        {
+            TxtSettingsUpdateStatus.Text = _loc.UpdateStatusDataEnded;
+        }
 
         UpdateLastCheckTimeDisplay();
     }

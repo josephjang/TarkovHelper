@@ -227,22 +227,24 @@ public partial class LocalizationService
     };
 
     /// <summary>
-    /// Title-bar notice shown when this build's data endpoint has been frozen: game
-    /// data has stopped arriving, and only an app update brings it back. Without it a
-    /// frozen build would keep reporting "up to date" over data that no longer moves.
+    /// Update pill label when this build has been left behind by a newer data schema.
+    /// It replaces the neutral "Update vX" wording because at that point the update is
+    /// not optional maintenance: it is the only thing that restores game data updates,
+    /// and a pill the user has learned to ignore has to say why it matters now.
     /// </summary>
-    public string HeaderDataFrozen => CurrentLanguage switch
+    public string HeaderUpdateForDataLabel => CurrentLanguage switch
     {
-        AppLanguage.KO => "데이터 업데이트 종료",
-        AppLanguage.JA => "データ更新は終了",
-        _ => "Data updates ended"
+        AppLanguage.KO => "데이터 갱신하려면 업데이트",
+        AppLanguage.JA => "最新データには更新が必要",
+        _ => "Update for latest data"
     };
 
-    public string HeaderDataFrozenTooltip => CurrentLanguage switch
+    /// <summary>{0} = version, e.g. "v2026.8.0".</summary>
+    public string HeaderUpdateForDataTooltipFormat => CurrentLanguage switch
     {
-        AppLanguage.KO => "이 앱 버전의 데이터 업데이트가 종료되었습니다 — 앱을 업데이트하면 최신 데이터를 받습니다",
-        AppLanguage.JA => "このアプリバージョンのデータ更新は終了しました — アプリを更新すると最新データを受け取れます",
-        _ => "Data updates for this app version have ended — update the app for current data"
+        AppLanguage.KO => "이 앱 버전의 데이터 업데이트가 종료되었습니다. 최신 게임 데이터를 받으려면 {0} 설치가 필요합니다.",
+        AppLanguage.JA => "このアプリバージョンのデータ更新は終了しました。最新のゲームデータには {0} のインストールが必要です。",
+        _ => "Data updates for this app version have ended. Installing {0} restores current game data."
     };
 
     #endregion
@@ -436,6 +438,17 @@ public partial class LocalizationService
         AppLanguage.KO => "업데이트 있음",
         AppLanguage.JA => "更新あり",
         _ => "Update available"
+    };
+
+    /// <summary>
+    /// Settings status when an update is available and this build has also been left
+    /// behind by a newer data schema, so the update is what restores game data.
+    /// </summary>
+    public string UpdateStatusDataEnded => CurrentLanguage switch
+    {
+        AppLanguage.KO => "이 버전은 데이터 업데이트 종료",
+        AppLanguage.JA => "このバージョンはデータ更新終了",
+        _ => "Data updates ended for this version"
     };
 
     public string UpdateStatusFailed => CurrentLanguage switch

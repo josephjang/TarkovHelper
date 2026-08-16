@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace TarkovDBEditor.Services;
 
@@ -25,6 +26,12 @@ public class DataPublishService : IDisposable
     private const string DataChannelDirName = "data";
     private const string DatabaseFileName = "tarkov_data.db";
     private const string VersionFileName = "db_version.txt";
+    private const string ManifestFileName = "manifest.json";
+    private const string IndexFileName = "index.json";
+
+    /// <summary>Document shapes this tool writes. See feature-versioned-data-channel.spec.md.</summary>
+    private const int ManifestSchema = 1;
+    private const int IndexSchema = 1;
 
     /// <summary>The only format that is also served from the pre-channel Assets endpoint.</summary>
     private const int MirroredDataFormat = 1;
@@ -631,11 +638,13 @@ public class DataPublishService : IDisposable
                 result.IconsCopied++;
             }
 
-            // 7. Update version file on every endpoint the live format serves. Written
-            //    last, after the database it describes: an interrupted publish then
-            //    leaves the old version pointing at data that is merely newer, never a
-            //    new version pointing at data that never arrived.
-            progress?.Invoke("Updating version...");
+            // 7. Write the manifest and the version stamps last, after the database they
+            //    describe: an interrupted publish then leaves the old version pointing at
+            //    data that is merely newer, never a new version (or hash) pointing at
+            //    data that never arrived.
+            progress?.Invoke("Updating manifest...");
+            await WriteManifestAsync(comparison, newVersion, result);
+
             await File.WriteAllTextAsync(
                 Path.Combine(comparison.ChannelDirPath, VersionFileName), newVersion);
             result.CopiedFiles.Add($"{DataChannelDirName}/v{comparison.LiveDataFormat}/{VersionFileName}");
@@ -647,6 +656,12 @@ public class DataPublishService : IDisposable
                 result.CopiedFiles.Add(VersionFileName);
             }
 
+            // 8. The channel index names the schema currently published. Rewritten every
+            //    time so it cannot drift, and it is the only mutable part of the channel:
+            //    superseded endpoint directories are never touched again, which is how a
+            //    build learns it was left behind without anyone hand-editing history.
+            await WriteIndexAsync(comparison.LiveDataFormat, result);
+
             progress?.Invoke("Publish complete.");
         }
         catch (Exception ex)
@@ -657,6 +672,63 @@ public class DataPublishService : IDisposable
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Writes data/v&lt;N&gt;/manifest.json: the document new builds read. The hash and size
+    /// travel in the same document as the version so a client cannot pair a fresh
+    /// version with a stale or truncated database, which per-file CDN caching otherwise
+    /// allows.
+    /// </summary>
+    private async Task WriteManifestAsync(ComparisonResult comparison, string newVersion, PublishResult result)
+    {
+        var databasePath = Path.Combine(comparison.ChannelDirPath!, DatabaseFileName);
+
+        var manifest = new
+        {
+            schema = ManifestSchema,
+            dataSchema = comparison.LiveDataFormat,
+            version = newVersion,
+            database = new
+            {
+                file = DatabaseFileName,
+                sha256 = await ComputeFileSha256Async(databasePath),
+                size = new FileInfo(databasePath).Length,
+            },
+        };
+
+        var path = Path.Combine(comparison.ChannelDirPath!, ManifestFileName);
+        await File.WriteAllTextAsync(path, ToJson(manifest));
+        result.CopiedFiles.Add($"{DataChannelDirName}/v{comparison.LiveDataFormat}/{ManifestFileName}");
+        result.FilesCopied++;
+    }
+
+    /// <summary>
+    /// Writes data/index.json, which names the data schema the project publishes right
+    /// now. Builds pinned to an older schema compare against it to learn that nothing
+    /// further is coming for them.
+    /// </summary>
+    private async Task WriteIndexAsync(int liveDataFormat, PublishResult result)
+    {
+        var index = new { schema = IndexSchema, currentDataSchema = liveDataFormat };
+
+        await File.WriteAllTextAsync(Path.Combine(_dataChannelPath, IndexFileName), ToJson(index));
+        result.CopiedFiles.Add($"{DataChannelDirName}/{IndexFileName}");
+        result.FilesCopied++;
+    }
+
+    /// <summary>
+    /// Indented, newline-terminated JSON: these files are reviewed in diffs by hand, so
+    /// a one-line document would make every publish an unreadable change.
+    /// </summary>
+    private static string ToJson(object value) =>
+        JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true }) + "\n";
+
+    private async Task<string> ComputeFileSha256Async(string filePath)
+    {
+        using var sha256 = SHA256.Create();
+        await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return Convert.ToHexString(await sha256.ComputeHashAsync(stream)).ToLowerInvariant();
     }
 
     private async Task<string> ComputeFileHashAsync(string filePath)

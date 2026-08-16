@@ -1,6 +1,10 @@
 using System.IO;
 using System.Text;
 using TarkovDBEditor.Services;
+// Aliased rather than importing the whole namespace: both projects have a Services
+// namespace, and the published documents are deliberately read back through the app's
+// own reader so the tool and the app cannot drift apart on the format.
+using DatabaseUpdateService = TarkovHelper.Services.DatabaseUpdateService;
 
 namespace TarkovHelper.Tests;
 
@@ -46,6 +50,20 @@ public sealed class DataPublishChannelTests : IDisposable
         File.WriteAllBytes(Path.Combine(dir, DatabaseFile), database);
         File.WriteAllText(Path.Combine(dir, VersionFile), version);
     }
+
+    /// <summary>Reads a published manifest through the app's own reader, as a client would.</summary>
+    private static DatabaseUpdateService.DataChannelManifest ReadManifest(string channelDir)
+    {
+        var path = Path.Combine(channelDir, "manifest.json");
+        Assert.True(File.Exists(path), $"{path} was not written");
+
+        var manifest = DatabaseUpdateService.ParseManifest(File.ReadAllText(path));
+        Assert.True(manifest != null, $"{path} is not readable by the app's manifest reader");
+        return manifest!;
+    }
+
+    private static string Sha256Hex(byte[] content) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(content)).ToLowerInvariant();
 
     private static string ChannelDir(string repoRoot, int format) =>
         Path.Combine(repoRoot, "data", $"v{format}");
@@ -133,6 +151,46 @@ public sealed class DataPublishChannelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_publish_writes_a_manifest_that_describes_what_it_published()
+    {
+        // Round trip through the real reader: the tool and the app have to agree about
+        // the document, and the hash has to be of the bytes actually published.
+        var repo = NewRepo();
+        WriteEndpoint(ChannelDir(repo, 1), "1.0.10", OldDb);
+        WriteEndpoint(AssetsDir(repo), "1.0.10", OldDb);
+        using var service = new DataPublishService(NewSource(NewDb), repo);
+
+        var comparison = await service.CompareAsync();
+        var published = await service.PublishAsync(comparison, "1.0.11");
+        Assert.True(published.Success, published.ErrorMessage);
+
+        var manifest = ReadManifest(ChannelDir(repo, 1));
+        Assert.Equal(1, manifest.DataSchema);
+        Assert.Equal("1.0.11", manifest.Version);
+        Assert.Equal(DatabaseFile, manifest.Database.File);
+        Assert.Equal(Sha256Hex(NewDb), manifest.Database.Sha256);
+        Assert.Equal(NewDb.Length, manifest.Database.Size);
+    }
+
+    [Fact]
+    public async Task A_publish_points_the_channel_index_at_the_live_schema()
+    {
+        var repo = NewRepo();
+        WriteEndpoint(ChannelDir(repo, 1), "1.0.10", OldDb);
+        WriteEndpoint(AssetsDir(repo), "1.0.10", OldDb);
+        using var service = new DataPublishService(NewSource(NewDb), repo);
+
+        var comparison = await service.CompareAsync();
+        await service.PublishAsync(comparison, "1.0.11");
+
+        var index = DatabaseUpdateService.ParseIndex(
+            await File.ReadAllTextAsync(Path.Combine(repo, "data", "index.json")));
+
+        Assert.True(index != null, "data/index.json is not readable by the app's index reader");
+        Assert.Equal(1, index!.CurrentDataSchema);
+    }
+
+    [Fact]
     public async Task A_database_only_mirror_drift_is_publishable_and_repaired()
     {
         // The half-published commit: one endpoint moved, the other did not. The tool has
@@ -198,11 +256,13 @@ public sealed class DataPublishChannelTests : IDisposable
     }
 
     [Fact]
-    public async Task The_version_token_is_read_past_a_frozen_directive()
+    public async Task The_version_token_is_read_from_the_first_line()
     {
+        // Trailing content in the stamp must not become part of the token, or the
+        // suggested next version would be derived from something unparseable.
         var repo = NewRepo();
-        WriteEndpoint(ChannelDir(repo, 1), "1.0.10\nfrozen", NewDb);
-        WriteEndpoint(AssetsDir(repo), "1.0.10\nfrozen", NewDb);
+        WriteEndpoint(ChannelDir(repo, 1), "1.0.10\n", NewDb);
+        WriteEndpoint(AssetsDir(repo), "1.0.10\n", NewDb);
         using var service = new DataPublishService(NewSource(NewDb), repo);
 
         var comparison = await service.CompareAsync();
@@ -216,13 +276,13 @@ public sealed class DataPublishChannelTests : IDisposable
     #region Publishing a later format
 
     [Fact]
-    public async Task Publishing_a_later_format_leaves_the_frozen_endpoints_alone()
+    public async Task Publishing_a_later_schema_leaves_the_superseded_endpoints_alone()
     {
-        // Once format 2 is live, format 1 and its Assets mirror are frozen history: a
-        // publish must not touch either, or the freeze would hand old builds new data.
+        // Once schema 2 is live, schema 1 and its Assets mirror are history: a publish
+        // must not touch either, or builds pinned to 1 would be handed data built for 2.
         var repo = NewRepo();
-        WriteEndpoint(ChannelDir(repo, 1), "1.0.10\nfrozen", OldDb);
-        WriteEndpoint(AssetsDir(repo), "1.0.10\nfrozen", OldDb);
+        WriteEndpoint(ChannelDir(repo, 1), "1.0.10", OldDb);
+        WriteEndpoint(AssetsDir(repo), "1.0.10", OldDb);
         WriteEndpoint(ChannelDir(repo, 2), "2.0.0", OldDb);
         using var service = new DataPublishService(NewSource(NewDb), repo);
 
@@ -236,12 +296,21 @@ public sealed class DataPublishChannelTests : IDisposable
         Assert.True(published.Success, published.ErrorMessage);
         Assert.Equal(NewDb, await File.ReadAllBytesAsync(Path.Combine(ChannelDir(repo, 2), DatabaseFile)));
         Assert.Equal("2.0.1", await File.ReadAllTextAsync(Path.Combine(ChannelDir(repo, 2), VersionFile)));
+        Assert.Equal(2, ReadManifest(ChannelDir(repo, 2)).DataSchema);
 
-        // Frozen: same bytes, same stamp, directive intact.
+        // Superseded endpoints are history: byte for byte, nothing about v1 moves. This
+        // is what lets a left-behind build keep serving its last compatible data, and
+        // why the index rather than an edit here is how it learns it was left behind.
         Assert.Equal(OldDb, await File.ReadAllBytesAsync(Path.Combine(ChannelDir(repo, 1), DatabaseFile)));
-        Assert.Equal("1.0.10\nfrozen", await File.ReadAllTextAsync(Path.Combine(ChannelDir(repo, 1), VersionFile)));
+        Assert.Equal("1.0.10", await File.ReadAllTextAsync(Path.Combine(ChannelDir(repo, 1), VersionFile)));
         Assert.Equal(OldDb, await File.ReadAllBytesAsync(Path.Combine(AssetsDir(repo), DatabaseFile)));
-        Assert.Equal("1.0.10\nfrozen", await File.ReadAllTextAsync(Path.Combine(AssetsDir(repo), VersionFile)));
+        Assert.Equal("1.0.10", await File.ReadAllTextAsync(Path.Combine(AssetsDir(repo), VersionFile)));
+
+        // And the index now names the new schema, which is the only thing that changed
+        // outside data/v2.
+        var index = DatabaseUpdateService.ParseIndex(
+            await File.ReadAllTextAsync(Path.Combine(repo, "data", "index.json")));
+        Assert.Equal(2, index!.CurrentDataSchema);
     }
 
     #endregion

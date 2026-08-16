@@ -24,8 +24,8 @@ public class LocalizationHeaderStringsTests
         "HeaderProfileTooltip", "HeaderProfileName", "HeaderLevelShort", "HeaderVersionTooltipIdle",
         "HeaderVersionTooltipInstall", "HeaderVersionTooltipCheckFailed",
         "HeaderUpdateAvailableFormat", "HeaderChecking",
-        // Data-channel freeze notice (feature-versioned-data-channel.md)
-        "HeaderDataFrozen", "HeaderDataFrozenTooltip",
+        // Superseded-build escalation of the update pill (feature-versioned-data-channel.md)
+        "HeaderUpdateForDataLabel", "HeaderUpdateForDataTooltipFormat", "UpdateStatusDataEnded",
         // Sync status chip
         "SyncStatusOff", "SyncStatusWatching", "SyncStatusMatching", "SyncStatusInRaid",
         "SyncStatusTooltip",
@@ -53,6 +53,7 @@ public class LocalizationHeaderStringsTests
     private static readonly string[] FormatKeys =
     {
         "HeaderProfileChangedFromLogsFormat", "HeaderVersionTooltipInstall", "HeaderUpdateAvailableFormat",
+        "HeaderUpdateForDataTooltipFormat",
         "SettingsCurrentVersionFormat", "SettingsUpdateToFormat", "TimeMinutesAgoFormat",
         "ProfileResetTargetFormat", "ProfileResetSuccessFormat", "ProfileResetConfirmButtonFormat",
     };

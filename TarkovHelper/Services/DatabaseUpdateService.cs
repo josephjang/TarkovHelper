@@ -2,6 +2,8 @@ using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Services.Logging;
 
@@ -9,16 +11,19 @@ namespace TarkovHelper.Services;
 
 /// <summary>
 /// tarkov_data.db 업데이트를 관리하는 서비스.
-/// GitHub에서 버전을 확인하고 새 버전이 있으면 자동으로 다운로드.
-/// 5분마다 백그라운드에서 업데이트 체크.
+/// GitHub에서 매니페스트를 확인하고 새 버전이 있으면 자동으로 다운로드.
+/// 한 시간마다 백그라운드에서 업데이트 체크 (시작 시 1회 즉시).
 ///
-/// The endpoint it polls is this build's data-format channel (data/v&lt;N&gt;/), where N
+/// The endpoint it polls is this build's data-schema channel (data/v&lt;N&gt;/), where N
 /// comes from the TarkovDataFormat assembly metadata the csproj stamps in. That same
 /// property selects the seed database bundled into Assets\, so a build can only ever
-/// poll the channel its own bundled data belongs to. A publish that cannot stay
-/// additive creates the next format's directory and freezes this one, which the
-/// endpoint announces with a "frozen" directive in db_version.txt.
-/// Design: feature-versioned-data-channel.spec.md.
+/// poll the channel its own bundled data belongs to.
+///
+/// Two documents are read. data/v&lt;N&gt;/manifest.json describes the payload this build
+/// should have; data/index.json names the data schema the project currently publishes,
+/// which is how a build learns it has been left behind by a newer format. Endpoint
+/// directories are never rewritten once superseded, so that pointer is the only mutable
+/// part of the channel. Design: feature-versioned-data-channel.spec.md.
 /// </summary>
 public sealed class DatabaseUpdateService : IDisposable
 {
@@ -27,12 +32,27 @@ public sealed class DatabaseUpdateService : IDisposable
     public static DatabaseUpdateService Instance => _instance ??= new DatabaseUpdateService();
 
     private const string DATA_FORMAT_METADATA_KEY = "TarkovDataFormat";
-    private const string CHANNEL_BASE_URL_FORMAT =
-        "https://raw.githubusercontent.com/josephjang/TarkovHelper/refs/heads/main/data/v{0}";
+    private const string DATA_ROOT_URL_VALUE =
+        "https://raw.githubusercontent.com/josephjang/TarkovHelper/refs/heads/main/data";
+    private const string INDEX_FILE = "index.json";
+    private const string MANIFEST_FILE = "manifest.json";
     private const string LOCAL_VERSION_FILE = "db_version.txt";
     private const string DATABASE_FILE = "tarkov_data.db";
-    private const string FROZEN_DIRECTIVE = "frozen";
-    private const int UPDATE_INTERVAL_MS = 5 * 60 * 1000; // 5분
+
+    /// <summary>
+    /// Manifest document shapes this build can read. Only ever compared as an upper
+    /// bound: a lower bound is unnecessary because the endpoint URL already selects
+    /// which documents this build can meet at all.
+    /// </summary>
+    internal const int MAX_SUPPORTED_MANIFEST_SCHEMA = 1;
+
+    /// <summary>
+    /// One hour. The payload changes a handful of times per game patch, and raw
+    /// GitHub caches each file for minutes at a time, so polling faster re-reads the
+    /// same cached bytes without ever learning anything new. The check that actually
+    /// matters is the one at startup.
+    /// </summary>
+    private const int UPDATE_INTERVAL_MS = 60 * 60 * 1000;
 
     /// <summary>
     /// The tarkov_data.db contract this build reads, from assembly metadata. Declared
@@ -41,21 +61,23 @@ public sealed class DatabaseUpdateService : IDisposable
     /// </summary>
     internal static readonly int DataFormatVersion = ReadDataFormatVersion();
 
-    /// <summary>
-    /// This build's endpoint directory. The remote file names deliberately equal the
-    /// local ones: the endpoint is a mirror of the Assets layout, so one pair of
-    /// constants names both sides.
-    /// </summary>
-    internal static readonly string CHANNEL_BASE_URL =
-        string.Format(CultureInfo.InvariantCulture, CHANNEL_BASE_URL_FORMAT, DataFormatVersion);
-    internal static readonly string VERSION_URL = $"{CHANNEL_BASE_URL}/{LOCAL_VERSION_FILE}";
-    internal static readonly string DATABASE_URL = $"{CHANNEL_BASE_URL}/{DATABASE_FILE}";
+    /// <summary>Channel root, holding index.json beside one directory per data schema.</summary>
+    internal static readonly string DATA_ROOT_URL = DATA_ROOT_URL_VALUE;
+    internal static readonly string INDEX_URL = $"{DATA_ROOT_URL}/{INDEX_FILE}";
+    internal static readonly string CHANNEL_BASE_URL = string.Format(
+        CultureInfo.InvariantCulture, "{0}/v{1}", DATA_ROOT_URL, DataFormatVersion);
+    internal static readonly string MANIFEST_URL = $"{CHANNEL_BASE_URL}/{MANIFEST_FILE}";
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
 
     private readonly string _assetsPath;
     private readonly string _databasePath;
     private readonly string _versionFilePath;
-    private readonly string _versionUrl;
-    private readonly string _databaseUrl;
+    private readonly string _indexUrl;
+    private readonly string _channelBaseUrl;
     private readonly HttpClient _httpClient;
     private readonly System.Threading.Timer _updateTimer;
     private bool _isUpdating;
@@ -77,11 +99,17 @@ public sealed class DatabaseUpdateService : IDisposable
     public string? RemoteVersion { get; private set; }
 
     /// <summary>
-    /// Whether this build's endpoint has announced that it no longer receives data.
-    /// Re-derived from every check that reaches the endpoint, and deliberately left
-    /// alone when a check fails: a network blip must not clear a real freeze notice.
+    /// Whether the project has moved on to a data schema this build cannot read, which
+    /// means this build's endpoint will receive nothing further. Re-derived from every
+    /// check that reaches index.json, and deliberately left alone when that fetch
+    /// fails: a network blip must not clear a real notice.
+    /// <para>
+    /// True implies a newer app build exists, because a new data schema can only ship
+    /// with the build that pins it. The UI therefore escalates the existing app-update
+    /// affordance instead of raising a second one.
+    /// </para>
     /// </summary>
-    public bool IsEndpointFrozen { get; private set; }
+    public bool IsSuperseded { get; private set; }
 
     /// <summary>
     /// 업데이트 진행 중 여부
@@ -105,23 +133,24 @@ public sealed class DatabaseUpdateService : IDisposable
     public event EventHandler<UpdateCheckResult>? UpdateCheckCompleted;
 
     private DatabaseUpdateService()
-        : this(CHANNEL_BASE_URL, Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets"))
+        : this(DATA_ROOT_URL, Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets"))
     {
     }
 
     /// <summary>
-    /// Test seam: points an instance at a local endpoint and asset directory so the
-    /// channel contract can be exercised without touching the network or the build
-    /// output. Production goes through <see cref="Instance"/>, which pins both to this
-    /// build's data format.
+    /// Test seam: points an instance at a local channel root and asset directory so the
+    /// protocol can be exercised without touching the network or the build output.
+    /// Production goes through <see cref="Instance"/>, which pins both to this build's
+    /// data schema.
     /// </summary>
-    internal DatabaseUpdateService(string channelBaseUrl, string assetsPath)
+    internal DatabaseUpdateService(string dataRootUrl, string assetsPath)
     {
         _assetsPath = assetsPath;
         _databasePath = Path.Combine(_assetsPath, DATABASE_FILE);
         _versionFilePath = Path.Combine(_assetsPath, LOCAL_VERSION_FILE);
-        _versionUrl = $"{channelBaseUrl}/{LOCAL_VERSION_FILE}";
-        _databaseUrl = $"{channelBaseUrl}/{DATABASE_FILE}";
+        _indexUrl = $"{dataRootUrl}/{INDEX_FILE}";
+        _channelBaseUrl = string.Format(
+            CultureInfo.InvariantCulture, "{0}/v{1}", dataRootUrl, DataFormatVersion);
 
         _httpClient = new HttpClient();
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("TarkovHelper/1.0");
@@ -130,7 +159,7 @@ public sealed class DatabaseUpdateService : IDisposable
         // 로컬 버전 로드
         LoadLocalVersion();
 
-        // 5분마다 업데이트 체크 타이머 설정
+        // 주기적 업데이트 체크 타이머 설정
         _updateTimer = new System.Threading.Timer(
             OnUpdateTimerElapsed,
             null,
@@ -139,7 +168,7 @@ public sealed class DatabaseUpdateService : IDisposable
     }
 
     /// <summary>
-    /// Reads the data format off the running assembly. A build whose metadata is
+    /// Reads the data schema off the running assembly. A build whose metadata is
     /// missing or unparseable throws here rather than falling back to a default: the
     /// wrong endpoint is exactly the failure this mechanism exists to prevent, and it
     /// must be loud at startup instead of silent in the field.
@@ -156,60 +185,83 @@ public sealed class DatabaseUpdateService : IDisposable
             throw new InvalidOperationException(
                 $"Assembly metadata '{DATA_FORMAT_METADATA_KEY}' is missing or invalid " +
                 $"(got '{value}'). TarkovHelper.csproj must set <TarkovDataFormat> to the "
-                + "data format this build reads; it selects both the bundled seed database "
+                + "data schema this build reads; it selects both the bundled seed database "
                 + "and the update endpoint, so there is no safe default.");
         }
 
         return format;
     }
 
-    /// <summary>
-    /// Parsed db_version.txt: the version token, plus the endpoint directives after it.
-    /// </summary>
-    internal sealed record DataChannelVersion(string Version, bool IsFrozen);
+    #region Channel documents
+
+    /// <summary>The payload an endpoint serves. Integrity fields are optional by design.</summary>
+    internal sealed record DataChannelPayload(string File, string? Sha256, long? Size);
+
+    /// <summary>data/v&lt;N&gt;/manifest.json: what this endpoint currently offers.</summary>
+    internal sealed record DataChannelManifest(
+        int Schema, int DataSchema, string Version, DataChannelPayload Database);
+
+    /// <summary>data/index.json: the data schema the project publishes right now.</summary>
+    internal sealed record DataChannelIndex(int Schema, int CurrentDataSchema);
 
     /// <summary>
-    /// Parses a channel db_version.txt. The first non-blank line is the version token,
-    /// compared for exact equality exactly as before; every later non-blank line is a
-    /// directive. Unknown directives are ignored on purpose, so an endpoint can say new
-    /// things to newer builds without breaking the builds already shipped. Returns null
-    /// for content carrying no token at all, which the caller treats as a failed check.
+    /// Parses a manifest document. Returns null for anything unreadable, which callers
+    /// treat as a failed check: no download and no local state change. Unknown fields
+    /// are ignored, so an endpoint can carry information newer builds use without
+    /// disturbing the ones already shipped.
     /// </summary>
-    internal static DataChannelVersion? ParseVersionFile(string? content)
+    internal static DataChannelManifest? ParseManifest(string? content)
     {
         if (string.IsNullOrWhiteSpace(content)) return null;
 
-        string? version = null;
-        var frozen = false;
-
-        foreach (var rawLine in content.Split('\n'))
+        try
         {
-            // Trim also drops the \r of CRLF endings, so both line endings parse alike.
-            var line = rawLine.Trim();
-            if (line.Length == 0) continue;
+            var manifest = JsonSerializer.Deserialize<DataChannelManifest>(content, JsonOptions);
 
-            if (version == null)
+            // Required fields, checked explicitly: System.Text.Json leaves a missing
+            // string null rather than failing, and a null version would compare unequal
+            // to every local version and re-download the database forever.
+            if (manifest == null
+                || manifest.Schema < 1
+                || manifest.DataSchema < 1
+                || string.IsNullOrWhiteSpace(manifest.Version)
+                || string.IsNullOrWhiteSpace(manifest.Database?.File))
             {
-                version = line;
-                continue;
+                return null;
             }
 
-            // Case-insensitive: a freeze marker is sometimes appended by hand, and a
-            // capitalized one silently doing nothing would be a bad failure mode.
-            if (line.Equals(FROZEN_DIRECTIVE, StringComparison.OrdinalIgnoreCase))
-            {
-                frozen = true;
-            }
+            return manifest with { Version = manifest.Version.Trim() };
         }
-
-        return version == null ? null : new DataChannelVersion(version, frozen);
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
-    /// 로컬 버전 파일에서 버전 정보 로드.
-    /// Parsed through the same reader as the remote file: an install that ran a
-    /// pre-channel build against a frozen endpoint has the directive in its local file
-    /// too, and only the token takes part in the comparison.
+    /// Parses the channel index. Returns null for anything unreadable; the caller keeps
+    /// its previous knowledge rather than assuming the build is current.
+    /// </summary>
+    internal static DataChannelIndex? ParseIndex(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return null;
+
+        try
+        {
+            var index = JsonSerializer.Deserialize<DataChannelIndex>(content, JsonOptions);
+            return index is { Schema: >= 1, CurrentDataSchema: >= 1 } ? index : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    #endregion
+
+    /// <summary>
+    /// 로컬 버전 파일에서 버전 정보 로드. 로컬 파일은 엔드포인트가 아니라 "지금 가진
+    /// 버전"을 적어 두는 북마크이므로 토큰 한 줄만 담는다.
     /// </summary>
     private void LoadLocalVersion()
     {
@@ -217,7 +269,8 @@ public sealed class DatabaseUpdateService : IDisposable
         {
             if (File.Exists(_versionFilePath))
             {
-                LocalVersion = ParseVersionFile(File.ReadAllText(_versionFilePath))?.Version;
+                var token = File.ReadAllText(_versionFilePath).Trim();
+                LocalVersion = token.Length == 0 ? null : token;
                 _log.Debug($"Local version: {LocalVersion}");
             }
             else
@@ -248,8 +301,8 @@ public sealed class DatabaseUpdateService : IDisposable
             return;
         }
 
-        _log.Info($"Starting background update checks (every 5 minutes) against {_versionUrl}");
-        _updateTimer.Change(0, UPDATE_INTERVAL_MS); // 즉시 시작 후 5분마다 반복
+        _log.Info($"Starting background update checks (hourly) against {_channelBaseUrl}");
+        _updateTimer.Change(0, UPDATE_INTERVAL_MS); // 즉시 시작 후 주기적으로 반복
     }
 
     /// <summary>
@@ -277,7 +330,7 @@ public sealed class DatabaseUpdateService : IDisposable
         if (_isUpdating)
         {
             _log.Debug("Update already in progress, skipping");
-            return new UpdateCheckResult(false, false, "Update already in progress", IsEndpointFrozen);
+            return new UpdateCheckResult(false, false, "Update already in progress", IsSuperseded);
         }
 
         _isUpdating = true;
@@ -285,64 +338,85 @@ public sealed class DatabaseUpdateService : IDisposable
 
         try
         {
-            // 1. 원격 버전 확인
-            _log.Debug("Checking remote version...");
-            var remote = await GetRemoteVersionAsync();
+            // 1. 채널 인덱스로 이 빌드가 뒤에 남았는지 확인 (실패해도 업데이트는 계속:
+            //    동결은 미래 발행을 끝낼 뿐, 아직 못 받은 마지막 데이터를 뺏지 않는다)
+            await RefreshSupersededStateAsync();
 
-            if (remote == null)
+            // 2. 이 엔드포인트의 매니페스트 확인
+            _log.Debug("Checking remote manifest...");
+            var manifest = await GetManifestAsync();
+
+            if (manifest == null)
             {
-                var result = new UpdateCheckResult(false, false, "Failed to get remote version", IsEndpointFrozen);
+                var result = new UpdateCheckResult(false, false, "Failed to get remote manifest", IsSuperseded);
                 UpdateCheckCompleted?.Invoke(this, result);
                 return result;
             }
 
-            RemoteVersion = remote.Version;
-            // Endpoint state, re-derived per successful check rather than persisted.
-            if (remote.IsFrozen != IsEndpointFrozen)
+            if (manifest.Schema > MAX_SUPPORTED_MANIFEST_SCHEMA)
             {
-                _log.Info(remote.IsFrozen
-                    ? $"Data endpoint {CHANNEL_BASE_URL} is frozen: it no longer receives updates for this build"
-                    : $"Data endpoint {CHANNEL_BASE_URL} is no longer marked frozen");
+                // Newer document shape at our own URL. Not a freeze and not the user's
+                // problem: it means a publish put something here this build was never
+                // taught to read, so refuse loudly and change nothing.
+                _log.Error(
+                    $"Manifest at {_channelBaseUrl} declares schema {manifest.Schema}, "
+                    + $"above the {MAX_SUPPORTED_MANIFEST_SCHEMA} this build understands. Ignoring it.");
+                var result = new UpdateCheckResult(false, false, "Manifest schema is newer than this build", IsSuperseded);
+                UpdateCheckCompleted?.Invoke(this, result);
+                return result;
             }
-            IsEndpointFrozen = remote.IsFrozen;
-            _log.Debug($"Remote version: {remote.Version}, Local version: {LocalVersion}");
 
-            // 2. 버전 비교
-            if (LocalVersion == remote.Version)
+            if (manifest.DataSchema != DataFormatVersion)
+            {
+                // The directory is ours but the payload it describes is not. A
+                // mis-published endpoint, fixed by the next publish, so no user notice.
+                _log.Error(
+                    $"Manifest at {_channelBaseUrl} serves data schema {manifest.DataSchema}, "
+                    + $"but this build reads {DataFormatVersion}. Refusing to install it.");
+                var result = new UpdateCheckResult(false, false, "Endpoint serves a different data schema", IsSuperseded);
+                UpdateCheckCompleted?.Invoke(this, result);
+                return result;
+            }
+
+            RemoteVersion = manifest.Version;
+            _log.Debug($"Remote version: {manifest.Version}, Local version: {LocalVersion}");
+
+            // 3. 버전 비교
+            if (LocalVersion == manifest.Version)
             {
                 _log.Debug("Database is up to date");
-                var result = new UpdateCheckResult(true, false, "Database is up to date", IsEndpointFrozen);
+                var result = new UpdateCheckResult(true, false, "Database is up to date", IsSuperseded);
                 UpdateCheckCompleted?.Invoke(this, result);
                 return result;
             }
 
-            // 3. 새 버전 다운로드
-            _log.Info($"New version available: {remote.Version}");
-            var downloadSuccess = await DownloadDatabaseAsync();
+            // 4. 새 버전 다운로드
+            _log.Info($"New version available: {manifest.Version}");
+            var downloadSuccess = await DownloadDatabaseAsync(manifest.Database);
 
             if (!downloadSuccess)
             {
-                var result = new UpdateCheckResult(false, false, "Failed to download database", IsEndpointFrozen);
+                var result = new UpdateCheckResult(false, false, "Failed to download database", IsSuperseded);
                 UpdateCheckCompleted?.Invoke(this, result);
                 return result;
             }
 
-            // 4. 버전 파일 업데이트 (토큰만 기록; 디렉티브는 데이터가 아니라 엔드포인트의 상태)
-            await UpdateLocalVersionAsync(remote.Version);
+            // 5. 버전 파일 업데이트
+            await UpdateLocalVersionAsync(manifest.Version);
 
-            // 5. 업데이트 완료 이벤트 발생
+            // 6. 업데이트 완료 이벤트 발생
             _log.Info("Database updated successfully, notifying services...");
             OnDatabaseUpdated();
 
             var successResult = new UpdateCheckResult(
-                true, true, $"Updated to version {remote.Version}", IsEndpointFrozen);
+                true, true, $"Updated to version {manifest.Version}", IsSuperseded);
             UpdateCheckCompleted?.Invoke(this, successResult);
             return successResult;
         }
         catch (Exception ex)
         {
             _log.Error($"Error during update check: {ex.Message}");
-            var result = new UpdateCheckResult(false, false, ex.Message, IsEndpointFrozen);
+            var result = new UpdateCheckResult(false, false, ex.Message, IsSuperseded);
             UpdateCheckCompleted?.Invoke(this, result);
             return result;
         }
@@ -353,27 +427,63 @@ public sealed class DatabaseUpdateService : IDisposable
     }
 
     /// <summary>
-    /// 원격 버전 정보 가져오기
+    /// 채널 인덱스를 읽어 이 빌드가 뒤에 남았는지 갱신. 읽지 못하면 마지막으로 알던
+    /// 상태를 유지한다 (일시적 실패가 알림을 껐다 켰다 하면 안 되므로).
     /// </summary>
-    private async Task<DataChannelVersion?> GetRemoteVersionAsync()
+    private async Task RefreshSupersededStateAsync()
     {
+        DataChannelIndex? index;
         try
         {
-            var response = await _httpClient.GetStringAsync(_versionUrl);
-            return ParseVersionFile(response);
+            index = ParseIndex(await _httpClient.GetStringAsync(_indexUrl));
         }
         catch (Exception ex)
         {
-            _log.Warning($"Failed to get remote version: {ex.Message}");
+            _log.Warning($"Failed to get channel index: {ex.Message}");
+            return;
+        }
+
+        if (index == null)
+        {
+            _log.Warning($"Channel index at {_indexUrl} is unreadable; keeping the last known state");
+            return;
+        }
+
+        var superseded = index.CurrentDataSchema > DataFormatVersion;
+        if (superseded != IsSuperseded)
+        {
+            _log.Info(superseded
+                ? $"This build reads data schema {DataFormatVersion}, but the channel now publishes "
+                  + $"{index.CurrentDataSchema}: no further data updates will arrive for this app version"
+                : $"This build's data schema {DataFormatVersion} is current again");
+        }
+
+        IsSuperseded = superseded;
+    }
+
+    /// <summary>
+    /// 원격 매니페스트 가져오기
+    /// </summary>
+    private async Task<DataChannelManifest?> GetManifestAsync()
+    {
+        try
+        {
+            return ParseManifest(await _httpClient.GetStringAsync($"{_channelBaseUrl}/{MANIFEST_FILE}"));
+        }
+        catch (Exception ex)
+        {
+            _log.Warning($"Failed to get remote manifest: {ex.Message}");
             return null;
         }
     }
 
     /// <summary>
-    /// 데이터베이스 파일 다운로드
+    /// 데이터베이스 파일 다운로드. 매니페스트가 크기와 해시를 실었으면 교체 전에 검증한다.
     /// </summary>
-    private async Task<bool> DownloadDatabaseAsync()
+    private async Task<bool> DownloadDatabaseAsync(DataChannelPayload payload)
     {
+        var tempPath = _databasePath + ".tmp";
+
         try
         {
             _log.Info("Downloading database...");
@@ -384,10 +494,8 @@ public sealed class DatabaseUpdateService : IDisposable
                 Directory.CreateDirectory(_assetsPath);
             }
 
-            // 임시 파일로 다운로드
-            var tempPath = _databasePath + ".tmp";
-
-            using (var response = await _httpClient.GetAsync(_databaseUrl, HttpCompletionOption.ResponseHeadersRead))
+            var databaseUrl = $"{_channelBaseUrl}/{payload.File}";
+            using (var response = await _httpClient.GetAsync(databaseUrl, HttpCompletionOption.ResponseHeadersRead))
             {
                 response.EnsureSuccessStatusCode();
 
@@ -412,6 +520,12 @@ public sealed class DatabaseUpdateService : IDisposable
                         _log.Trace($"Download progress: {progress:F1}%");
                     }
                 }
+            }
+
+            if (!VerifyDownload(tempPath, payload))
+            {
+                TryDeleteTemp(tempPath);
+                return false;
             }
 
             // 기존 파일 백업 및 교체
@@ -462,16 +576,58 @@ public sealed class DatabaseUpdateService : IDisposable
         catch (Exception ex)
         {
             _log.Error($"Failed to download database: {ex.Message}");
-
-            // 다운로드 실패 시 임시 파일 정리
-            var tempPath = _databasePath + ".tmp";
-            if (File.Exists(tempPath))
-            {
-                try { File.Delete(tempPath); } catch { }
-            }
-
+            TryDeleteTemp(tempPath);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Checks a freshly downloaded file against the manifest before it replaces the
+    /// working database. This is what makes a version stamp and a payload atomic:
+    /// raw GitHub caches each file separately, so a check can otherwise pair a fresh
+    /// manifest with a stale or truncated database and record the new version against
+    /// the wrong bytes. Integrity fields are optional, and their absence downgrades to
+    /// the previous behavior rather than blocking the update.
+    /// </summary>
+    private bool VerifyDownload(string tempPath, DataChannelPayload payload)
+    {
+        if (payload.Size is { } expectedSize)
+        {
+            var actualSize = new FileInfo(tempPath).Length;
+            if (actualSize != expectedSize)
+            {
+                _log.Error($"Downloaded database is {actualSize} bytes, manifest says {expectedSize}. Discarding it.");
+                return false;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.Sha256))
+        {
+            _log.Debug("Manifest carries no hash; installing without content verification");
+            return true;
+        }
+
+        string actualHash;
+        using (var stream = File.OpenRead(tempPath))
+        {
+            actualHash = Convert.ToHexString(SHA256.HashData(stream));
+        }
+
+        if (!actualHash.Equals(payload.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            _log.Error(
+                $"Downloaded database hash {actualHash} does not match the manifest's "
+                + $"{payload.Sha256}. Keeping the current database.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static void TryDeleteTemp(string tempPath)
+    {
+        if (!File.Exists(tempPath)) return;
+        try { File.Delete(tempPath); } catch { }
     }
 
     /// <summary>
@@ -539,16 +695,16 @@ public class UpdateCheckResult
     public string Message { get; }
 
     /// <summary>
-    /// Whether the endpoint this build polls has stopped receiving data. Carried on
+    /// Whether the project has moved past the data schema this build reads. Carried on
     /// every result, including failures, where it holds the last known state.
     /// </summary>
-    public bool IsEndpointFrozen { get; }
+    public bool IsSuperseded { get; }
 
-    public UpdateCheckResult(bool success, bool wasUpdated, string message, bool isEndpointFrozen = false)
+    public UpdateCheckResult(bool success, bool wasUpdated, string message, bool isSuperseded = false)
     {
         Success = success;
         WasUpdated = wasUpdated;
         Message = message;
-        IsEndpointFrozen = isEndpointFrozen;
+        IsSuperseded = isSuperseded;
     }
 }
