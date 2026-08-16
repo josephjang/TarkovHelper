@@ -389,6 +389,22 @@ also check data, which would give the longer interval a manual escape hatch.
 `ForceUpdateCheckAsync` stays uncalled, so restarting the app remains the only way
 to force a data check; this is scheduled for the next settings UX pass.
 
+### Appended (2026-08-16): a mechanical guard on the data schema promise
+
+The additive-only rule the whole channel rests on was pure discipline, exercised
+during ordinary feature work by a pipeline that regenerates the database wholesale
+from upstream. `DataSchemaDriftTests` makes it mechanical: it snapshots the
+published database's tables and declared column types into
+`DataSchemaBaseline.v<N>.json` and fails when a table or column disappears or is
+retyped, while allowing additions freely. The first run writes the baseline and
+fails deliberately, so a deleted baseline can never re-appear silently and pass
+against whatever the database happens to hold that day.
+
+Scope is read compatibility only: not indexes, views, or constraints, which a
+reader cannot observe, and not row contents, which change every publish. When a
+break is genuinely intended it is a data schema bump, not a relaxed test, and the
+new schema gets its own baseline file.
+
 ## Open Questions
 
 - Whether the 1.1 quest-data refresh publishes as format 1 (additive) or

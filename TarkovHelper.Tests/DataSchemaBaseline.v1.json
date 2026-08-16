@@ -1,0 +1,285 @@
+{
+  "ApiMarkers": {
+    "Columns": {
+      "ApprovedAt": "TEXT",
+      "Category": "TEXT",
+      "FloorId": "TEXT",
+      "Id": "TEXT",
+      "ImportedAt": "TEXT",
+      "IsApproved": "INTEGER",
+      "MapKey": "TEXT",
+      "Name": "TEXT",
+      "NameKo": "TEXT",
+      "ObjectiveDescription": "TEXT",
+      "QuestBsgId": "TEXT",
+      "QuestNameEn": "TEXT",
+      "SubCategory": "TEXT",
+      "TarkovMarketUid": "TEXT",
+      "X": "REAL",
+      "Y": "REAL",
+      "Z": "REAL"
+    }
+  },
+  "AppSettings": {
+    "Columns": {
+      "Key": "TEXT",
+      "UpdatedAt": "TEXT",
+      "Value": "TEXT"
+    }
+  },
+  "HideoutItemRequirements": {
+    "Columns": {
+      "Count": "INTEGER",
+      "FoundInRaid": "INTEGER",
+      "IconLink": "TEXT",
+      "Id": "TEXT",
+      "ItemId": "TEXT",
+      "ItemName": "TEXT",
+      "ItemNameJA": "TEXT",
+      "ItemNameKO": "TEXT",
+      "Level": "INTEGER",
+      "SortOrder": "INTEGER",
+      "StationId": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "HideoutLevels": {
+    "Columns": {
+      "ConstructionTime": "INTEGER",
+      "Id": "TEXT",
+      "Level": "INTEGER",
+      "StationId": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "HideoutSkillRequirements": {
+    "Columns": {
+      "Id": "TEXT",
+      "Level": "INTEGER",
+      "RequiredLevel": "INTEGER",
+      "SkillName": "TEXT",
+      "SkillNameJA": "TEXT",
+      "SkillNameKO": "TEXT",
+      "SortOrder": "INTEGER",
+      "StationId": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "HideoutStationRequirements": {
+    "Columns": {
+      "Id": "TEXT",
+      "Level": "INTEGER",
+      "RequiredLevel": "INTEGER",
+      "RequiredStationId": "TEXT",
+      "RequiredStationName": "TEXT",
+      "RequiredStationNameJA": "TEXT",
+      "RequiredStationNameKO": "TEXT",
+      "SortOrder": "INTEGER",
+      "StationId": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "HideoutStations": {
+    "Columns": {
+      "Id": "TEXT",
+      "ImageLink": "TEXT",
+      "MaxLevel": "INTEGER",
+      "Name": "TEXT",
+      "NameJA": "TEXT",
+      "NameKO": "TEXT",
+      "NormalizedName": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "HideoutTraderRequirements": {
+    "Columns": {
+      "Id": "TEXT",
+      "Level": "INTEGER",
+      "RequiredLevel": "INTEGER",
+      "SortOrder": "INTEGER",
+      "StationId": "TEXT",
+      "TraderId": "TEXT",
+      "TraderName": "TEXT",
+      "TraderNameJA": "TEXT",
+      "TraderNameKO": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "Items": {
+    "Columns": {
+      "BsgId": "TEXT",
+      "Categories": "TEXT",
+      "Category": "TEXT",
+      "DogtagFaction": "TEXT",
+      "IconUrl": "TEXT",
+      "Id": "TEXT",
+      "IsDogtagItem": "INTEGER",
+      "Name": "TEXT",
+      "NameEN": "TEXT",
+      "NameJA": "TEXT",
+      "NameKO": "TEXT",
+      "ShortNameEN": "TEXT",
+      "ShortNameJA": "TEXT",
+      "ShortNameKO": "TEXT",
+      "UpdatedAt": "TEXT",
+      "WikiPageLink": "TEXT"
+    }
+  },
+  "MapFloorLocations": {
+    "Columns": {
+      "CreatedAt": "TEXT",
+      "FloorId": "TEXT",
+      "Id": "TEXT",
+      "MapKey": "TEXT",
+      "MaxX": "REAL",
+      "MaxY": "REAL",
+      "MaxZ": "REAL",
+      "MinX": "REAL",
+      "MinY": "REAL",
+      "MinZ": "REAL",
+      "Priority": "INTEGER",
+      "RegionName": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "MapMarkers": {
+    "Columns": {
+      "CreatedAt": "TEXT",
+      "FloorId": "TEXT",
+      "Id": "TEXT",
+      "MapKey": "TEXT",
+      "MarkerType": "TEXT",
+      "Name": "TEXT",
+      "NameKo": "TEXT",
+      "UpdatedAt": "TEXT",
+      "X": "REAL",
+      "Y": "REAL",
+      "Z": "REAL"
+    }
+  },
+  "OptionalQuests": {
+    "Columns": {
+      "AlternativeQuestId": "TEXT",
+      "ApprovedAt": "TEXT",
+      "ContentHash": "TEXT",
+      "Id": "TEXT",
+      "IsApproved": "INTEGER",
+      "QuestId": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "QuestObjectives": {
+    "Columns": {
+      "ApprovedAt": "TEXT",
+      "Conditions": "TEXT",
+      "ContentHash": "TEXT",
+      "Description": "TEXT",
+      "DogtagFaction": "TEXT",
+      "DogtagMinLevel": "INTEGER",
+      "Id": "TEXT",
+      "IsApproved": "INTEGER",
+      "ItemId": "TEXT",
+      "ItemName": "TEXT",
+      "LocationName": "TEXT",
+      "LocationPoints": "TEXT",
+      "MapName": "TEXT",
+      "ObjectiveType": "TEXT",
+      "OptionalPoints": "TEXT",
+      "QuestId": "TEXT",
+      "RequiresFIR": "INTEGER",
+      "SortOrder": "INTEGER",
+      "TargetCount": "INTEGER",
+      "TargetType": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "QuestRequiredItems": {
+    "Columns": {
+      "ApprovedAt": "TEXT",
+      "ContentHash": "TEXT",
+      "Count": "INTEGER",
+      "DogtagFaction": "TEXT",
+      "DogtagMinLevel": "INTEGER",
+      "Id": "TEXT",
+      "IsApproved": "INTEGER",
+      "ItemId": "TEXT",
+      "ItemName": "TEXT",
+      "QuestId": "TEXT",
+      "RequirementType": "TEXT",
+      "RequiresFIR": "INTEGER",
+      "SortOrder": "INTEGER",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "QuestRequirements": {
+    "Columns": {
+      "ApprovedAt": "TEXT",
+      "ContentHash": "TEXT",
+      "DelayMinutes": "INTEGER",
+      "GroupId": "INTEGER",
+      "Id": "TEXT",
+      "IsApproved": "INTEGER",
+      "QuestId": "TEXT",
+      "RequiredQuestId": "TEXT",
+      "RequirementType": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "Quests": {
+    "Columns": {
+      "ApprovedAt": "TEXT",
+      "BsgId": "TEXT",
+      "ExcludedEdition": "TEXT",
+      "ExcludedEditionApproved": "INTEGER",
+      "ExcludedEditionApprovedAt": "TEXT",
+      "Faction": "TEXT",
+      "Id": "TEXT",
+      "IsApproved": "INTEGER",
+      "KappaRequired": "INTEGER",
+      "Location": "TEXT",
+      "MinLevel": "INTEGER",
+      "MinLevelApproved": "INTEGER",
+      "MinLevelApprovedAt": "TEXT",
+      "MinScavKarma": "INTEGER",
+      "MinScavKarmaApproved": "INTEGER",
+      "MinScavKarmaApprovedAt": "TEXT",
+      "Name": "TEXT",
+      "NameEN": "TEXT",
+      "NameJA": "TEXT",
+      "NameKO": "TEXT",
+      "RequiredDecodeCount": "INTEGER",
+      "RequiredDecodeCountApproved": "INTEGER",
+      "RequiredDecodeCountApprovedAt": "TEXT",
+      "RequiredEdition": "TEXT",
+      "RequiredEditionApproved": "INTEGER",
+      "RequiredEditionApprovedAt": "TEXT",
+      "RequiredPrestigeLevel": "INTEGER",
+      "RequiredPrestigeLevelApproved": "INTEGER",
+      "RequiredPrestigeLevelApprovedAt": "TEXT",
+      "Trader": "TEXT",
+      "UpdatedAt": "TEXT",
+      "WikiPageLink": "TEXT"
+    }
+  },
+  "Traders": {
+    "Columns": {
+      "Id": "TEXT",
+      "ImageLink": "TEXT",
+      "LocalIconPath": "TEXT",
+      "Name": "TEXT",
+      "NameJA": "TEXT",
+      "NameKO": "TEXT",
+      "NormalizedName": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "_schema_meta": {
+    "Columns": {
+      "CreatedAt": "TEXT",
+      "DisplayName": "TEXT",
+      "SchemaJson": "TEXT",
+      "TableName": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  }
+}
