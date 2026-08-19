@@ -1,0 +1,3090 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Versioned Data Channel Deep Review - Code Guide</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Ground and structure, inherited from the earlier guides so the
+         interactive docs read as one set. */
+      --page: #101010;
+      --surface: #181818;
+      --surface-2: #222222;
+      --surface-3: #2d2d2d;
+      --line: #3d3d3d;
+      --line-soft: #2a2a2a;
+      --text: #e0e0e0;
+      --muted: #9e9e9e;
+      --dim: #737373;
+
+      /* Accent: the app's own AccentBrush. */
+      --gold: #c5a84a;
+      --gold-hover: #d4b85a;
+      --gold-ink: #19170f;
+
+      /* Profile hues. These are a LAW, not decoration: the same profile is the same
+         colour in every table, lane and timeline on this page. This guide covers the
+         data channel and shows no profiles, so it spends none of them. */
+      --pvp: #5ea9e8;
+      --pve: #4caf50;
+      --season: #ff9800;
+
+      /* Reserved for data in the wrong place. */
+      --wrong: #ef5350;
+      --right: #4caf50;
+
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+
+      --body: "Segoe UI", "Noto Sans", system-ui, sans-serif;
+      --mono: Consolas, "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 14% -12%, rgba(197, 168, 74, .12), transparent 36rem),
+        var(--page);
+      color: var(--text);
+      font-family: var(--body);
+      line-height: 1.55;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    }
+
+    button, input, select { font: inherit; }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* ---------- shell ---------- */
+
+    .shell {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      gap: 44px;
+      width: min(1320px, calc(100% - 44px));
+      margin: 0 auto;
+      padding: 56px 0 96px;
+      align-items: start;
+    }
+
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .rail { position: static; margin-bottom: 40px; }
+    }
+
+    .rail {
+      position: sticky;
+      top: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 18px 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: rgba(24, 24, 24, .84);
+      backdrop-filter: blur(10px);
+    }
+
+    .rail-title {
+      margin: 0 0 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .rail a {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 13.5px;
+      text-decoration: none;
+      transition: background .15s, color .15s;
+    }
+
+    .rail a:hover { background: var(--surface-2); color: var(--text); }
+    .rail a .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+    .rail a.is-lab { color: var(--gold); }
+    .rail a.is-lab .n { color: var(--gold); }
+
+    .rail-gate {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line-soft);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    .rail-gate strong { display: block; color: var(--text); font-size: 13px; }
+
+    .gate-meter {
+      height: 5px;
+      margin-top: 8px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .gate-meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--gold);
+      transition: width .3s ease;
+    }
+
+    /* ---------- type ---------- */
+
+    main { max-width: 100%; }
+
+    .eyebrow {
+      margin: 0;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    h1 {
+      max-width: 18ch;
+      margin: 12px 0 18px;
+      font-size: clamp(38px, 5.6vw, 70px);
+      font-weight: 800;
+      line-height: 1.0;
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+
+    .lede {
+      max-width: 62ch;
+      margin: 0 0 14px;
+      font-size: 19px;
+      color: #c2c2c2;
+    }
+
+    h2 {
+      margin: 0 0 6px;
+      font-size: clamp(24px, 3vw, 33px);
+      font-weight: 800;
+      letter-spacing: -.03em;
+      line-height: 1.12;
+      text-wrap: balance;
+    }
+
+    h3 {
+      margin: 30px 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    p, li { max-width: 68ch; }
+    p { margin: 0 0 14px; }
+    ul, ol { margin: 0 0 14px; padding-left: 22px; }
+    li { margin-bottom: 7px; }
+
+    strong { color: #f0f0f0; }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: #ddc98a;
+      font-family: var(--mono);
+      font-size: .88em;
+    }
+
+    a { color: var(--gold); }
+
+    section { margin-bottom: 68px; scroll-margin-top: 24px; }
+
+    .chapter-head {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 16px;
+      align-items: baseline;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .chapter-num {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      color: var(--gold);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kicker {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 62ch;
+    }
+
+    /* ---------- callouts ---------- */
+
+    .note {
+      margin: 22px 0;
+      padding: 16px 18px;
+      border-left: 3px solid var(--gold);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: linear-gradient(100deg, rgba(197, 168, 74, .1), rgba(197, 168, 74, .02));
+    }
+
+    .note p:last-child { margin-bottom: 0; }
+
+    .note-label {
+      margin: 0 0 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .note.is-wrong { border-left-color: var(--wrong); background: linear-gradient(100deg, rgba(239, 83, 80, .1), transparent); }
+    .note.is-wrong .note-label { color: var(--wrong); }
+
+    /* ---------- code and logs ---------- */
+
+    .code {
+      margin: 18px 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #141414;
+      overflow: hidden;
+    }
+
+    .code-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .code pre {
+      margin: 0;
+      padding: 14px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.62;
+      tab-size: 2;
+    }
+
+    .code .del { display: block; background: rgba(239, 83, 80, .12); color: #f0b3b1; }
+    .code .add { display: block; background: rgba(76, 175, 80, .12); color: #b3e0b5; }
+    .code .cmt { color: var(--dim); }
+
+    /* ---------- labs ---------- */
+
+    .lab {
+      margin: 34px 0 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .lab-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      align-items: baseline;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line-soft);
+      background: linear-gradient(180deg, rgba(197, 168, 74, .07), transparent);
+    }
+
+    .lab-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .lab-head h3 { margin: 0; font-size: 19px; }
+    .lab-head .sub { width: 100%; margin: 2px 0 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
+
+    .lab-body { padding: 20px; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    .ctl-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .seg {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      background: var(--surface-2);
+      gap: 3px;
+    }
+
+    .seg button {
+      padding: 6px 14px;
+      border: 0;
+      border-radius: 99px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+
+    .seg button:hover { color: var(--text); }
+    .seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); }
+    .seg button[aria-pressed="true"][data-tone="bad"] { background: rgba(239, 83, 80, .2); color: var(--wrong); }
+    .seg button[aria-pressed="true"][data-tone="good"] { background: rgba(76, 175, 80, .2); color: var(--right); }
+
+    .btn {
+      padding: 8px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+
+    .btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--gold); }
+    .btn:disabled { opacity: .42; cursor: not-allowed; }
+    .btn.is-primary { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+    .btn.is-primary:hover:not(:disabled) { background: var(--gold-hover); }
+
+    .slider-wrap { display: flex; align-items: center; gap: 10px; }
+    .slider-wrap input[type="range"] { width: 210px; accent-color: var(--gold); }
+    .slider-read { font-family: var(--mono); font-size: 13px; color: var(--text); min-width: 15ch; }
+
+    .verdict {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: var(--surface-2);
+      font-size: 14.5px;
+    }
+
+    .verdict[data-tone="bad"] { border-color: rgba(239, 83, 80, .5); background: rgba(239, 83, 80, .08); }
+    .verdict[data-tone="good"] { border-color: rgba(76, 175, 80, .45); background: rgba(76, 175, 80, .07); }
+    .verdict b { display: block; margin-bottom: 3px; }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-top: 6px;
+    }
+
+    .stat {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .stat .k {
+      margin: 0 0 4px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .stat .v {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .v[data-tone="bad"] { color: var(--wrong); }
+    .v[data-tone="good"] { color: var(--right); }
+    .v[data-tone="season"] { color: var(--season); }
+    .v[data-tone="pve"] { color: var(--pve); }
+    .v[data-tone="pvp"] { color: var(--pvp); }
+
+    /* ---------- step chips, shared by labs A, B and D ---------- */
+
+    .lanes { display: grid; gap: 12px; }
+
+    .lane {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .lane[data-profile="pvp"] { border-left: 3px solid var(--pvp); }
+    .lane[data-profile="pve"] { border-left: 3px solid var(--pve); }
+    .lane[data-profile="season"] { border-left: 3px solid var(--season); }
+
+    .lane-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 12px;
+      align-items: baseline;
+      margin-bottom: 8px;
+      font-size: 13.5px;
+      font-weight: 700;
+    }
+
+    .lane-head .rev { font-family: var(--mono); font-size: 12px; color: var(--dim); font-weight: 600; }
+
+    .steps { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .step {
+      padding: 4px 9px;
+      border: 1px solid var(--line-soft);
+      border-radius: 99px;
+      background: #141414;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--dim);
+    }
+
+    .step.is-done { color: var(--text); border-color: var(--line); }
+    .step.is-now { color: var(--gold-ink); background: var(--gold); border-color: var(--gold); font-weight: 700; }
+    .step.is-kill { color: var(--wrong); border-color: rgba(239, 83, 80, .55); }
+    .step.is-win { color: var(--right); border-color: rgba(76, 175, 80, .55); }
+
+    /* ---------- labs C and D: the document rows ---------- */
+
+    .reads { border: 1px solid var(--line-soft); border-radius: var(--radius-sm); overflow: hidden; }
+
+    .read-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) 92px minmax(0, 1.9fr);
+      gap: 10px;
+      align-items: center;
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      background: var(--surface-2);
+    }
+
+    .read-row:last-child { border-bottom: 0; }
+    .read-row .rk { color: var(--text); overflow-wrap: anywhere; }
+    .read-row .rv { font-weight: 700; text-align: right; overflow-wrap: anywhere; }
+    .read-row .ro { font-size: 11.5px; color: var(--muted); font-family: var(--body); }
+    .read-row.is-dropped { opacity: .45; }
+    .read-row.is-dropped .rv { text-decoration: line-through; }
+    .read-row.is-boundary { box-shadow: inset 0 -2px 0 var(--wrong); }
+    .read-row .rv[data-tone="bad"] { color: var(--wrong); }
+    .read-row .rv[data-tone="good"] { color: var(--right); }
+
+    @media (max-width: 760px) {
+      .read-row { grid-template-columns: minmax(0, 1fr) 78px; }
+      .read-row .ro { display: none; }
+    }
+
+    /* ---------- lab-specific: the hourly meter in lab A ---------- */
+
+    .meter {
+      margin-top: 14px;
+      height: 10px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--wrong);
+      transition: width .25s ease;
+    }
+
+    .meter.is-good i { background: var(--right); }
+
+    /* ---------- quiz ---------- */
+
+    .quiz-intro {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 26px;
+      padding: 18px 20px;
+      border: 1px solid rgba(197, 168, 74, .35);
+      border-radius: var(--radius);
+      background: linear-gradient(110deg, rgba(197, 168, 74, .12), rgba(197, 168, 74, .02));
+    }
+
+    .quiz-score {
+      display: grid;
+      place-items: center;
+      min-width: 62px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      color: var(--gold);
+    }
+
+    .q {
+      margin-bottom: 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .q[data-state="right"] { border-color: rgba(76, 175, 80, .55); }
+    .q[data-state="wrong"] { border-color: rgba(239, 83, 80, .5); }
+
+    .q-head { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 16px 18px 10px; }
+
+    .q-num {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--gold);
+      padding-top: 3px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .q-text { margin: 0; font-size: 15.5px; font-weight: 600; max-width: 72ch; }
+
+    .q-opts { display: grid; gap: 7px; padding: 4px 18px 16px 44px; }
+
+    .opt {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      cursor: pointer;
+      font-size: 14px;
+      transition: border-color .15s, background .15s;
+    }
+
+    .opt:hover { border-color: var(--line); background: var(--surface-3); }
+    .opt input { margin: 3px 0 0; accent-color: var(--gold); }
+    .opt.is-right { border-color: rgba(76, 175, 80, .6); background: rgba(76, 175, 80, .1); }
+    .opt.is-wrong { border-color: rgba(239, 83, 80, .55); background: rgba(239, 83, 80, .1); }
+
+    .q-why {
+      display: none;
+      margin: 0 18px 16px 44px;
+      padding: 12px 14px;
+      border-left: 3px solid var(--line);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: var(--surface-2);
+      font-size: 13.5px;
+      color: #c4c4c4;
+    }
+
+    .q-why p { margin: 0; max-width: 74ch; }
+    .q[data-state] .q-why { display: block; }
+    .q[data-state="right"] .q-why { border-left-color: var(--right); }
+    .q[data-state="wrong"] .q-why { border-left-color: var(--wrong); }
+
+    .q-why .verdict-word { font-weight: 700; }
+    .q[data-state="right"] .verdict-word { color: var(--right); }
+    .q[data-state="wrong"] .verdict-word { color: var(--wrong); }
+
+    /* gate */
+
+    .gate {
+      margin-top: 30px;
+      padding: 22px 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .gate.is-locked { border-style: dashed; color: var(--muted); }
+    .gate.is-open { border-color: rgba(76, 175, 80, .55); background: linear-gradient(150deg, rgba(76, 175, 80, .1), transparent); }
+
+    .gate h3 { margin: 0 0 8px; }
+    .gate ul { margin-top: 10px; }
+
+    .approval {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: #141414;
+      border: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: #b9d8bb;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    footer {
+      margin-top: 22px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--dim);
+      font-size: 13px;
+    }
+
+    footer a { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="rail" aria-label="Guide contents">
+      <p class="rail-title">Curriculum</p>
+      <a href="#ch1"><span class="n">01</span><span>The channel this change hardens</span></a>
+      <a href="#ch2"><span class="n">02</span><span>One failure shape</span></a>
+      <a href="#ch3"><span class="n">03</span><span>The swap that could not finish</span></a>
+      <a href="#lab-a" class="is-lab"><span class="n">LAB</span><span>The hourly re-download</span></a>
+      <a href="#ch4"><span class="n">04</span><span>What the bookmark promises</span></a>
+      <a href="#ch5"><span class="n">05</span><span>A listener is not a participant</span></a>
+      <a href="#lab-b" class="is-lab"><span class="n">LAB</span><span>The rewritten result</span></a>
+      <a href="#ch6"><span class="n">06</span><span>What the publisher may write</span></a>
+      <a href="#lab-c" class="is-lab"><span class="n">LAB</span><span>The healthy channel</span></a>
+      <a href="#ch7"><span class="n">07</span><span>Where the wire ends</span></a>
+      <a href="#ch8"><span class="n">08</span><span>A guard that cleared itself</span></a>
+      <a href="#lab-d" class="is-lab"><span class="n">LAB</span><span>The ratchet</span></a>
+      <a href="#quiz"><span class="n">09</span><span>Comprehension gate</span></a>
+      <div class="rail-gate">
+        <strong id="railGateLabel">Gate locked</strong>
+        <span id="railGateHint">0 of 8 correct</span>
+        <div class="gate-meter"><i id="railGateBar"></i></div>
+      </div>
+    </nav>
+
+    <main>
+      <p class="eyebrow">PR #49 &middot; Code guide</p>
+      <h1>The download that ran every hour and never arrived</h1>
+      <p class="lede">
+        PR #48 gave the app a versioned data channel. A deep review of it found 43 defects,
+        and every one of them shares a shape. The update loop keeps running and never makes
+        progress, or the publisher writes a channel the app refuses and then calls that
+        channel healthy. Nothing surfaces in either case. Four labs let you operate the file
+        swap, the check result, the publisher verdict, and the schema guard.
+      </p>
+      <p class="lede" style="color:var(--muted);font-size:16px;">
+        This is the deep-review guide for PR #48, whose own code guide is
+        <code>2026-08-versioned-data-channel-code-guide.html</code>. That guide builds the
+        channel from nothing. Chapter 1 here is the short recap, enough to judge the rest.
+        Two decision documents carry the design.
+        <code>docs/decisions/feature-versioned-data-channel.md</code> holds the product
+        decision, and <code>feature-versioned-data-channel.spec.md</code> holds the technical
+        design. This change rewrites parts of that spec, and it updates the reference document
+        <code>docs/database-update-mechanism.md</code>.
+      </p>
+
+      <div class="note">
+        <p class="note-label">The whole change</p>
+        <p>
+          The client can now finish an install, and it refuses what it cannot carry. The
+          publisher now refuses to write a channel the app rejects. The title bar says when an
+          app update is the only way back to current data. The schema guard stays red until a
+          person adopts what it proposed.
+        </p>
+      </div>
+
+      <!-- ===================== CHAPTER 1 ===================== -->
+      <section id="ch1">
+        <div class="chapter-head">
+          <span class="chapter-num">01</span>
+          <div>
+            <h2>The channel this change hardens</h2>
+            <p class="kicker">
+              PR #48 replaced one text file with a versioned channel, and its own code guide
+              builds that design from nothing. This is the short version, and it names the
+              four parts every defect here lives between.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Every install of the app used to poll two files on raw main:
+          <code>TarkovHelper/Assets/db_version.txt</code> and <code>tarkov_data.db</code>. Any
+          difference in the version token started a full download. Nothing checked what
+          arrived.
+        </p>
+        <p>
+          That mechanism cannot be taught a new rule. Builds already in the field hardcode
+          those two addresses. A publish that older builds cannot read would reach every one
+          of them within minutes.
+        </p>
+        <p>
+          The channel answers that with four parts. Read them as a set, because the defects in
+          this change sit in the gaps between them.
+        </p>
+        <ul>
+          <li>
+            <strong>A data format version.</strong> An integer that names the reader contract
+            for the database. It covers the SQLite schema, the meaning of each field, and the
+            range of values a field may hold. It rises only when an older build would read new
+            data and show the user something wrong.
+          </li>
+          <li>
+            <strong>Versioned endpoints.</strong> One <code>data/v&lt;N&gt;/</code> directory
+            per data format version. A build polls the directory of the format it reads. One
+            csproj property picks that format, the bundled seed database, and the polled
+            addresses together. The old <code>Assets</code> pair stays as format 1's second
+            address, kept byte-identical forever.
+          </li>
+          <li>
+            <strong>A manifest.</strong> <code>data/v&lt;N&gt;/manifest.json</code> names the
+            version this endpoint serves, and the digest and the size of the database beside
+            it. The database also stamps the same format number into SQLite's
+            <code>user_version</code>, so the payload states its own contract.
+          </li>
+          <li>
+            <strong>An index.</strong> <code>data/index.json</code> names the data format
+            version the project publishes right now. A build compares that against its own pin
+            and learns it was left behind. Superseded directories are never rewritten, so a
+            freeze is never a step a person can forget.
+          </li>
+        </ul>
+
+        <div class="code">
+          <div class="code-head"><span>data/v1/manifest.json and data/index.json</span><span>as committed</span></div>
+          <pre><code>{
+  "schemaVersion": 1,
+  "dataFormatVersion": 1,
+  "version": "1.0.10",
+  "database": {
+    "file": "tarkov_data.db",
+    "digest": "sha256:1fdb928c9e1c7912a491244bfd1b4dc5607aaa7c6dd6b4ec0eda5986e91313c7",
+    "size": 6889472
+  }
+}
+
+{ "schemaVersion": 1, "currentDataFormatVersion": 1 }</code></pre>
+        </div>
+
+        <p>
+          One check runs at startup and then once an hour. It reads the index, reads the
+          manifest, compares the manifest version against a local bookmark, and downloads the
+          database when the two differ. The publisher is a separate program:
+          TarkovDBEditor's <code>DataPublishService</code> compares its build output against
+          the repository and writes the endpoint.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 2 ===================== -->
+      <section id="ch2">
+        <div class="chapter-head">
+          <span class="chapter-num">02</span>
+          <div>
+            <h2>One failure shape</h2>
+            <p class="kicker">
+              The review did not find one bad line. It found the same accident 43 times, in
+              two halves of the same mechanism.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          A silent update channel has a specific hazard. Nobody watches it. The user never
+          asked for a download and never sees one. So a channel that stops working looks
+          exactly like a channel with nothing to send.
+        </p>
+        <p>
+          Every finding in this change is a path that failed quietly rather than loudly. They
+          divide into two halves.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">The client half</p>
+          <p>
+            The check runs, does work, and ends where it started. The bookmark never advances,
+            so the next check repeats it. One install downloaded the whole 6.9 MB payload every
+            hour, forever, and the log line blamed the download.
+          </p>
+        </div>
+
+        <div class="note is-wrong">
+          <p class="note-label">The publisher half</p>
+          <p>
+            The tool writes a channel the app refuses, and then reports that channel as
+            healthy with the Publish button disabled. The operator sees nothing to do while CI
+            is red and every install has stopped updating.
+          </p>
+        </div>
+
+        <p>
+          The two halves meet at one rule. The client and the publisher must agree about what
+          a valid channel is. Where the client refuses a document, the publisher has to refuse
+          to write it. Where the publisher writes a document, the client has to accept it.
+        </p>
+        <p>
+          Chapters 3 to 5 take the client half, and chapter 6 takes the publisher half.
+          Chapter 7 shows where this change moved the boundary between them. Chapter 8 covers
+          the guard that was supposed to catch all of this.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 3 ===================== -->
+      <section id="ch3">
+        <div class="chapter-head">
+          <span class="chapter-num">03</span>
+          <div>
+            <h2>The swap that could not finish</h2>
+            <p class="kicker">
+              The last step of an install replaces one file with another. Three separate
+              defects lived in it, and each one made every later update on that install fail
+              in the same way.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The download lands in <code>tarkov_data.db.tmp</code>. The size and the digest are
+          checked, the data format stamp is read, and then the temp file has to become the
+          working database. Windows makes that step harder than it looks. A reader can hold
+          the file open, and a file can carry the read-only attribute.
+        </p>
+        <p>
+          The code before this change moved the working database to
+          <code>tarkov_data.db.bak</code>, then moved the temp file into place, then deleted
+          the backup. Read that sequence for what it does to a read-only database.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/DatabaseUpdateService.cs</span><span>before</span></div>
+          <pre><code>var backupPath = _databasePath + ".bak";
+if (File.Exists(_databasePath))
+{
+    SqliteConnection.ClearAllPools();
+    await Task.Delay(100);
+
+<span class="del">    if (File.Exists(backupPath))</span>
+<span class="del">    {</span>
+<span class="del">        File.Delete(backupPath);          // throws on a read-only backup</span>
+<span class="del">    }</span>
+
+    const int maxRetries = 3;
+    for (int retry = 0; retry &lt; maxRetries; retry++)
+    {
+        try
+        {
+<span class="del">            File.Move(_databasePath, backupPath);   // the attribute travels with it</span>
+            break;
+        }
+        catch (IOException) when (retry &lt; maxRetries - 1) { <span class="cmt">/* wait and retry */</span> }
+    }
+}
+
+<span class="del">File.Move(tempPath, _databasePath);</span>
+<span class="cmt">// ... and this delete is inside the try that reports the whole download</span>
+<span class="del">if (File.Exists(backupPath)) File.Delete(backupPath);</span></code></pre>
+        </div>
+
+        <p>
+          Windows moves a read-only file without complaint. It refuses to delete one. So the
+          two moves succeed, the backup inherits the attribute, and the final delete throws
+          <code>UnauthorizedAccessException</code>.
+        </p>
+        <p>
+          That throw reaches the outer catch of the download, which returns false. The new
+          bytes are already on disk. The check reports a failed download anyway, so the
+          bookmark stays where it was.
+        </p>
+        <p>
+          The install is now wedged in a second way. A read-only backup sits beside the
+          database, and the next check deletes it first. That delete throws before anything
+          else runs. Every hour, forever, the install downloads 6.9 MB and fails at step one.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/DatabaseUpdateService.cs</span><span>after, abbreviated</span></div>
+          <pre><code>internal async Task SwapIntoPlaceAsync(string tempPath)
+{
+<span class="add">    if (!File.Exists(_databasePath))</span>
+<span class="add">    {</span>
+<span class="add">        File.Move(tempPath, _databasePath);   // first install: nothing to back up</span>
+<span class="add">        return;</span>
+<span class="add">    }</span>
+
+    SqliteConnection.ClearAllPools();
+    await Task.Delay(100);
+
+    var backupPath = _databasePath + ".bak";
+<span class="add">    TryDelete(backupPath);        // clears the attribute, and logs rather than throwing</span>
+<span class="add">    ClearReadOnly(_databasePath);</span>
+
+    const int maxRetries = 3;
+    for (int retry = 0; ; retry++)
+    {
+        try
+        {
+<span class="add">            File.Replace(tempPath, _databasePath, backupPath, ignoreMetadataErrors: true);</span>
+            break;
+        }
+        <span class="cmt">// UnauthorizedAccessException as well as IOException: it is not an IOException</span>
+        <span class="cmt">// (its base is SystemException), so a filter naming only IOException lets the</span>
+        <span class="cmt">// denied-access swap escape on the first attempt without ever retrying.</span>
+<span class="add">        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException</span>
+<span class="add">                                   &amp;&amp; retry &lt; maxRetries - 1)</span>
+        { <span class="cmt">/* drain the pool, wait, retry */</span> }
+    }
+
+<span class="add">    TryDelete(backupPath);   // housekeeping, and it cannot fail the install</span>
+}</code></pre>
+        </div>
+
+        <p>
+          Three changes, and each answers a different failure.
+        </p>
+        <ul>
+          <li>
+            <strong>One call, not two moves.</strong> <code>File.Replace</code> is atomic on
+            NTFS and writes the backup itself. At every instant the database path holds either
+            the old file or the new one. The pair of moves left a window where it held
+            neither. A failure in that window left the install with no database, and nothing
+            reads the backup back.
+          </li>
+          <li>
+            <strong>The attribute is cleared first.</strong> <code>File.Replace</code> refuses
+            a read-only destination, and Windows refuses to delete a read-only backup. Either
+            one alone wedges every future update, so both are cleared before the loop, and the
+            clearing is logged because the attribute was somebody's intent.
+          </li>
+          <li>
+            <strong>The retry filter names both exceptions.</strong>
+            <code>UnauthorizedAccessException</code> derives from
+            <code>SystemException</code>, not from <code>IOException</code>. A filter naming
+            only <code>IOException</code> lets the denied swap escape on the first attempt
+            without ever retrying.
+          </li>
+        </ul>
+        <p>
+          The backup delete also moved out of the path that reports the download. The new
+          bytes are in place by then, so the install has succeeded. Removing the backup is
+          housekeeping, and housekeeping must not be able to report the whole download as
+          failed.
+        </p>
+      </section>
+
+      <!-- ===================== LAB A ===================== -->
+      <div class="lab" id="lab-a">
+        <div class="lab-head">
+          <span class="lab-tag">Lab A</span>
+          <h3>The hourly re-download</h3>
+          <p class="sub">
+            These tests hold the released behaviour:
+            <code>DataChannelEndpointServingTests.A_swap_onto_a_read_only_database_still_installs</code>,
+            <code>A_swap_gets_past_a_read_only_backup_left_behind_by_an_earlier_build</code> and
+            <code>A_swap_that_cannot_take_the_file_never_leaves_the_install_without_a_database</code>.
+            The retry limit is the shipped one: attempt 3 throws, because
+            <code>retry &lt; maxRetries - 1</code> is false there.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">Swap code</span>
+            <div class="seg" id="labAWorld">
+              <button type="button" data-a-world="before" data-tone="bad" aria-pressed="true">two moves</button>
+              <button type="button" data-a-world="shipped" data-tone="good">File.Replace</button>
+            </div>
+            <span class="ctl-label">On this machine</span>
+            <div class="seg" id="labAObstacle">
+              <button type="button" data-a-obstacle="none" aria-pressed="true">nothing in the way</button>
+              <button type="button" data-a-obstacle="readonly-db">read-only database</button>
+              <button type="button" data-a-obstacle="readonly-bak">read-only backup</button>
+              <button type="button" data-a-obstacle="held-open">a reader holds it</button>
+            </div>
+            <div class="slider-wrap">
+              <span class="ctl-label">Hours</span>
+              <input type="range" id="labAHour" min="0" max="12" step="1" value="0" aria-label="Hours since launch">
+              <span class="slider-read" id="labAHourRead">hour 0</span>
+            </div>
+          </div>
+
+          <div class="lanes">
+            <div class="lane">
+              <div class="lane-head">
+                <span>The check at this hour</span>
+                <span class="rev" id="labAWhich">check 1 of 1</span>
+              </div>
+              <div class="steps" id="labASteps"></div>
+            </div>
+          </div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">Database on disk</p>
+              <p class="v" id="labAInstalled">the new one</p>
+            </div>
+            <div class="stat">
+              <p class="k">Version bookmark</p>
+              <p class="v" id="labABookmark">advanced</p>
+            </div>
+            <div class="stat">
+              <p class="k">Downloaded so far</p>
+              <p class="v" id="labADownloaded">6.9 MB</p>
+            </div>
+            <div class="stat">
+              <p class="k">Leftover backup</p>
+              <p class="v" id="labALeftover">none</p>
+            </div>
+          </div>
+
+          <div class="meter" id="labAMeter"><i id="labAMeterBar"></i></div>
+
+          <div class="verdict" id="labAVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== CHAPTER 4 ===================== -->
+      <section id="ch4">
+        <div class="chapter-head">
+          <span class="chapter-num">04</span>
+          <div>
+            <h2>What the bookmark promises</h2>
+            <p class="kicker">
+              A local file holding one token decides whether an install downloads 6.9 MB. Four
+              defects came from trusting that token, or from trusting the document that names
+              it.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The bookmark is <code>Assets/db_version.txt</code>. The client writes the manifest
+          version into it after an install, and reads it back as the first non-blank line of
+          the file. The publisher reads its own copy the same way.
+        </p>
+        <p>
+          That read makes a promise about what a token may contain. A token holding a line
+          break survives the write and comes back truncated. It then compares unequal to the
+          published version on every launch, and the install downloads the whole database
+          every hour for its life.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/DataChannel.cs</span><span>new, abbreviated</span></div>
+          <pre><code>internal static bool IsBareVersionToken(string? version)
+{
+    if (string.IsNullOrWhiteSpace(version)) return false;
+
+    foreach (var c in version)
+    {
+        var allowed = (c &gt;= 'a' &amp;&amp; c &lt;= 'z')
+            || (c &gt;= 'A' &amp;&amp; c &lt;= 'Z')
+            || (c &gt;= '0' &amp;&amp; c &lt;= '9')
+            || c is '.' or '-' or '_' or '+';
+
+        if (!allowed) return false;
+    }
+
+    return true;
+}</code></pre>
+        </div>
+
+        <p>
+          This is an allowlist rather than a test for line breaks. A separator nobody thought
+          of cannot walk around an allowlist. The permitted set is semver's own version
+          grammar with the underscore added, which covers every shape this channel or a CalVer
+          successor can publish.
+        </p>
+        <p>
+          <code>IsBarePayloadName</code> guards the other free-text field for a related
+          reason. The manifest names the file to fetch, and that name is pasted onto the
+          endpoint URL. URI normalization resolves a <code>..</code> segment against the base
+          before the request goes out. An unchecked name can therefore point the download at
+          another format's directory, while the manifest still looks internally consistent.
+        </p>
+        <p>
+          Both tokens are trimmed before they are judged, the same way the digest is. A stray
+          space in a document somebody edited by hand is a formatting slip, not a different
+          value. Refusing the whole manifest over one would stop every install updating.
+        </p>
+
+        <h3>The bookmark is not evidence that a file exists</h3>
+        <p>
+          The freshness test used to trust the token alone. It records which version was
+          installed. It does not record that the file it names is still on disk.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/DatabaseUpdateService.cs</span><span>RunCheckAsync</span></div>
+          <pre><code><span class="del">if (LocalVersion == manifest.Version)</span>
+<span class="add">if (LocalVersion == manifest.Version &amp;&amp; File.Exists(_databasePath))</span>
+{
+    return Result(true, false, "Database is up to date");
+}</code></pre>
+        </div>
+
+        <p>
+          An antivirus quarantine, a half-finished copy or a manual delete leaves the bookmark
+          intact with no database under it. The old test reported "up to date" about a file
+          that was not there, and the install never repaired itself.
+        </p>
+
+        <h3>Two documents, two answers to the same question</h3>
+        <p>
+          The manifest and the index both carry a <code>schemaVersion</code>, which describes
+          the shape of the JSON document itself. This build reads shape 1. The two documents
+          answer a newer shape in opposite directions, and that asymmetry is deliberate.
+        </p>
+        <p>
+          A manifest above this bound is refused outright. Declining an install is always
+          safe, and a publish that put an unreadable shape at this address is an operator
+          error the next publish fixes.
+        </p>
+        <p>
+          An index above the bound is still read for one field. Refusing it would cost a
+          stranded build the only notice it will ever get. The index most likely changes shape at
+          the publish that bumps the data format. That is exactly the publish that strands
+          the builds reading this code.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/DataChannel.cs</span><span>ParseIndex, after</span></div>
+          <pre><code>var index = JsonSerializer.Deserialize&lt;Index&gt;(content, JsonOptions);
+if (index is not { SchemaVersion: &gt;= 1, CurrentDataFormatVersion: &gt;= 1 })
+{
+    return null;
+}
+
+<span class="add">if (index.SchemaVersion &gt; MAX_SUPPORTED_SCHEMA_VERSION)</span>
+<span class="add">{</span>
+<span class="add">    _log.Warning(</span>
+<span class="add">        $"Channel index declares schema version {index.SchemaVersion}, above the "</span>
+<span class="add">        + $"{MAX_SUPPORTED_SCHEMA_VERSION} this build understands. Reading only the "</span>
+<span class="add">        + "data format version it publishes, which every index schema carries.");</span>
+<span class="add">}</span>
+
+<span class="add">return index;</span></code></pre>
+        </div>
+
+        <div class="note">
+          <p class="note-label">The promise this rests on</p>
+          <p>
+            <code>currentDataFormatVersion</code> keeps its name and its meaning in every
+            future index schema. Builds in the field derive their stranded notice from it and
+            can never be taught a replacement. A schema that renames or drops it degrades to
+            the old behaviour rather than lying. The field then reads 0, and the document is
+            refused. Only repurposing it under the same name could mislead, and
+            that is what this promise forbids.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 5 ===================== -->
+      <section id="ch5">
+        <div class="chapter-head">
+          <span class="chapter-num">05</span>
+          <div>
+            <h2>A listener is not a participant</h2>
+            <p class="kicker">
+              Both update services announce what they are doing. A subscriber that throws was
+              able to cancel the work, hide its result, and wedge the service for the life of
+              the process.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          <code>UpdateService</code> checks for app updates and raises two events. It raises
+          <code>UpdateCheckStarted</code> before the network call and
+          <code>UpdateCheckCompleted</code> after it. The title-bar pill subscribes to both.
+        </p>
+        <p>
+          That subscriber formats localized strings and resolves WPF brushes. It can throw. A
+          control being torn down during shutdown is the realistic case.
+        </p>
+        <p>
+          Look at where the two raises sat. The started raise was outside the try. The success
+          raise was inside the try that classifies failures.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/UpdateService.cs</span><span>before</span></div>
+          <pre><code>_isChecking = true;
+<span class="del">UpdateCheckStarted?.Invoke(this, EventArgs.Empty);   // outside the try</span>
+
+try
+{
+    var response = await _httpClient.GetStringAsync(UpdateXmlUrl);
+    <span class="cmt">// ... parse, and set _availableUpdate ...</span>
+
+    _lastCheckTime = DateTime.Now;
+    _lastCheckError = null;
+<span class="del">    UpdateCheckCompleted?.Invoke(this, new UpdateCheckEventArgs(_availableUpdate, null));</span>
+    return _availableUpdate;
+}
+catch (Exception ex)
+{
+    _lastCheckTime = DateTime.Now;
+<span class="del">    _lastCheckError = ex;                    // the SUBSCRIBER's exception lands here</span>
+<span class="del">    UpdateCheckCompleted?.Invoke(this, new UpdateCheckEventArgs(null, ex));</span>
+    return null;
+}
+finally
+{
+    _isChecking = false;
+}</code></pre>
+        </div>
+
+        <p>
+          Follow one check that really did find an update. The completion raise reports it, the
+          pill subscriber throws, and control enters the catch. The catch records the
+          subscriber's exception as the error of the check.
+        </p>
+        <p>
+          Then it raises completion a second time, carrying no update and that error. The
+          second raise reaches the same subscriber, which throws again, and this time nothing
+          catches it.
+        </p>
+        <p>
+          <code>GetStatusKind</code> puts <code>Failed</code> ahead of
+          <code>UpdateAvailable</code>. So the update that really had been found disappeared
+          from the UI behind an error the network never produced.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/UpdateService.cs</span><span>after, abbreviated</span></div>
+          <pre><code><span class="add">if (Interlocked.CompareExchange(ref _isChecking, Checking, Idle) != Idle)</span>
+{
+    <span class="cmt">// The only exit that raises nothing: no check began here.</span>
+    return _availableUpdate;
+}
+
+UpdateInfo? found;
+Exception? error;
+
+try
+{
+    try
+    {
+<span class="add">        RaiseStarted();                  // contained</span>
+        <span class="cmt">// ... fetch, parse, set _availableUpdate ...</span>
+        found = _availableUpdate;
+        error = null;
+    }
+    catch (Exception ex)
+    {
+        found = null;
+        error = ex;
+    }
+
+    _lastCheckTime = DateTime.Now;
+    _lastCheckError = error;
+
+    <span class="cmt">// Outside the catch above, not merely inside a try: a completion subscriber</span>
+    <span class="cmt">// that throws must not be classified as a failed check.</span>
+<span class="add">    RaiseCompleted(new UpdateCheckEventArgs(found, error));</span>
+}
+finally
+{
+<span class="add">    Interlocked.Exchange(ref _isChecking, Idle);</span>
+}
+
+return found;</code></pre>
+        </div>
+
+        <p>
+          Four properties come out of that shape, and each answers a real failure.
+        </p>
+        <ul>
+          <li>
+            <strong>One exit raises completion once.</strong> The result is decided before the
+            raise, so a throwing subscriber has nothing left to rewrite.
+          </li>
+          <li>
+            <strong>Both raises are contained.</strong> A listener exists to be told what
+            happened. One that throws must not cancel the work it was merely being notified
+            of. The started raise gets the same treatment for symmetry, and because an
+            uncontained throw there left <code>_isChecking</code> set forever.
+          </li>
+          <li>
+            <strong>The flag is claimed atomically.</strong> The hourly timer and the Settings
+            button can arrive together, and a read then a write let both start a check.
+          </li>
+          <li>
+            <strong>The raises happen while the flag is held.</strong> A subscriber that calls
+            back in is answered "already in progress", rather than nesting a second check
+            inside the first one's own notification.
+          </li>
+        </ul>
+        <p>
+          <code>DatabaseUpdateService</code> received the same shape, and one thing more. Every
+          database service subscribes to its <code>DatabaseUpdated</code> event and reloads
+          from it. That raise walks the invocation list and contains each subscriber on its
+          own.
+        </p>
+        <p>
+          One try around the whole raise would let a single handler that throws skip every
+          service after it in the list. Half the app would keep reading the old data, with
+          nothing to retry it until the next publish.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">Why this had to be structural</p>
+          <p>
+            Both callers drop what they get. The database check runs from an
+            <code>async void</code> timer callback, where an escaped exception ends the
+            process. The timer starts the app check and forgets it. App.xaml.cs hooks no handler
+            for an unobserved task, so an escaped exception there vanishes with no log
+            line.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== LAB B ===================== -->
+      <div class="lab" id="lab-b">
+        <div class="lab-head">
+          <span class="lab-tag">Lab B</span>
+          <h3>The rewritten result</h3>
+          <p class="sub">
+            These tests hold the released behaviour:
+            <code>UpdateServiceTests.A_throwing_completion_subscriber_cannot_hide_the_update_it_was_told_about</code>,
+            <code>A_throwing_started_subscriber_neither_aborts_the_check_nor_wedges_the_flag</code> and
+            <code>A_throwing_completion_subscriber_cannot_replace_the_error_that_failed_the_check</code>.
+            The status line follows the shipped order in <code>GetStatusKind</code>: checking,
+            then failed, then available.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">Check code</span>
+            <div class="seg" id="labBWorld">
+              <button type="button" data-b-world="before" data-tone="bad" aria-pressed="true">raise inside the try</button>
+              <button type="button" data-b-world="shipped" data-tone="good">one exit, contained</button>
+            </div>
+            <span class="ctl-label">The feed</span>
+            <div class="seg" id="labBFeed">
+              <button type="button" data-b-feed="found" aria-pressed="true">offers 2026.9.0</button>
+              <button type="button" data-b-feed="fails">the network fails</button>
+            </div>
+            <span class="ctl-label">The pill subscriber</span>
+            <div class="seg" id="labBThrow">
+              <button type="button" data-b-throw="none" aria-pressed="true">returns</button>
+              <button type="button" data-b-throw="started">throws on started</button>
+              <button type="button" data-b-throw="completed">throws on completed</button>
+            </div>
+          </div>
+
+          <div class="lanes">
+            <div class="lane">
+              <div class="lane-head">
+                <span>One call to CheckForUpdateAsync</span>
+                <span class="rev" id="labBEscape">nothing escaped</span>
+              </div>
+              <div class="steps" id="labBSteps"></div>
+            </div>
+          </div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">Started raised</p>
+              <p class="v" id="labBStarted">1</p>
+            </div>
+            <div class="stat">
+              <p class="k">Completed raised</p>
+              <p class="v" id="labBCompleted">1</p>
+            </div>
+            <div class="stat">
+              <p class="k">LastCheckError</p>
+              <p class="v" id="labBError">none</p>
+            </div>
+            <div class="stat">
+              <p class="k">The title bar shows</p>
+              <p class="v" id="labBStatus">Update available</p>
+            </div>
+            <div class="stat">
+              <p class="k">The next check</p>
+              <p class="v" id="labBFlag">can run</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labBVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== CHAPTER 6 ===================== -->
+      <section id="ch6">
+        <div class="chapter-head">
+          <span class="chapter-num">06</span>
+          <div>
+            <h2>What the publisher may write</h2>
+            <p class="kicker">
+              TarkovDBEditor compares its build output against the repository and reports what
+              a publish would change. It could report a channel as healthy that every install
+              refuses.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The comparison is the operator's only view of the channel. It drives the Publish
+          button, the change count, and the confirm dialog. A comparison that reports nothing
+          to publish means the operator closes the window.
+        </p>
+        <p>
+          CI still guards the committed repository, so a bad channel does turn the build red.
+          But a red build the tool cannot clear is worse than no check. There is no way out of
+          the editor, and hand-copying files is the only repair.
+        </p>
+        <p>
+          The review found five gates that were absent or wrong. Each one is a rule the client
+          enforces and the publisher did not.
+        </p>
+
+        <h3>Two absent tokens compare equal</h3>
+        <p>
+          The manifest version and <code>db_version.txt</code> have to agree. The check
+          compared them and stopped there. With both absent, two nulls compared equal and the
+          endpoint read as healthy.
+        </p>
+        <p>
+          The app's own reader rejects a manifest with no version outright. So the tool
+          reported health for the one state in which every install stops updating.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/DataPublishService.cs</span><span>CheckManifestAsync, after</span></div>
+          <pre><code><span class="add">if (result.ManifestVersion == null)</span>
+<span class="add">{</span>
+    <span class="cmt">// Checked for presence rather than only against db_version.txt: two absent</span>
+    <span class="cmt">// tokens compare equal, and the app's own reader rejects a manifest with no</span>
+    <span class="cmt">// version outright.</span>
+<span class="add">    result.ManifestDriftReason = $"{shown} records no version, so clients cannot read it";</span>
+<span class="add">    return;</span>
+<span class="add">}</span>
+
+<span class="add">if (!IsPublishableVersionToken(result.ManifestVersion))</span>
+<span class="add">{</span>
+    <span class="cmt">// Checked before the two tokens are compared, because a db_version.txt</span>
+    <span class="cmt">// holding the same unreadable token compares equal.</span>
+<span class="add">    result.ManifestDriftReason =</span>
+<span class="add">        $"{shown} records version {result.ManifestVersion}, which no client can read";</span>
+<span class="add">    return;</span>
+<span class="add">}</span>
+
+if (!string.Equals(result.ManifestVersion, result.CurrentVersion, StringComparison.Ordinal))
+{
+    <span class="cmt">// ... the two documents disagree ...</span>
+}</code></pre>
+        </div>
+
+        <p>
+          <code>IsPublishableVersionToken</code> is the same allowlist as the app's
+          <code>DataChannel.IsBareVersionToken</code>. The two projects do not reference each
+          other, so the copies must change together. A test named
+          <code>A_token_the_editor_publishes_is_a_token_the_app_can_read</code> fails if they
+          drift apart.
+        </p>
+        <p>
+          The publish refuses a bad token before it writes anything, rather than only
+          reporting one it finds. Free text like <code>1.0 beta</code> used to reach the
+          manifest, and the app returns null for that whole document.
+        </p>
+
+        <h3>Stamping ran only on the copy path</h3>
+        <p>
+          Every published database carries its data format in SQLite's
+          <code>user_version</code>. The client refuses a payload that carries none, on the
+          stated grounds that every publish writes one.
+        </p>
+        <p>
+          The stamp was written only when there was build output to copy from. A publish with
+          no build output left the endpoint database unstamped, which breaks the invariant the
+          client states verbatim.
+        </p>
+
+        <div class="note">
+          <p class="note-label">One rule changed under the client too</p>
+          <p>
+            The guide for PR #48 shows an unstamped payload installing. A stamp of 0 read as
+            "this file makes no claim", and the client let it through. This change refuses it,
+            and the spec now says why. Every publish stamps the database before it hashes it,
+            so a payload that arrives unstamped did not come from a publish. It is also the
+            payload most likely to carry no digest, so accepting it installs a file that
+            nothing verified.
+          </p>
+        </div>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/DataPublishService.cs</span><span>PublishDatabaseAsync, after</span></div>
+          <pre><code>var sourceExists = File.Exists(sourceDbPath);
+if (sourceExists &amp;&amp; comparison.DbWillPublish)
+{
+    <span class="cmt">// Stamp here, not during the comparison: this is the last moment before the</span>
+    <span class="cmt">// bytes are read, and both endpoints receive the one stamped file.</span>
+    var stampFailure = await StampDataFormatAsync(sourceDbPath, comparison.LiveDataFormatVersion);
+    if (stampFailure != null) return Fail(result, stampFailure);
+
+    <span class="cmt">// ... copy to the endpoint, and to the Assets mirror while format 1 is live ...</span>
+}
+<span class="add">else if (!sourceExists)</span>
+<span class="add">{</span>
+    <span class="cmt">// No build output, so the endpoint copy is the database this publish</span>
+    <span class="cmt">// describes: it is the one that has to be stamped, and the one the mirror</span>
+    <span class="cmt">// is repaired from.</span>
+<span class="add">    var stampFailure = await StampDataFormatAsync(channelDbPath, comparison.LiveDataFormatVersion);</span>
+<span class="add">    if (stampFailure != null) return Fail(result, stampFailure);</span>
+
+<span class="add">    if (comparison.MirrorsToAssets)</span>
+<span class="add">    {</span>
+<span class="add">        await CopyFileWithShareAsync(channelDbPath, Path.Combine(_targetBasePath, DatabaseFileName));</span>
+<span class="add">    }</span>
+<span class="add">}</span></code></pre>
+        </div>
+
+        <h3>The mirror judgment was skipped, in both directions</h3>
+        <p>
+          Format 1 has two addresses. <code>data/v1/</code> is where new builds poll, and
+          <code>TarkovHelper/Assets/</code> is the address builds in the field hardcode. The
+          two must serve identical bytes, forever.
+        </p>
+        <p>
+          The comparison judged the mirror inside the branch that needs a source database.
+          With no build output it returned early, and <code>MirrorInSync</code> kept its
+          default of true. A real drift went unreported.
+        </p>
+        <p>
+          Both files being compared belong to the repository, so the missing build output does
+          not make the pair unjudgeable. A publish repairs the mirror from the endpoint copy,
+          which is why a drift found this way is always something the tool can clear.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">What the operator would have shipped</p>
+          <p>
+            The publish still wrote the channel token into the mirror's
+            <code>db_version.txt</code>. A fresh install seeds itself from
+            <code>Assets</code>. It would start bookmarked as up to date on a database it
+            never received, and it would never download again.
+          </p>
+        </div>
+
+        <h3>The index had no detector at all</h3>
+        <p>
+          <code>data/index.json</code> is the one channel document above the endpoints. It is
+          how a build learns that nothing further is coming for it. Nothing in the comparison
+          looked at it.
+        </p>
+        <p>
+          <code>CheckIndexAsync</code> compares the parsed fields rather than the rendered
+          bytes. The file is committed with CRLF, and this repository has no
+          <code>.gitattributes</code>. A byte comparison would therefore call a healthy index
+          drifted on whichever machine checked out the other line ending.
+        </p>
+
+        <h3>Republishing bytes that hold the same rows</h3>
+        <p>
+          The database changing its bytes is not the same as its data changing. SQLite records
+          a commit in the file header, and it can move pages. An editor session that leaves
+          the rows as it found them still writes a byte-different database.
+        </p>
+        <p>
+          The comparison compares bytes, so it says changed. A version token bumped for that
+          makes every install download a multi-megabyte file it already has, because a client
+          decides on the token alone.
+        </p>
+        <p>
+          The window now offers "Keep current version" for that case. It is offered only when
+          the database really is being replaced and the endpoint has a token to keep, which
+          <code>CanKeepPublishedVersion</code> states in one line.
+        </p>
+      </section>
+
+      <!-- ===================== LAB C ===================== -->
+      <div class="lab" id="lab-c">
+        <div class="lab-head">
+          <span class="lab-tag">Lab C</span>
+          <h3>The healthy channel</h3>
+          <p class="sub">
+            These tests hold the released behaviour:
+            <code>DataPublishChannelTests.Every_way_the_manifest_can_stop_matching_is_publishable</code>,
+            <code>Every_way_the_channel_index_can_stop_matching_is_publishable</code>,
+            <code>A_version_token_no_client_can_read_is_publishable_drift</code> and
+            <code>A_database_mirror_drift_is_repaired_from_the_endpoint_without_a_source</code>.
+            The endpoint below starts healthy at version 1.0.10.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">Comparison code</span>
+            <div class="seg" id="labCWorld">
+              <button type="button" data-c-world="before" data-tone="bad" aria-pressed="true">before</button>
+              <button type="button" data-c-world="shipped" data-tone="good">shipped</button>
+            </div>
+            <span class="ctl-label">What went wrong at the endpoint</span>
+            <div class="seg" id="labCFault">
+              <button type="button" data-c-fault="none" aria-pressed="true">nothing</button>
+              <button type="button" data-c-fault="no-version">no version</button>
+              <button type="button" data-c-fault="bad-token">unreadable token</button>
+              <button type="button" data-c-fault="unstamped">no stamp</button>
+              <button type="button" data-c-fault="index">index names v2</button>
+              <button type="button" data-c-fault="no-source">mirror drift</button>
+            </div>
+          </div>
+
+          <div class="reads" id="labCDocs"></div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">The tool reports</p>
+              <p class="v" id="labCTool">nothing to publish</p>
+            </div>
+            <div class="stat">
+              <p class="k">Publish button</p>
+              <p class="v" id="labCPublish">disabled</p>
+            </div>
+            <div class="stat">
+              <p class="k">Repository guard</p>
+              <p class="v" id="labCCi">green</p>
+            </div>
+            <div class="stat">
+              <p class="k">Every install</p>
+              <p class="v" id="labCInstalls">updates</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labCVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== CHAPTER 7 ===================== -->
+      <section id="ch7">
+        <div class="chapter-head">
+          <span class="chapter-num">07</span>
+          <div>
+            <h2>Where the wire ends</h2>
+            <p class="kicker">
+              Four boundaries moved. Each one puts a decision beside the thing it has to agree
+              with, so the two cannot be edited apart.
+            </p>
+          </div>
+        </div>
+
+        <h3>The protocol leaves the service</h3>
+        <p>
+          <code>DatabaseUpdateService</code> held the endpoint URLs, the document records, the
+          parsers, and the whole install procedure. The wire half now lives in
+          <code>DataChannel</code>: where the endpoints are, and what the documents they serve
+          may say.
+        </p>
+        <p>
+          The two drift for different reasons. The protocol changes when the published
+          documents change. The client changes when the install procedure changes. Every rule
+          about a document now sits beside the parser that enforces it.
+        </p>
+        <p>
+          <code>DataFormatVersion</code> deliberately stayed on the service. It identifies the
+          build rather than the wire, and most of its readers ask it that way: which seed the
+          repository ships, which pin the csproj carries, which baseline the drift guard
+          compares. <code>DataChannel</code> reads it in exactly one place, to name the
+          endpoint such a build polls.
+        </p>
+
+        <h3>The wording and the urgency travel together</h3>
+        <p>
+          The title-bar pill has two meanings now. An ordinary update keeps the reassuring
+          green install pill. A build whose data channel has been superseded gets an amber
+          pill that says so. Installing is the only thing that restarts its game data
+          updates.
+        </p>
+        <p>
+          That choice used to be made in two files. MainWindow decided the colour, and the
+          localization file held the words.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/HeaderUpdatePill.cs</span><span>new</span></div>
+          <pre><code>public static HeaderUpdatePillText For(LocalizationService loc, string version, bool isSuperseded)
+{
+    ArgumentNullException.ThrowIfNull(loc);
+
+    return isSuperseded
+        ? new HeaderUpdatePillText(
+            loc.HeaderUpdateForDataLabel,
+            string.Format(loc.HeaderUpdateForDataTooltipFormat, version),
+            HeaderUpdatePillTone.Warning)
+        : new HeaderUpdatePillText(
+            string.Format(loc.HeaderUpdateAvailableFormat, version),
+            string.Format(loc.HeaderVersionTooltipInstall, version),
+            HeaderUpdatePillTone.Success);
+}</code></pre>
+        </div>
+
+        <p>
+          The tone is semantic rather than a brush, so MainWindow only renders the result. A
+          new pill state cannot ship escalated words in the reassuring green.
+        </p>
+        <p>
+          The XAML lost the pill's <code>Background</code>, <code>Foreground</code> and
+          <code>AutomationProperties.Name</code>. The code behind assigns all three on every
+          path that shows the button. A value declared there would never be observed, and
+          editing it would do nothing. <code>UpdateStatusTests</code> guards both halves of
+          that asymmetry, including that the Settings twin still declares its own colours.
+        </p>
+        <p>
+          The accessible name is now the visible label, and the sentence moved to HelpText.
+          WCAG 2.5.3 requires the accessible name to contain the visible words, so speech
+          input can activate the pill by reading it aloud.
+        </p>
+
+        <h3>Background raises reach the UI without blocking it</h3>
+        <p>
+          Four handlers in MainWindow answer events raised on background threads. Three watch
+          log monitoring, and one answers the database check. They used a blocking
+          <code>Dispatcher.Invoke</code> or a bare <code>InvokeAsync</code>.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/UiDispatch.cs</span><span>new</span></div>
+          <pre><code>public static bool Post(Dispatcher dispatcher, Action action)
+{
+    ArgumentNullException.ThrowIfNull(dispatcher);
+    ArgumentNullException.ThrowIfNull(action);
+
+    <span class="cmt">// Shutdown started (but not finished) still counts as gone: the queue accepts</span>
+    <span class="cmt">// the operation and then never runs it, so the work is dropped either way.</span>
+    if (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+        return false;
+
+    try
+    {
+        dispatcher.BeginInvoke(action);
+        return true;
+    }
+    catch (InvalidOperationException) when (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+    {
+        <span class="cmt">// Shutdown began between the check above and the post.</span>
+        return false;
+    }
+}</code></pre>
+        </div>
+
+        <p>
+          Two hazards justify it. A blocking dispatch from a foreign thread throws
+          <code>TaskCanceledException</code> once the dispatcher shuts down, and that throw
+          escapes an <code>async void</code> callback unhandled. And a window unsubscribes its
+          handlers when it closes, but a raise already past its delegate read still arrives.
+        </p>
+        <p>
+          Only that teardown race is swallowed, and only while the dispatcher confirms it is
+          shutting down. Every other failure propagates.
+        </p>
+        <p>
+          Each posted body contains its own failures, because it runs later on the dispatcher.
+          An exception escaping it reaches <code>DispatcherUnhandledException</code>, which
+          App.xaml.cs leaves unhandled, and that ends the process. A failed repaint of the
+          version chip must not do that.
+        </p>
+
+        <div class="note">
+          <p class="note-label">The handlers that deliberately stay blocking</p>
+          <p>
+            The settings handlers must not post. <code>SettingsService</code> pairs its raise
+            with the apply under a snapshot identity guard, and posting would split the two.
+            The rule is about which thread raised the event, not about which handler looks
+            slow.
+          </p>
+        </div>
+
+        <h3>The publish method fits on a screen</h3>
+        <p>
+          <code>PublishAsync</code> folds from 204 lines to 114. The database step and the
+          endpoint documents became named methods, and a <code>Fail</code> helper records a
+          refusal as one statement rather than three.
+        </p>
+        <p>
+          <code>CompareFilesAsync</code> now returns a <code>FileGroupComparison</code> instead
+          of writing three counts through <code>Action&lt;int&gt;</code> callbacks. Twelve
+          count fields become four values, and no caller can pair one group's file list with
+          another group's counts.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 8 ===================== -->
+      <section id="ch8">
+        <div class="chapter-head">
+          <span class="chapter-num">08</span>
+          <div>
+            <h2>A guard that cleared itself</h2>
+            <p class="kicker">
+              The one test that protects the promise the whole channel rests on had the same
+              defect as the code it guards. It ran, it reported, and it left nothing behind.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Within one data format version, the published database only ever grows. Additions
+          are safe because readers feature-detect. A removed table, a removed column or a
+          retyped column breaks every build already reading that schema. Those builds cannot
+          be fixed after the fact.
+        </p>
+        <p>
+          <code>DataFormatDriftTests</code> compares the published database against a
+          committed baseline file. The baseline has to be a ratchet rather than a snapshot
+          taken once. A column a publish adds is invisible to the guard until the baseline
+          records it. Without a widening step, the next publish could drop that same column,
+          and the comparison would find nothing missing.
+        </p>
+        <p>
+          The widening step wrote the new baseline into the tracked baseline file, and then
+          failed the run. Read what the second run then does.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">The guard that only ever failed once</p>
+          <p>
+            The second run read the file the first run wrote. It found the schema unchanged
+            and went green, against a baseline nobody had reviewed or committed. A
+            non-additive change therefore failed once and passed from then on. Running the
+            tests also modified a tracked file as a side effect.
+          </p>
+        </div>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper.Tests/DataFormatBaseline.cs</span><span>Ratchet, after</span></div>
+          <pre><code>internal static DataFormatBaselineReport Ratchet(string baselinePath, DataFormatSchema current)
+{
+<span class="add">    var proposedPath = ProposedPathFor(baselinePath);</span>
+
+    if (!File.Exists(baselinePath))
+    {
+<span class="add">        Write(proposedPath, current);</span>
+        return new DataFormatBaselineReport(DataFormatBaselineOutcome.Bootstrapped, [], []);
+    }
+
+    var baseline = Load(baselinePath);
+    if (baseline is null)
+    {
+        return new DataFormatBaselineReport(DataFormatBaselineOutcome.Unreadable, [], []);
+    }
+
+    var (breaks, additions) = Compare(baseline, current);
+    if (breaks.Count &gt; 0)
+    {
+        <span class="cmt">// A stale proposal from an earlier addition is left alone: the run is red</span>
+        <span class="cmt">// either way, and it may still be the schema the maintainer meant to adopt.</span>
+        return new DataFormatBaselineReport(DataFormatBaselineOutcome.Broken, breaks, additions);
+    }
+
+    if (additions.Count &gt; 0)
+    {
+        <span class="cmt">// Proposed rather than applied, because only a committed baseline guards anything.</span>
+<span class="add">        Write(proposedPath, current);</span>
+        return new DataFormatBaselineReport(DataFormatBaselineOutcome.Widened, breaks, additions);
+    }
+
+<span class="add">    if (File.Exists(proposedPath)) File.Delete(proposedPath);</span>
+    return new DataFormatBaselineReport(DataFormatBaselineOutcome.Unchanged, breaks, additions);
+}</code></pre>
+        </div>
+
+        <p>
+          The proposal now lands beside the baseline as a <code>.proposed.json</code> sibling,
+          left untracked on purpose. It is the artifact a maintainer reads and adopts, and
+          adopting it is a rename. The guard stays red until somebody does that.
+        </p>
+        <p>
+          A break proposes nothing at all. A removal must not be able to launder itself by
+          arriving beside an addition.
+        </p>
+        <p>
+          Six of the existing cases had been passing because of the bug, and they are tightened
+          here. The failure message for every outcome now says which file to review, where to
+          move it, and that re-running without moving it stays red.
+        </p>
+
+        <h3>Two more test defects, from the same family</h3>
+        <p>
+          The three channel suites had each grown a private copy of the same fixture helpers,
+          and the copies had drifted. Two digest helpers returned lowercase hex while the third
+          returned uppercase. The two byte comparers disagreed about what they print when they
+          fail, which is the half of that assertion a reader depends on. One copy each of
+          <code>TestDigest</code>, <code>TestFiles</code> and <code>TestSqlite</code> replaces
+          them.
+        </p>
+        <p>
+          The test project also restated its own seed path and copied the 6.9 MB database into
+          its output. The path it restated was the frozen pre-channel mirror, which stops being
+          republished the moment the live data format leaves 1. The fixtures would then describe
+          format 1 data while driving an app that ships a newer format.
+        </p>
+        <p>
+          <code>TestSeed.DatabasePath</code> is now the single spelling, and it reads the app's
+          own bundled seed where the build already puts it. <code>SeedDatabaseTests</code> pins
+          the seed to the pinned data format, and guards the csproj coupling itself.
+        </p>
+      </section>
+
+      <!-- ===================== LAB D ===================== -->
+      <div class="lab" id="lab-d">
+        <div class="lab-head">
+          <span class="lab-tag">Lab D</span>
+          <h3>The ratchet</h3>
+          <p class="sub">
+            These tests hold the released behaviour:
+            <code>DataFormatDriftTests.An_addition_stays_red_on_a_re_run_until_the_proposal_is_adopted</code>,
+            <code>A_pure_addition_is_proposed_beside_the_baseline_rather_than_written_over_it</code>,
+            <code>A_removal_arriving_beside_an_addition_still_breaks_and_leaves_the_baseline_alone</code> and
+            <code>A_proposal_the_baseline_has_caught_up_with_is_cleared_away</code>. The committed
+            baseline starts as Quests(Id, Name) and MapMarkers(X REAL).
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">Ratchet code</span>
+            <div class="seg" id="labDWorld">
+              <button type="button" data-d-world="before" data-tone="bad" aria-pressed="true">writes the baseline</button>
+              <button type="button" data-d-world="shipped" data-tone="good">writes a proposal</button>
+            </div>
+            <span class="ctl-label">What the publish did</span>
+            <div class="seg" id="labDChange">
+              <button type="button" data-d-change="none" aria-pressed="true">nothing</button>
+              <button type="button" data-d-change="added">added a column</button>
+              <button type="button" data-d-change="removed">dropped a column</button>
+              <button type="button" data-d-change="retyped">retyped a column</button>
+              <button type="button" data-d-change="both">dropped one, added one</button>
+            </div>
+          </div>
+
+          <div class="controls">
+            <button type="button" class="btn is-primary" id="labDRun">Run the suite</button>
+            <button type="button" class="btn" id="labDAdopt">Adopt the proposal</button>
+            <button type="button" class="btn" id="labDReset">Start over</button>
+          </div>
+
+          <div class="reads" id="labDRuns"></div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">Last outcome</p>
+              <p class="v" id="labDOutcome">no run yet</p>
+            </div>
+            <div class="stat">
+              <p class="k">Committed baseline</p>
+              <p class="v" id="labDBaseline">Quests(Id, Name)</p>
+            </div>
+            <div class="stat">
+              <p class="k">Proposal beside it</p>
+              <p class="v" id="labDProposal">none</p>
+            </div>
+            <div class="stat">
+              <p class="k">Guarded from now on</p>
+              <p class="v" id="labDGuarded">Id, Name, X</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labDVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== QUIZ ===================== -->
+      <section id="quiz">
+        <div class="chapter-head">
+          <span class="chapter-num">09</span>
+          <div>
+            <h2>Comprehension gate</h2>
+            <p class="kicker">
+              There are eight questions. Each one needs the reasoning, and not the words. The
+              approval checklist below opens when all eight answers are correct. Each incorrect
+              answer gives an explanation, so you can read the chapter again.
+            </p>
+          </div>
+        </div>
+
+        <div class="quiz-intro">
+          <div class="quiz-score" id="quizScore">0/8</div>
+          <div>
+            <strong>This gate controls your speed. It is not a formality.</strong>
+            <p style="margin:4px 0 0;color:#c2c2c2;">
+              Questions 1 and 5 are the important ones. At those two points, an incorrect
+              reading of the sequence leaves the hole where it was. If you cannot answer them,
+              you did not review this change. Answer each question, read the explanation, and
+              correct your understanding.
+            </p>
+          </div>
+        </div>
+
+        <div id="quizList"></div>
+
+        <div class="gate is-locked" id="gate">
+          <h3 id="gateTitle">Approval checklist: locked</h3>
+          <p id="gateBody">Answer all eight questions correctly to unlock the reviewer checklist.</p>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          Sources. The product decision is
+          <code>docs/decisions/feature-versioned-data-channel.md</code>. The technical design is
+          <code>docs/decisions/feature-versioned-data-channel.spec.md</code>, whose integrity
+          section and drift-guard section this change rewrites. The reference document is
+          <code>docs/database-update-mechanism.md</code>.
+        </p>
+        <p>
+          This guide pairs with <code>2026-08-versioned-data-channel-code-guide.html</code>,
+          which covers PR #48. The two share a topic name, so they sort together, and they
+          read in that order. The labs obey the same decision logic as the code. But they are
+          examples, and they are not the released code.
+        </p>
+        <p>
+          These tests hold the released behaviour.
+          <code>DataChannelEndpointServingTests</code> drives a loopback server through a
+          complete update and every refusal, including the three swap cases in lab A.
+          <code>DataChannelTests</code> holds the document readers, the two allowlists and the
+          digest grammar. <code>UpdateServiceTests</code> and
+          <code>DataChannelEndpointServingTests</code> hold the subscriber containment in lab B.
+        </p>
+        <p>
+          <code>DataPublishChannelTests</code> drives real publishes against throwaway trees,
+          and holds every drift case in lab C. <code>DataFormatDriftTests</code> holds the
+          ratchet in lab D. <code>DataChannelMirrorTests</code> is the repository guard the lab
+          C stat tile names, and <code>UpdateStatusTests</code>,
+          <code>UiDispatchTests</code> and <code>MainWindowDataUpdateHandlerTests</code> hold
+          the UI half of chapter 7.
+        </p>
+        <p>
+          One number in lab A is a round figure. The published database is 6889472 bytes, which
+          this page prints as 6.9 MB.
+        </p>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+
+    function bindSegment(root, attr, onPick) {
+      var buttons = Array.prototype.slice.call(root.querySelectorAll("[" + attr + "]"));
+      buttons.forEach(function (b) {
+        b.addEventListener("click", function () {
+          buttons.forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+          onPick(b.getAttribute(attr));
+        });
+      });
+    }
+
+    function say(node, tone, title, body) {
+      node.setAttribute("data-tone", tone);
+      node.innerHTML = "";
+      node.appendChild(el("b", null, title));
+      node.appendChild(document.createTextNode(body));
+    }
+
+    function chip(parent, text, cls) {
+      parent.appendChild(el("span", "step" + (cls ? " " + cls : ""), text));
+    }
+
+    function row(parent, key, value, tone, note) {
+      var r = el("div", "read-row");
+      r.appendChild(el("span", "rk", key));
+      var v = el("span", "rv", value);
+      if (tone) v.setAttribute("data-tone", tone);
+      r.appendChild(v);
+      r.appendChild(el("span", "ro", note || ""));
+      parent.appendChild(r);
+    }
+
+    /* ================= Lab A: the hourly re-download ================= */
+
+    var A = { world: "before", obstacle: "none", hour: 0 };
+
+    var PAYLOAD_MB = 6.9;
+
+    var aSteps = document.getElementById("labASteps");
+    var aWhich = document.getElementById("labAWhich");
+    var aInstalled = document.getElementById("labAInstalled");
+    var aBookmark = document.getElementById("labABookmark");
+    var aDownloaded = document.getElementById("labADownloaded");
+    var aLeftover = document.getElementById("labALeftover");
+    var aHourRead = document.getElementById("labAHourRead");
+    var aMeter = document.getElementById("labAMeter");
+    var aMeterBar = document.getElementById("labAMeterBar");
+    var aVerdict = document.getElementById("labAVerdict");
+
+    // One check, exactly as the two code paths run it.
+    //
+    // before: delete a stale .bak, move the database onto it, move the temp file into
+    // place, delete the .bak again. Windows moves a read-only file and refuses to delete
+    // one, so the attribute travels to the backup and the last delete throws. That throw
+    // reaches the catch that reports the whole download.
+    //
+    // shipped: TryDelete clears the attribute off the backup and logs rather than
+    // throwing, ClearReadOnly clears it off the destination, and File.Replace retries on
+    // IOException or UnauthorizedAccessException while retry < maxRetries - 1.
+    function aCheck(bookmarked, leftoverBak) {
+      var steps = [];
+
+      if (bookmarked) {
+        steps.push({ t: "read manifest: 1.0.11", cls: "is-done" });
+        steps.push({ t: "the bookmark already says 1.0.11", cls: "is-win" });
+        steps.push({ t: "nothing to download", cls: "is-win" });
+        return {
+          steps: steps, downloaded: false, installed: true,
+          advanced: true, leftoverBak: leftoverBak, note: "current"
+        };
+      }
+
+      steps.push({ t: "read manifest: 1.0.11", cls: "is-done" });
+      steps.push({ t: "download 6.9 MB to .tmp", cls: "is-done" });
+      steps.push({ t: "digest and size match", cls: "is-done" });
+      steps.push({ t: "stamp says data format 1", cls: "is-done" });
+
+      var roBak = leftoverBak || A.obstacle === "readonly-bak";
+
+      if (A.world === "before") {
+        if (roBak) {
+          steps.push({ t: "File.Delete(.bak): access denied", cls: "is-kill" });
+          steps.push({ t: "the check reports a failed download", cls: "is-kill" });
+          return {
+            steps: steps, downloaded: true, installed: false,
+            advanced: false, leftoverBak: true, note: "wedged"
+          };
+        }
+
+        steps.push({ t: "File.Delete(.bak): nothing there", cls: "is-done" });
+
+        if (A.obstacle === "held-open") {
+          steps.push({ t: "File.Move(db to .bak): in use, retry 1", cls: "is-done" });
+          steps.push({ t: "retry 2", cls: "is-done" });
+          steps.push({ t: "attempt 3 throws", cls: "is-kill" });
+          return {
+            steps: steps, downloaded: true, installed: false,
+            advanced: false, leftoverBak: false, note: "held"
+          };
+        }
+
+        steps.push({ t: "File.Move(db to .bak)", cls: "is-done" });
+        steps.push({ t: "the path holds no database", cls: "is-now" });
+        steps.push({ t: "File.Move(.tmp to db)", cls: "is-done" });
+
+        if (A.obstacle === "readonly-db") {
+          steps.push({ t: "File.Delete(.bak): access denied", cls: "is-kill" });
+          steps.push({ t: "the check reports a failed download", cls: "is-kill" });
+          return {
+            steps: steps, downloaded: true, installed: true,
+            advanced: false, leftoverBak: true, note: "unrecorded"
+          };
+        }
+
+        steps.push({ t: "File.Delete(.bak)", cls: "is-done" });
+        steps.push({ t: "the bookmark advances to 1.0.11", cls: "is-win" });
+        return {
+          steps: steps, downloaded: true, installed: true,
+          advanced: true, leftoverBak: false, note: "installed"
+        };
+      }
+
+      steps.push({
+        t: roBak ? "TryDelete(.bak): clear read-only, delete" : "TryDelete(.bak): nothing there",
+        cls: roBak ? "is-win" : "is-done"
+      });
+      steps.push({
+        t: A.obstacle === "readonly-db" ? "ClearReadOnly(db): attribute removed" : "ClearReadOnly(db): nothing to clear",
+        cls: A.obstacle === "readonly-db" ? "is-win" : "is-done"
+      });
+
+      if (A.obstacle === "held-open") {
+        steps.push({ t: "File.Replace attempt 1: in use", cls: "is-done" });
+        steps.push({ t: "attempt 2: in use", cls: "is-done" });
+        steps.push({ t: "attempt 3 throws, the database stays", cls: "is-kill" });
+        return {
+          steps: steps, downloaded: true, installed: false,
+          advanced: false, leftoverBak: false, note: "held"
+        };
+      }
+
+      steps.push({ t: "File.Replace attempt 1", cls: "is-win" });
+      steps.push({ t: "TryDelete(.bak): housekeeping", cls: "is-done" });
+      steps.push({ t: "the bookmark advances to 1.0.11", cls: "is-win" });
+      return {
+        steps: steps, downloaded: true, installed: true,
+        advanced: true, leftoverBak: false, note: "installed"
+      };
+    }
+
+    function aTimeline() {
+      var bookmarked = false;
+      var leftoverBak = false;
+      var installed = false;
+      var mb = 0;
+      var last = null;
+      var downloads = 0;
+
+      for (var h = 0; h <= A.hour; h++) {
+        var r = aCheck(bookmarked, leftoverBak);
+        if (r.downloaded) { mb += PAYLOAD_MB; downloads++; }
+        if (r.advanced) bookmarked = true;
+        if (r.installed) installed = true;
+        leftoverBak = r.leftoverBak;
+        last = r;
+      }
+
+      return {
+        last: last, mb: mb, downloads: downloads, checks: A.hour + 1,
+        bookmarked: bookmarked, installed: installed, leftoverBak: leftoverBak
+      };
+    }
+
+    function aPaint() {
+      var t = aTimeline();
+
+      aSteps.innerHTML = "";
+      t.last.steps.forEach(function (s) { chip(aSteps, s.t, s.cls); });
+
+      aHourRead.textContent = "hour " + A.hour;
+      aWhich.textContent = "check " + t.checks + " of " + t.checks;
+
+      aInstalled.textContent = t.installed ? "the new one" : "the old one";
+      aInstalled.setAttribute("data-tone", t.installed ? "good" : "bad");
+
+      aBookmark.textContent = t.bookmarked ? "advanced" : "unchanged";
+      aBookmark.setAttribute("data-tone", t.bookmarked ? "good" : "bad");
+
+      aDownloaded.textContent = t.mb.toFixed(1) + " MB in " + t.downloads + " downloads";
+      aDownloaded.setAttribute("data-tone", t.downloads > 1 ? "bad" : "good");
+
+      aLeftover.textContent = t.leftoverBak ? "read-only .bak" : "none";
+      aLeftover.setAttribute("data-tone", t.leftoverBak ? "bad" : "good");
+
+      var worst = PAYLOAD_MB * 13;
+      aMeterBar.style.width = Math.min(100, 100 * t.mb / worst) + "%";
+      aMeter.className = t.downloads > 1 ? "meter" : "meter is-good";
+
+      if (t.last.note === "unrecorded") {
+        say(aVerdict, "bad", "The install worked, and the check called it a failure.",
+          "The backup inherited the read-only attribute from the database it replaced. " +
+          "Deleting it threw, and that throw reached the catch that reports the download. " +
+          "The new bytes are on disk and the bookmark still names the old version. Move the " +
+          "slider to hour 1 to see what the leftover backup does to every later check.");
+      } else if (t.last.note === "wedged") {
+        say(aVerdict, "bad", "Every check now fails at the first line.",
+          "Windows refuses to delete a read-only file, and nothing clears the attribute. " +
+          "The check downloads the whole payload and throws before it touches the database. " +
+          "This install downloads " + PAYLOAD_MB + " MB an hour for as long as the file is there.");
+      } else if (t.last.note === "held") {
+        say(aVerdict, "bad", "A reader holds the file, and the retries run out.",
+          "This is the transient the retry loop exists for, and both code paths handle it the " +
+          "same way. Attempt 3 throws because the filter tests retry < maxRetries - 1, and the " +
+          "caller keeps its database. The cost is one wasted download an hour until the reader " +
+          "lets go.");
+      } else if (t.last.note === "current") {
+        say(aVerdict, "good", "The install is current and downloads nothing.",
+          "The bookmark names the version the manifest names, and the database is on disk. " +
+          "Both halves of that test matter: the version alone would report a quarantined " +
+          "database as up to date.");
+      } else {
+        say(aVerdict, "good", "The swap finished and the bookmark advanced.",
+          A.world === "before"
+            ? "Nothing was in the way, so the pair of moves worked. The window between them is " +
+              "still there: a failure landing after the first move leaves the database path " +
+              "empty, and nothing reads the backup back."
+            : "File.Replace put the new bytes in place in one operation, so the database path " +
+              "never held nothing. Deleting the backup afterwards is housekeeping and cannot " +
+              "report the install as failed.");
+      }
+    }
+
+    bindSegment(document.getElementById("labAWorld"), "data-a-world", function (v) { A.world = v; aPaint(); });
+    bindSegment(document.getElementById("labAObstacle"), "data-a-obstacle", function (v) { A.obstacle = v; aPaint(); });
+    document.getElementById("labAHour").addEventListener("input", function () {
+      A.hour = parseInt(this.value, 10) || 0;
+      aPaint();
+    });
+    aPaint();
+
+    /* ================= Lab B: the rewritten result ================= */
+
+    var B = { world: "before", feed: "found", thrown: "none" };
+
+    var bSteps = document.getElementById("labBSteps");
+    var bEscape = document.getElementById("labBEscape");
+    var bStarted = document.getElementById("labBStarted");
+    var bCompleted = document.getElementById("labBCompleted");
+    var bError = document.getElementById("labBError");
+    var bStatus = document.getElementById("labBStatus");
+    var bFlag = document.getElementById("labBFlag");
+    var bVerdict = document.getElementById("labBVerdict");
+
+    var SUBSCRIBER_ERROR = "InvalidOperationException";
+    var NETWORK_ERROR = "HttpRequestException";
+
+    // The shipped oracle, copied from UpdateService.GetStatusKind. Order matters: an
+    // in-progress check wins, then a failure, then an available update.
+    function statusKind(isChecking, lastCheckFailed, updateAvailable, hasCompletedCheck) {
+      if (isChecking) return "Checking";
+      if (lastCheckFailed) return "Check failed";
+      if (updateAvailable) return "Update available";
+      if (hasCompletedCheck) return "Up to date";
+      return "no status yet";
+    }
+
+    function bRun() {
+      var steps = [];
+      var started = 0;
+      var completed = 0;
+      var error = null;
+      var available = false;
+      var escaped = false;
+      var flagStuck = false;
+      var returned;
+
+      if (B.world === "before") {
+        steps.push({ t: "_isChecking = true", cls: "is-done" });
+
+        started++;
+        steps.push({ t: "raise started, outside the try", cls: "is-done" });
+        if (B.thrown === "started") {
+          escaped = true;
+          flagStuck = true;
+          steps.push({ t: "the subscriber throws", cls: "is-kill" });
+          steps.push({ t: "the throw escapes, and the flag stays true", cls: "is-kill" });
+          return {
+            steps: steps, started: started, completed: completed, error: null,
+            available: false, escaped: escaped, flagStuck: flagStuck,
+            returned: "an exception escaped", note: "wedged"
+          };
+        }
+
+        if (B.feed === "found") {
+          available = true;
+          steps.push({ t: "the feed offers 2026.9.0", cls: "is-done" });
+          steps.push({ t: "_lastCheckError = null", cls: "is-done" });
+          completed++;
+          steps.push({ t: "raise completed(update, null)", cls: "is-now" });
+
+          if (B.thrown === "completed") {
+            steps.push({ t: "the subscriber throws", cls: "is-kill" });
+            error = SUBSCRIBER_ERROR;
+            steps.push({ t: "the catch records the subscriber error", cls: "is-kill" });
+            completed++;
+            steps.push({ t: "raise completed(null, error)", cls: "is-kill" });
+            escaped = true;
+            steps.push({ t: "it throws again, and escapes", cls: "is-kill" });
+            returned = "an exception escaped";
+            return {
+              steps: steps, started: started, completed: completed, error: error,
+              available: available, escaped: escaped, flagStuck: false,
+              returned: returned, note: "hidden"
+            };
+          }
+
+          returned = "the update";
+          return {
+            steps: steps, started: started, completed: completed, error: null,
+            available: available, escaped: false, flagStuck: false,
+            returned: returned, note: "clean"
+          };
+        }
+
+        steps.push({ t: "the fetch throws", cls: "is-kill" });
+        error = NETWORK_ERROR;
+        steps.push({ t: "the catch records the network error", cls: "is-done" });
+        completed++;
+        steps.push({ t: "raise completed(null, error)", cls: "is-now" });
+        if (B.thrown === "completed") {
+          escaped = true;
+          steps.push({ t: "the subscriber throws, and escapes", cls: "is-kill" });
+          returned = "an exception escaped";
+        } else {
+          returned = "null";
+        }
+        return {
+          steps: steps, started: started, completed: completed, error: error,
+          available: false, escaped: escaped, flagStuck: false,
+          returned: returned, note: escaped ? "escaped" : "failed"
+        };
+      }
+
+      steps.push({ t: "Interlocked claims the flag", cls: "is-done" });
+      started++;
+      steps.push({ t: "RaiseStarted, contained", cls: "is-done" });
+      if (B.thrown === "started") {
+        steps.push({ t: "the subscriber throws, and is logged", cls: "is-win" });
+      }
+
+      if (B.feed === "found") {
+        available = true;
+        steps.push({ t: "the feed offers 2026.9.0", cls: "is-done" });
+        steps.push({ t: "found = the update, error = null", cls: "is-done" });
+      } else {
+        steps.push({ t: "the fetch throws", cls: "is-kill" });
+        error = NETWORK_ERROR;
+        steps.push({ t: "found = null, error = the network error", cls: "is-done" });
+      }
+
+      steps.push({ t: "_lastCheckError = error", cls: "is-done" });
+      completed++;
+      steps.push({ t: "RaiseCompleted, contained", cls: "is-now" });
+      if (B.thrown === "completed") {
+        steps.push({ t: "the subscriber throws, and is logged", cls: "is-win" });
+      }
+      steps.push({ t: "the finally releases the flag", cls: "is-win" });
+
+      return {
+        steps: steps, started: started, completed: completed, error: error,
+        available: available, escaped: false, flagStuck: false,
+        returned: available ? "the update" : "null",
+        note: B.feed === "found" ? "clean" : "failed"
+      };
+    }
+
+    function bPaint() {
+      var r = bRun();
+
+      bSteps.innerHTML = "";
+      r.steps.forEach(function (s) { chip(bSteps, s.t, s.cls); });
+
+      bEscape.textContent = r.escaped
+        ? "an exception escaped unobserved"
+        : "nothing escaped";
+
+      bStarted.textContent = String(r.started);
+      bCompleted.textContent = String(r.completed);
+      bCompleted.setAttribute("data-tone", r.completed === 1 ? "good" : "bad");
+
+      bError.textContent = r.error || "none";
+      bError.setAttribute("data-tone", r.error === SUBSCRIBER_ERROR ? "bad" : "good");
+
+      var kind = statusKind(r.flagStuck, r.error != null, r.available, r.completed > 0);
+      bStatus.textContent = kind;
+      bStatus.setAttribute(
+        "data-tone",
+        (B.feed === "found" && kind !== "Update available") ? "bad" : "good");
+
+      bFlag.textContent = r.flagStuck ? "always in progress" : "can run";
+      bFlag.setAttribute("data-tone", r.flagStuck ? "bad" : "good");
+
+      if (r.note === "wedged") {
+        say(bVerdict, "bad", "One throw ends every check this process will ever run.",
+          "The started raise sat outside the try, so nothing released the flag. Every later " +
+          "call returns early on 'already in progress'. Both callers drop the task and no " +
+          "handler is hooked for an unobserved one, so the throw is never logged.");
+      } else if (r.note === "hidden") {
+        say(bVerdict, "bad", "The update was found, and the UI shows a failure.",
+          "The success raise sat inside the try that classifies failures. The subscriber " +
+          "error became the error of the check. A second completion said no update was " +
+          "found, and GetStatusKind puts a failure ahead of an available update. " +
+          "The pill the subscriber was told about is the pill it hid.");
+      } else if (r.note === "escaped") {
+        say(bVerdict, "bad", "The error is right, and the throw still escapes.",
+          "The network error is recorded correctly here, because the catch ran before the " +
+          "raise. But the raise inside the catch has nothing above it, so the subscriber " +
+          "exception leaves the method unobserved.");
+      } else if (r.note === "failed") {
+        say(bVerdict, "good", "A failed check reports the failure it really had.",
+          "The error is the network error, one completion carried it, and a throwing " +
+          "subscriber cannot replace it. A previously found update stays installable, " +
+          "which is why the failure has to stay visible beside it.");
+      } else {
+        say(bVerdict, "good", "The result is decided before anyone is told.",
+          "One started raise, one completed raise, and the found update travels back to the " +
+          "caller. A subscriber that throws is logged and nothing else. The raise happens " +
+          "while the flag is still held, so a subscriber that calls back in is turned away.");
+      }
+    }
+
+    bindSegment(document.getElementById("labBWorld"), "data-b-world", function (v) { B.world = v; bPaint(); });
+    bindSegment(document.getElementById("labBFeed"), "data-b-feed", function (v) { B.feed = v; bPaint(); });
+    bindSegment(document.getElementById("labBThrow"), "data-b-throw", function (v) { B.thrown = v; bPaint(); });
+    bPaint();
+
+    /* ================= Lab C: the healthy channel ================= */
+
+    var C = { world: "before", fault: "none" };
+
+    var cDocs = document.getElementById("labCDocs");
+    var cTool = document.getElementById("labCTool");
+    var cPublish = document.getElementById("labCPublish");
+    var cCi = document.getElementById("labCCi");
+    var cInstalls = document.getElementById("labCInstalls");
+    var cVerdict = document.getElementById("labCVerdict");
+
+    // Each fault is one of the states the shipped comparison now reports, with the drift
+    // string CheckManifestAsync or CheckIndexAsync writes for it.
+    var CFAULTS = {
+      "none": {
+        docs: [
+          ["data/v1/manifest.json version", "1.0.10", null],
+          ["data/v1/db_version.txt", "1.0.10", null],
+          ["data/v1/tarkov_data.db user_version", "1", null],
+          ["data/index.json currentDataFormatVersion", "1", null],
+          ["TarkovHelper/Assets mirror", "same bytes", null]
+        ],
+        reason: null,
+        installs: "updates normally",
+        ci: "green"
+      },
+      "no-version": {
+        docs: [
+          ["data/v1/manifest.json version", "(absent)", "bad"],
+          ["data/v1/db_version.txt", "(missing)", "bad"],
+          ["data/v1/tarkov_data.db user_version", "1", null],
+          ["data/index.json currentDataFormatVersion", "1", null],
+          ["TarkovHelper/Assets mirror", "same bytes", null]
+        ],
+        reason: "data/v1/manifest.json records no version, so clients cannot read it",
+        installs: "never update again",
+        ci: "red"
+      },
+      "bad-token": {
+        docs: [
+          ["data/v1/manifest.json version", "1.0 beta", "bad"],
+          ["data/v1/db_version.txt", "1.0 beta", "bad"],
+          ["data/v1/tarkov_data.db user_version", "1", null],
+          ["data/index.json currentDataFormatVersion", "1", null],
+          ["TarkovHelper/Assets mirror", "same bytes", null]
+        ],
+        reason: "data/v1/manifest.json records version 1.0 beta, which no client can read",
+        installs: "never update again",
+        ci: "red"
+      },
+      "unstamped": {
+        docs: [
+          ["data/v1/manifest.json version", "1.0.11", null],
+          ["data/v1/db_version.txt", "1.0.11", null],
+          ["data/v1/tarkov_data.db user_version", "0", "bad"],
+          ["data/index.json currentDataFormatVersion", "1", null],
+          ["TarkovHelper/Assets mirror", "same bytes", null]
+        ],
+        reason: "data/v1/tarkov_data.db carries no data format stamp, so clients refuse it",
+        installs: "re-download hourly",
+        ci: "red"
+      },
+      "index": {
+        docs: [
+          ["data/v1/manifest.json version", "1.0.11", null],
+          ["data/v1/db_version.txt", "1.0.11", null],
+          ["data/v1/tarkov_data.db user_version", "1", null],
+          ["data/index.json currentDataFormatVersion", "2", "bad"],
+          ["TarkovHelper/Assets mirror", "same bytes", null]
+        ],
+        reason: "data/index.json publishes data format 2, not 1",
+        installs: "show a false warning",
+        ci: "red"
+      },
+      "no-source": {
+        docs: [
+          ["data/v1/manifest.json version", "1.0.10", null],
+          ["data/v1/db_version.txt", "1.0.10", null],
+          ["data/v1/tarkov_data.db user_version", "1", null],
+          ["data/index.json currentDataFormatVersion", "1", null],
+          ["TarkovHelper/Assets mirror", "older bytes", "bad"]
+        ],
+        reason: "the Assets mirror and data/v1 hold different bytes",
+        installs: "seed from wrong bytes",
+        ci: "red"
+      }
+    };
+
+    function cPaint() {
+      var f = CFAULTS[C.fault];
+      var healthy = f.reason === null;
+      var seen = healthy || C.world === "shipped";
+
+      cDocs.innerHTML = "";
+      f.docs.forEach(function (d) {
+        var note = "";
+        if (d[2] === "bad") {
+          note = seen ? "the comparison reports this" : "nothing looks at this";
+        }
+        row(cDocs, d[0], d[1], d[2], note);
+      });
+
+      if (healthy) {
+        cTool.textContent = "in sync";
+        cTool.setAttribute("data-tone", "good");
+      } else if (seen) {
+        cTool.textContent = "needs a publish";
+        cTool.setAttribute("data-tone", "good");
+      } else {
+        cTool.textContent = "nothing to publish";
+        cTool.setAttribute("data-tone", "bad");
+      }
+
+      var enabled = !healthy && seen;
+      cPublish.textContent = enabled ? "enabled" : "disabled";
+      cPublish.setAttribute("data-tone", (healthy || enabled) ? "good" : "bad");
+
+      cCi.textContent = f.ci;
+      cCi.setAttribute("data-tone", f.ci === "green" ? "good" : "bad");
+
+      cInstalls.textContent = seen && !healthy ? "recover on publish" : f.installs;
+      cInstalls.setAttribute("data-tone", healthy || seen ? "good" : "bad");
+
+      if (healthy) {
+        say(cVerdict, "good", "The endpoint describes itself correctly.",
+          "The manifest, the bookmark, the stamp, the index and the mirror all agree. Both " +
+          "code paths report nothing to publish, which is what makes the drift cases below " +
+          "meaningful rather than vacuous.");
+      } else if (seen) {
+        say(cVerdict, "good", "The tool names the fault and can clear it.",
+          "The comparison reports: " + f.reason + ". Publish is enabled, the publish " +
+          "rewrites the endpoint documents, and the next comparison finds nothing to do. " +
+          "Every drift the repository guard can turn red is now a drift this tool can " +
+          "repair.");
+      } else {
+        say(cVerdict, "bad", "The tool reports a channel that every install refuses.",
+          "Nothing in the comparison looks at this, so the operator sees a healthy endpoint " +
+          "with the Publish button disabled. The repository guard is red and there is no " +
+          "way out of the editor. Meanwhile installs " + f.installs + ".");
+      }
+    }
+
+    bindSegment(document.getElementById("labCWorld"), "data-c-world", function (v) { C.world = v; cPaint(); });
+    bindSegment(document.getElementById("labCFault"), "data-c-fault", function (v) { C.fault = v; cPaint(); });
+    cPaint();
+
+    /* ================= Lab D: the ratchet ================= */
+
+    // A schema is a map of table name to a map of column name to declared type, which is
+    // what DataFormatBaseline.ReadSchema returns. Written out here as plain objects.
+    function schema(spec) {
+      var out = {};
+      Object.keys(spec).forEach(function (table) {
+        out[table] = {};
+        Object.keys(spec[table]).forEach(function (col) { out[table][col] = spec[table][col]; });
+      });
+      return out;
+    }
+
+    var COMMITTED = { Quests: { Id: "TEXT", Name: "TEXT" }, MapMarkers: { X: "REAL" } };
+
+    var DCHANGES = {
+      "none": { Quests: { Id: "TEXT", Name: "TEXT" }, MapMarkers: { X: "REAL" } },
+      "added": { Quests: { Id: "TEXT", Name: "TEXT", Prestige: "INTEGER" }, MapMarkers: { X: "REAL" } },
+      "removed": { Quests: { Id: "TEXT" }, MapMarkers: { X: "REAL" } },
+      "retyped": { Quests: { Id: "TEXT", Name: "TEXT" }, MapMarkers: { X: "TEXT" } },
+      "both": { Quests: { Id: "TEXT", Prestige: "INTEGER" }, MapMarkers: { X: "REAL" } }
+    };
+
+    // DataFormatBaseline.Compare, copied: a break is a table or column the baseline
+    // records and the published schema no longer satisfies. An addition is anything the
+    // published schema has that the baseline never recorded.
+    function compareSchemas(baseline, current) {
+      var breaks = [];
+      var additions = [];
+
+      Object.keys(baseline).forEach(function (table) {
+        if (!(table in current)) { breaks.push("table " + table + " is gone"); return; }
+        Object.keys(baseline[table]).forEach(function (col) {
+          if (!(col in current[table])) {
+            breaks.push(table + "." + col + " is gone");
+          } else if (current[table][col] !== baseline[table][col]) {
+            breaks.push(table + "." + col + " changed type from " + baseline[table][col] +
+              " to " + current[table][col]);
+          }
+        });
+      });
+
+      Object.keys(current).forEach(function (table) {
+        if (!(table in baseline)) { additions.push("table " + table); return; }
+        Object.keys(current[table]).forEach(function (col) {
+          if (!(col in baseline[table])) additions.push(table + "." + col);
+        });
+      });
+
+      return { breaks: breaks, additions: additions };
+    }
+
+    var D = { world: "before", change: "none", baseline: null, proposal: null, runs: [] };
+
+    var dRuns = document.getElementById("labDRuns");
+    var dOutcome = document.getElementById("labDOutcome");
+    var dBaseline = document.getElementById("labDBaseline");
+    var dProposal = document.getElementById("labDProposal");
+    var dGuarded = document.getElementById("labDGuarded");
+    var dVerdict = document.getElementById("labDVerdict");
+    var dRunBtn = document.getElementById("labDRun");
+    var dAdoptBtn = document.getElementById("labDAdopt");
+    var dResetBtn = document.getElementById("labDReset");
+
+    function dReset() {
+      D.baseline = schema(COMMITTED);
+      D.proposal = null;
+      D.runs = [];
+    }
+
+    // DataFormatBaseline.Ratchet, with the one line this change fixed as a branch: the
+    // before world wrote the widened schema into the tracked baseline file.
+    function dRatchet() {
+      var current = schema(DCHANGES[D.change]);
+      var cmp = compareSchemas(D.baseline, current);
+
+      if (cmp.breaks.length > 0) {
+        return { outcome: "Broken", detail: cmp.breaks[0], red: true };
+      }
+
+      if (cmp.additions.length > 0) {
+        if (D.world === "before") {
+          D.baseline = current;
+          return { outcome: "Widened", detail: "wrote the baseline, then failed", red: true };
+        }
+        D.proposal = current;
+        return { outcome: "Widened", detail: "proposed " + cmp.additions[0], red: true };
+      }
+
+      D.proposal = null;
+      return { outcome: "Unchanged", detail: "the baseline describes it exactly", red: false };
+    }
+
+    function columnList(s) {
+      var out = [];
+      Object.keys(s).forEach(function (table) {
+        Object.keys(s[table]).forEach(function (col) { out.push(col); });
+      });
+      return out.join(", ");
+    }
+
+    function dPaint() {
+      dRuns.innerHTML = "";
+      if (D.runs.length === 0) {
+        row(dRuns, "no run yet", "-", null, "press Run the suite");
+      } else {
+        D.runs.forEach(function (r, i) {
+          row(dRuns, "run " + (i + 1) + ": " + r.outcome, r.red ? "red" : "green",
+            r.red ? "bad" : "good", r.detail);
+        });
+      }
+
+      var last = D.runs.length ? D.runs[D.runs.length - 1] : null;
+      dOutcome.textContent = last ? last.outcome : "no run yet";
+      if (last) dOutcome.setAttribute("data-tone", last.red ? "bad" : "good");
+      else dOutcome.removeAttribute("data-tone");
+
+      dBaseline.textContent = columnList(D.baseline);
+      dProposal.textContent = D.proposal ? "v1.proposed.json" : "none";
+      dProposal.setAttribute("data-tone", D.proposal ? "bad" : "good");
+
+      dGuarded.textContent = columnList(D.baseline);
+      dAdoptBtn.disabled = !(D.world === "shipped" && D.proposal);
+
+      if (!last) {
+        say(dVerdict, "good", "The committed baseline records three columns.",
+          "Press Run the suite to compare the published schema against it. Press it twice, " +
+          "which is what a second CI run does with nothing committed in between.");
+        return;
+      }
+
+      var reds = D.runs.filter(function (r) { return r.red; }).length;
+
+      if (last.outcome === "Broken") {
+        say(dVerdict, "good", "A removal breaks, and proposes nothing.",
+          "The published schema no longer satisfies the baseline, so every build reading it " +
+          "would break and none of them can be fixed after the fact. No proposal is written, " +
+          "because a removal must not launder itself by arriving beside an addition. The fix " +
+          "is a data format bump, not a relaxed test.");
+      } else if (last.outcome === "Unchanged" && D.runs.length > 1 && D.world === "before") {
+        say(dVerdict, "bad", "The second run passed against a file the first run wrote.",
+          "Nobody reviewed that baseline and nobody committed it. The added column is now " +
+          "recorded, so the guard reports green. A later publish that drops a different " +
+          "column is measured against a file the suite wrote for itself.");
+      } else if (last.outcome === "Widened" && D.world === "before") {
+        say(dVerdict, "bad", "The run failed, and it cleared the reason it failed.",
+          "It wrote the widened schema into the tracked baseline file. Press Run the suite " +
+          "again with nothing committed in between, and watch the guard go green.");
+      } else if (last.outcome === "Widened") {
+        say(dVerdict, "good", "The proposal lands beside the baseline, and the run stays red.",
+          "Press Run the suite again: it reports the same growth, because the committed file " +
+          "is untouched. Press Adopt the proposal to do what a maintainer does, and then run " +
+          "it once more.");
+      } else {
+        say(dVerdict, "good", "The baseline describes the published schema exactly.",
+          "Any proposal beside it is spent, so the run deletes it. The guard is green after " +
+          reds + " red runs, and every column it now records is a column a later publish " +
+          "cannot drop unnoticed.");
+      }
+    }
+
+    dRunBtn.addEventListener("click", function () {
+      D.runs.push(dRatchet());
+      dPaint();
+    });
+
+    dAdoptBtn.addEventListener("click", function () {
+      if (!D.proposal) return;
+      D.baseline = D.proposal;
+      D.proposal = null;
+      D.runs.push({ outcome: "adopted", detail: "the maintainer committed the proposal", red: false });
+      dPaint();
+    });
+
+    dResetBtn.addEventListener("click", function () { dReset(); dPaint(); });
+
+    bindSegment(document.getElementById("labDWorld"), "data-d-world", function (v) {
+      D.world = v; dReset(); dPaint();
+    });
+    bindSegment(document.getElementById("labDChange"), "data-d-change", function (v) {
+      D.change = v; dReset(); dPaint();
+    });
+
+    dReset();
+    dPaint();
+
+    /* ================= comprehension gate ================= */
+
+    var QUESTIONS = [
+      {
+        q: "Before this change, a read-only database wedged every later update on that install. Windows moves a read-only file without complaint, so which step actually threw?",
+        options: [
+          "The delete of the backup afterwards. The attribute travelled with the moved file, Windows refuses to delete a read-only file, and that throw reached the catch that reports the whole download",
+          "The first move, because Windows refuses to move a read-only file",
+          "The retry loop, which ran out of attempts and rethrew the last exception",
+          "The digest check, which cannot open a read-only file"
+        ],
+        answer: 0,
+        why: "Lab A shows it. Select the read-only database and stay at hour 0: the new bytes are on disk, the check reports a failed download, and the bookmark is unchanged. The backup now carries the attribute too, so hour 1 fails at the first line instead."
+      },
+      {
+        q: "File.Replace replaced a pair of File.Move calls. Which failure does the pair allow that the single call does not?",
+        options: [
+          "A reader that holds the database open while the swap runs",
+          "A digest that names an algorithm this build cannot check",
+          "A failure landing between the two moves, which leaves the database path holding neither file and nothing that reads the backup back",
+          "A temp file left behind by an earlier attempt"
+        ],
+        answer: 2,
+        why: "File.Replace is atomic on NTFS and writes the backup itself, so the path always holds one of the two files. The held-open case in lab A is handled the same way by both code paths: the retries run out, the exception escapes, and the caller keeps its database."
+      },
+      {
+        q: "A published version token holding a line break was accepted, written, and read back truncated. Why did that stop the install forever rather than once?",
+        options: [
+          "The truncated token was longer than db_version.txt allows, so the write failed every time",
+          "The bookmark read takes only the first non-blank line. The value written and the value read back never matched again, so every hourly check downloaded the whole database",
+          "SQLite refused a database whose version token holds a line break",
+          "The manifest digest is computed over the token, so it stopped matching"
+        ],
+        answer: 1,
+        why: "The check compares the manifest token against the bookmark for equality. A token that cannot survive the round trip compares unequal forever. This is why the allowlist rejects the whole manifest at the parse boundary, rather than letting the token reach the bookmark."
+      },
+      {
+        q: "A manifest declaring a newer document schema is refused, but an index declaring one is still read. Why are the two treated differently?",
+        options: [
+          "The index is a smaller document, so parsing it is cheap enough to attempt",
+          "The manifest carries a digest and the index does not, so only the manifest can be checked",
+          "The index has no schemaVersion field in later shapes, so there is nothing to compare",
+          "Refusing a manifest only declines an install, which is safe. Refusing the index would hide the one notice a stranded build ever gets, and the index changes shape at exactly the publish that strands it"
+        ],
+        answer: 3,
+        why: "The two documents fail in opposite directions. The safety of a refusal depends on what the refusal costs. A promise makes the lenient read safe: currentDataFormatVersion keeps its name and its meaning in every future index schema, because fielded builds can never be taught a replacement."
+      },
+      {
+        q: "In UpdateService before this change, a completion subscriber that threw made a found update disappear from the title bar. Which sequence did that?",
+        options: [
+          "The subscriber set _availableUpdate to null while handling the event",
+          "The success raise sat inside the try that classifies failures. The throw entered the catch, which recorded the subscriber error and raised a second completion carrying no update. GetStatusKind puts a failure ahead of an available update",
+          "The finally block cleared the found update before the method returned",
+          "The hourly timer started a second check that overwrote the first one's result"
+        ],
+        answer: 1,
+        why: "Lab B shows all of it. Select the feed that offers 2026.9.0 and make the subscriber throw on completed: two completions, an InvalidOperationException recorded as the error of the check, and Check failed on the title bar. The pill the subscriber was told about is the pill it hid."
+      },
+      {
+        q: "Both services now raise their completion event while the in-progress flag is still held. What does holding it buy?",
+        options: [
+          "It guarantees the subscribers run on the UI thread",
+          "It makes the raise itself thread safe",
+          "A subscriber that starts another check is answered 'already in progress', rather than nesting a second check inside the first one's own notification",
+          "It lets the hourly timer skip its next check"
+        ],
+        answer: 2,
+        why: "The flag is claimed with Interlocked, because two callers can arrive together. It is released in a finally, so a throwing subscriber cannot leave it stuck on. Raising inside the claim closes the third case, which is a subscriber that calls straight back into the service."
+      },
+      {
+        q: "The publisher reported a manifest carrying no version as a healthy endpoint. Why did the comparison miss it?",
+        options: [
+          "The manifest could not be parsed, so every check on it was skipped",
+          "The digest check ran first and passed, which ended the comparison early",
+          "The token was validated only on the publish path, never on the comparison path",
+          "It compared the manifest token against db_version.txt and stopped there. Both were absent, and two absent tokens compare equal"
+        ],
+        answer: 3,
+        why: "Presence is now checked on its own line, before the two tokens are compared. The same reasoning covers the unreadable token: a db_version.txt holding the same unreadable value compares equal, so the allowlist has to run before the comparison rather than after it."
+      },
+      {
+        q: "The schema drift guard wrote its widened baseline into the tracked baseline file and then failed the run. Why did that stop it from guarding anything?",
+        options: [
+          "The second run read the file the first run wrote, found nothing changed, and passed. The new column entered the baseline without review, and a non-additive change only ever failed once",
+          "Writing a tracked file during a test run makes the working tree dirty, which fails CI",
+          "The baseline file was never committed, so no run could read it",
+          "The guard compares row contents, and those change on every publish"
+        ],
+        answer: 0,
+        why: "Lab D shows it: select the before code, add a column, and press Run the suite twice. The dirty working tree was a real side effect too, but it is not what broke the guard. The proposal now lands as an untracked sibling, and adopting it is a human act."
+      }
+    ];
+
+    var CHECKLIST = [
+      "The swap is one File.Replace, and the read-only attribute is cleared off both the destination and any leftover backup before it. The retry filter names UnauthorizedAccessException beside IOException.",
+      "Deleting the backup cannot report the install as failed, and TryDelete logs rather than throwing.",
+      "IsBareVersionToken and IsBarePayloadName are allowlists, both are trimmed first, and ParseManifest refuses the whole document when either fails.",
+      "The freshness test asks for the database on disk beside the version token. A manifest above the supported document schema is refused, and an index above it is still read for its one promised field.",
+      "Both services claim their flag with Interlocked. Each raises started and completed exactly once from one exit, contains every subscriber, and raises while the flag is held. DatabaseUpdated contains each subscriber on its own.",
+      "The publisher checks the manifest version for presence, and runs the same allowlist the app runs. It reads the endpoint database stamp, judges the mirror whenever format 1 is live, and detects index drift.",
+      "HeaderUpdatePill carries the wording and the tone on one record, and the XAML declares neither for that button. The four background-raised handlers post through UiDispatch, and each contains its own body.",
+      "The drift guard writes DataFormatBaseline.v1.proposed.json beside the committed baseline, never over it, and a break proposes nothing at all."
+    ];
+
+    var answered = {};
+    var quizList = document.getElementById("quizList");
+    var quizScore = document.getElementById("quizScore");
+    var railLabel = document.getElementById("railGateLabel");
+    var railHint = document.getElementById("railGateHint");
+    var railBar = document.getElementById("railGateBar");
+
+    QUESTIONS.forEach(function (item, qi) {
+      var card = el("div", "q");
+
+      var head = el("div", "q-head");
+      head.appendChild(el("span", "q-num", String(qi + 1).padStart(2, "0")));
+      head.appendChild(el("p", "q-text", item.q));
+      card.appendChild(head);
+
+      var why = el("div", "q-why");
+
+      var opts = el("div", "q-opts");
+      item.options.forEach(function (text, oi) {
+        var label = el("label", "opt");
+        var input = document.createElement("input");
+        input.type = "radio";
+        input.name = "q" + qi;
+        input.value = String(oi);
+        label.appendChild(input);
+        label.appendChild(el("span", null, text));
+        opts.appendChild(label);
+
+        input.addEventListener("change", function () {
+          answered[qi] = oi;
+          var correct = oi === item.answer;
+          card.setAttribute("data-state", correct ? "right" : "wrong");
+
+          Array.prototype.forEach.call(opts.children, function (child, ci) {
+            child.classList.remove("is-right", "is-wrong");
+            if (ci === item.answer && (correct || ci === oi)) child.classList.add("is-right");
+            if (ci === oi && !correct) child.classList.add("is-wrong");
+          });
+
+          why.innerHTML = "";
+          var p = el("p");
+          var word = el("span", "verdict-word", correct ? "Correct. " : "Not quite. ");
+          p.appendChild(word);
+          p.appendChild(document.createTextNode(item.why));
+          why.appendChild(p);
+
+          updateGate();
+        });
+      });
+      card.appendChild(opts);
+      card.appendChild(why);
+
+      quizList.appendChild(card);
+    });
+
+    var gate = document.getElementById("gate");
+    var gateTitle = document.getElementById("gateTitle");
+    var gateBody = document.getElementById("gateBody");
+
+    function updateGate() {
+      var correct = 0;
+      QUESTIONS.forEach(function (item, i) { if (answered[i] === item.answer) correct++; });
+
+      quizScore.textContent = correct + "/" + QUESTIONS.length;
+      railHint.textContent = correct + " of " + QUESTIONS.length + " correct";
+      railBar.style.width = (100 * correct / QUESTIONS.length) + "%";
+
+      if (correct === QUESTIONS.length) {
+        railLabel.textContent = "Gate open";
+        gate.className = "gate is-open";
+        gateTitle.textContent = "Approval checklist: unlocked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Eight of eight. You know the design. Now compare the changes with it. Check these items before you approve:"));
+        var ul = el("ul");
+        CHECKLIST.forEach(function (line) { ul.appendChild(el("li", null, line)); });
+        gateBody.appendChild(ul);
+        var pre = el("pre", "approval",
+          "Reviewed the data channel hardening pass on PR #49.\n" +
+          "Guide: docs/2026-08-versioned-data-channel-deep-review-guide.html\n" +
+          "Comprehension gate: 8/8\n" +
+          "Checklist items examined:\n" +
+          "1. The swap primitive and the two attributes it clears.\n" +
+          "2. The backup delete, outside what reports the install.\n" +
+          "3. The allowlists on the version token and the payload name.\n" +
+          "4. The freshness test, and the two document schema answers.\n" +
+          "5. The single exit and the contained raises in both services.\n" +
+          "6. The publisher gates that judge presence, not only equality.\n" +
+          "7. The pill wording and its tone on one record.\n" +
+          "8. The proposed baseline beside the committed one.");
+        gateBody.appendChild(pre);
+      } else {
+        railLabel.textContent = "Gate locked";
+        gate.className = "gate is-locked";
+        gateTitle.textContent = "Approval checklist: locked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Answer all eight questions correctly to open the reviewer checklist. You have " +
+          correct + " of " + QUESTIONS.length + " correct. Each incorrect answer gives an explanation, so read the chapter again."));
+      }
+    }
+
+    updateGate();
+  })();
+  </script>
+</body>
+</html>
