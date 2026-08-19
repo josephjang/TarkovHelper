@@ -4,7 +4,7 @@ using TarkovDBEditor.Services;
 // Aliased rather than importing the whole namespace: both projects have a Services
 // namespace, and the published documents are deliberately read back through the app's
 // own reader so the tool and the app cannot drift apart on the format.
-using DatabaseUpdateService = TarkovHelper.Services.DatabaseUpdateService;
+using DataChannel = TarkovHelper.Services.DataChannel;
 
 namespace TarkovHelper.Tests;
 
@@ -108,12 +108,12 @@ public sealed class DataPublishChannelTests : IDisposable
     }
 
     /// <summary>Reads a published manifest through the app's own reader, as a client would.</summary>
-    private static DatabaseUpdateService.DataChannelManifest ReadManifest(string channelDir)
+    private static DataChannel.Manifest ReadManifest(string channelDir)
     {
         var path = Path.Combine(channelDir, "manifest.json");
         Assert.True(File.Exists(path), $"{path} was not written");
 
-        var manifest = DatabaseUpdateService.ParseManifest(File.ReadAllText(path));
+        var manifest = DataChannel.ParseManifest(File.ReadAllText(path));
         Assert.True(manifest != null, $"{path} is not readable by the app's manifest reader");
         return manifest!;
     }
@@ -242,7 +242,7 @@ public sealed class DataPublishChannelTests : IDisposable
         var comparison = await service.CompareAsync();
         await service.PublishAsync(comparison, "1.0.11");
 
-        var index = DatabaseUpdateService.ParseIndex(
+        var index = DataChannel.ParseIndex(
             await File.ReadAllTextAsync(Path.Combine(repo, "data", "index.json")));
 
         Assert.True(index != null, "data/index.json is not readable by the app's index reader");
@@ -368,7 +368,7 @@ public sealed class DataPublishChannelTests : IDisposable
 
         // And the index now names the new schema, which is the only thing that changed
         // outside data/v2.
-        var index = DatabaseUpdateService.ParseIndex(
+        var index = DataChannel.ParseIndex(
             await File.ReadAllTextAsync(Path.Combine(repo, "data", "index.json")));
         Assert.Equal(2, index!.CurrentDataFormatVersion);
     }

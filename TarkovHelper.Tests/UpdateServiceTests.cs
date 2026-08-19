@@ -94,10 +94,10 @@ public sealed class UpdateServiceTests
             UpdateService.UpdateXmlUrl);
         Assert.Equal(
             "https://raw.githubusercontent.com/josephjang/TarkovHelper/refs/heads/main/data/index.json",
-            DatabaseUpdateService.INDEX_URL);
+            DataChannel.INDEX_URL);
         Assert.Equal(
             "https://raw.githubusercontent.com/josephjang/TarkovHelper/refs/heads/main/data/v1/manifest.json",
-            DatabaseUpdateService.MANIFEST_URL);
+            DataChannel.MANIFEST_URL);
     }
 
     [Fact]
