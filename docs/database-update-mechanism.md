@@ -8,9 +8,9 @@ TarkovHelper의 데이터베이스 업데이트 메커니즘에 대한 상세 �
 
 TarkovHelper는 두 가지 자동 업데이트 채널을 가집니다:
 
-1. **앱 업데이트** — AutoUpdater.NET이 GitHub Release의 `TarkovHelper.zip`으로 앱 전체를 교체
+1. **앱 업데이트**: AutoUpdater.NET이 GitHub Release의 `TarkovHelper.zip`으로 앱 전체를 교체
    (`Services/UpdateService.cs`, 시작 시 1회 + 1시간 주기 체크)
-2. **DB 업데이트** — `Services/DatabaseUpdateService.cs`가 시작 시 1회 + 이후 1시간 주기로
+2. **DB 업데이트**: `Services/DatabaseUpdateService.cs`가 시작 시 1회 + 이후 1시간 주기로
    GitHub raw의 매니페스트를 확인하고, 버전이 다르면 `tarkov_data.db`만 다운로드해 교체
    (앱 업데이트 없이 DB만 갱신됨). 폴링 대상은 그 빌드의 **데이터 채널**
    (`data/v<N>/`)이며, 자세한 내용은 아래 "데이터 채널" 절 참고
@@ -130,7 +130,7 @@ public async Task<RefreshResult> RefreshDataFromCacheAsync(
 
 ### 4. AutoUpdater.NET 앱 업데이트
 
-**update.xml** (repo 루트, raw main에서 서빙) — 아래는 **첫 릴리즈 후 예시** 형태입니다.
+**update.xml** (repo 루트, raw main에서 서빙): 아래는 **첫 릴리즈 후 예시** 형태입니다.
 현재 커밋된 값은 `4.3.1`이며, `update.xml`은 릴리즈 자산이 존재한 뒤에야 범프됩니다
 (의도된 lag; `.claude/commands/release.md` 7단계 참조):
 ```xml
@@ -151,13 +151,23 @@ internal const string UpdateXmlUrl = "https://raw.githubusercontent.com/josephja
 // 사용자가 업데이트 버튼을 누르면 AutoUpdater.Start(UpdateXmlUrl)로 교체 수행.
 ```
 
-### 5. DB 자동 업데이트 (DatabaseUpdateService)
+### 5. DB 자동 업데이트 (DataChannel + DatabaseUpdateService)
 
-**Services/DatabaseUpdateService.cs** — 앱 업데이트와 독립적으로 DB만 갱신:
+**Services/DataChannel.cs** (채널의 와이어 규약, 즉 엔드포인트 URL과 문서 파서의 소유자):
 ```csharp
 // csproj의 <TarkovDataFormatVersion>에서 파생 (AssemblyMetadata 경유). 하드코딩된 상수가 아님
 internal static readonly string INDEX_URL    = ".../refs/heads/main/data/index.json";
 internal static readonly string MANIFEST_URL = ".../refs/heads/main/data/v1/manifest.json";
+
+// index.json/manifest.json 파싱과 문서 단위 거부 규칙도 여기에 있습니다
+// (ParseIndex/ParseManifest/ParseDigest, IsBarePayloadName/IsBareVersionToken,
+//  MAX_SUPPORTED_SCHEMA_VERSION).
+```
+
+**Services/DatabaseUpdateService.cs** (앱 업데이트와 독립적으로 DB만 갱신):
+```csharp
+// 이 빌드가 읽는 데이터 포맷 버전(DataFormatVersion)은 와이어가 아니라 빌드 정체성이므로
+// 여기에 남아 있고, DataChannel이 엔드포인트 URL을 만들 때 이 값을 읽어 갑니다.
 
 // 시작 시 1회 + 1시간 주기로 index.json과 manifest.json을 읽고, version 토큰을 로컬과 비교;
 // 다르면 tarkov_data.db를 .tmp로 내려받아 digest/size 검증 후 교체하고 DatabaseUpdated 이벤트 발생
@@ -167,7 +177,7 @@ internal static readonly string MANIFEST_URL = ".../refs/heads/main/data/v1/mani
 > `tarkov_data.db`/`db_version.txt` 스냅샷이 포함되므로, DB 자동 업데이트로 더 최신 DB를
 >받은 사용자가 앱을 업데이트하면 DB가 스냅샷 버전으로 잠시 되돌아갑니다. 다만 시작 시
 > `StartBackgroundUpdates`가 즉시(dueTime 0) 체크하여 원격과 다르면 곧바로 다시 내려받아
-> 자기 치유되므로 stale 구간은 수 초에 그칩니다 — 의도된 동작입니다.
+> 자기 치유되므로 stale 구간은 수 초에 그칩니다. 의도된 동작입니다.
 
 ---
 
@@ -291,6 +301,10 @@ Confluent)은 **구조만** 비교하므로 필드의 의미나 허용 범위가
   모르는 알고리즘이면 경고를 남기고 검증 없이 설치합니다. 거부하면 나중에 해시 알고리즘을
   바꾸는 일이 이미 배포된 모든 빌드에게 breaking change가 되는데, 그게 이 채널이 피하려는
   결과입니다.
+- 반대로 `<algorithm>:<hex>` 형태가 아닌 digest는 **거부합니다**. 접두사 없는 16진수 문자열은
+  접두사가 애초에 없애려던 모양이라(매니페스트에서 해시만 복사해 붙이는 실수), 이걸 관대하게
+  읽으면 접두사를 도입한 바로 그 상황에서 검증이 조용히 꺼집니다. 앞뒤 공백은 잘라내므로
+  손으로 고치다 생긴 여백은 거부 사유가 아니라 그대로 검증합니다.
 - 두 필드는 리더 입장에서 **선택적**입니다. 없으면 검증 없이 설치합니다. 능력은 버전 숫자가
   아니라 필드의 존재로 판단한다는 원칙이고, 덕분에 `schemaVersion`은 거의 오를 일이 없습니다.
 - `database.file`도 상수가 아니라 데이터입니다. 나중에 페이로드 파일명에 버전을 넣어 URL을
@@ -309,10 +323,14 @@ Confluent)은 **구조만** 비교하므로 필드의 의미나 허용 범위가
 파일을 가리키는 경우(손으로 복사, 잘못된 빌드의 산출물, 하다 만 format bump)를 잡습니다.
 
 - 앱은 해시 검증을 통과한 뒤 스탬프를 확인합니다.
-- `0`은 "주장 없음"이라 통과시킵니다. 스탬핑 이전에 발행된 DB도 계속 동작해야 하기 때문입니다.
-- 0이 아닌데 pin과 다르면 거부하고, 기존 DB와 북마크를 그대로 둡니다.
-- 스탬프를 읽지 못하는 것 자체는 거부 사유가 아닙니다. 이미 해시가 맞았으므로 그 파일은
-  발행자가 의도한 그 파일입니다.
+- `0`은 "format 0"이 아니라 "주장 없음"이고, **거부합니다.** 모든 publish는 해싱 전에 스탬프를
+  찍고 못 찍으면 거기서 중단하므로, 스탬프 없이 도착한 페이로드는 publish를 거친 물건이
+  아닙니다. 손으로 채운 디렉터리, 잘못된 빌드의 복사본, 하다 만 format bump가 바로 이 검사가
+  잡으려던 경우이고, 매니페스트에 digest가 아예 없을 수 있는 것도 그런 페이로드입니다.
+- pin과 다른 값이 찍혀 있어도 거부하고, 기존 DB와 북마크를 그대로 둡니다.
+- 스탬프를 읽지 못하는 것도 거부 사유입니다. SQLite가 아예 열 수 없는 파일은 DB가 아니고
+  (잘린 다운로드, 200으로 온 오류 페이지), integrity 필드는 선택적이라 그걸 대신 걸러줄 검사가
+  없습니다.
 
 발행 도구는 **복사하거나 해싱하기 전에 소스에 스탬프를 찍습니다.** 그래야 두 엔드포인트가 같은
 스탬프된 파일 하나를 받아 바이트 단위로 동일해집니다. 소스를 SQLite로 열 수 없으면 publish는
@@ -456,6 +474,13 @@ WHERE MapName = @MapName
    → 사용자 앱의 DatabaseUpdateService가 다음 체크(최대 1시간, 앱 재시작 시 즉시)에 자동 반영
 ```
 
+> publish가 테이블이나 컬럼을 추가했다면 `DataFormatDriftTests`가 실패하면서, 커밋된 기준선
+> 옆에 `TarkovHelper.Tests/DataFormatBaseline.v<N>.proposed.json`을 제안으로 써 둡니다. 커밋된
+> `DataFormatBaseline.v<N>.json`은 테스트가 직접 고치지 않습니다. 제안 파일을 확인한 뒤
+> `DataFormatBaseline.v<N>.json` 자리로 옮기고 publish와 같은 커밋에 함께 넣으세요. 옮기기
+> 전에는 다시 실행해도 계속 실패합니다. 추가된 컬럼이 기준선에 기록되어야 다음 publish가 그
+> 컬럼을 지웠을 때 테스트가 삭제를 알아볼 수 있습니다.
+
 > publish 도구는 새 형식 디렉터리를 만들지 않습니다. 형식을 올리는 것은 앱의 pin을 함께
 > 올리는 리뷰된 PR에서만 하는 의도적인 행위이며, 일상적인 publish가 실수로 형식을 바꿀 수
 > 없게 하기 위한 것입니다.
@@ -466,7 +491,7 @@ WHERE MapName = @MapName
 1. csproj 버전 범프 커밋 → v<version> 태그 push
 2. GitHub Actions(release.yml)가 빌드/테스트/패키징 → Release + TarkovHelper.zip 생성
 3. 릴리즈 노트 큐레이션
-4. 자산 확인 후 update.xml 범프 (마지막 — 클라이언트가 404 URL을 보지 않도록)
+4. 자산 확인 후 update.xml 범프 (마지막: 클라이언트가 404 URL을 보지 않도록)
 ```
 
 ### 사용자 워크플로우
@@ -487,7 +512,8 @@ WHERE MapName = @MapName
 
 ### TarkovHelper
 - `Services/UpdateService.cs` - 앱 업데이트 체크 (update.xml URL 소유), AutoUpdater 실행
-- `Services/DatabaseUpdateService.cs` - DB 자동 업데이트 (db_version.txt/tarkov_data.db URL 소유)
+- `Services/DataChannel.cs` - 데이터 채널 와이어 규약 (index.json/manifest.json URL과 문서 파서 소유)
+- `Services/DatabaseUpdateService.cs` - DB 자동 업데이트 (폴링/다운로드/검증/교체, 이 빌드의 데이터 포맷 버전 소유)
 - `App.xaml.cs` - 앱 버전 변경 시 캐시 초기화 (`CheckAndRefreshDataOnVersionChange`)
 - `Services/UserDataDbService.cs` - 사용자 데이터 관리
 - `Services/MigrationService.cs` - 버전 마이그레이션
