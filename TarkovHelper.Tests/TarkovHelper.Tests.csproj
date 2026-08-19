@@ -25,12 +25,21 @@
     <ProjectReference Include="..\TarkovDBEditor\TarkovDBEditor.csproj" />
   </ItemGroup>
 
-  <!-- Asset DB under test: copied to the test output so the coverage test can read it. -->
-  <ItemGroup>
-    <None Include="..\TarkovHelper\Assets\tarkov_data.db" Link="tarkov_data.db">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
+  <!-- Seed database under test. Nothing here copies or includes it: the app project already
+       copies its own bundled seed into this assembly's output as Assets\tarkov_data.db
+       (linked there from data/v$(TarkovDataFormatVersion)), and the fixture builders read that
+       very file in place through TestSeed.DatabasePath, so they describe exactly the database
+       the app under test runs and no second copy can go stale against it.
+       Restating a source path here is what went wrong before: it named
+       TarkovHelper\Assets\tarkov_data.db, the pre-channel mirror, which stops being
+       republished the moment the live data format leaves 1, and the fixtures would then be
+       derived from frozen format-1 data while driving an app shipping the newer format.
+       That reason still stands, so the guard below fails the build loudly if the app ever
+       stops putting the seed where TestSeed reads it. -->
+  <Target Name="RequireSeedDatabaseFromAppOutput" AfterTargets="CopyFilesToOutputDirectory">
+    <Error Condition="!Exists('$(OutDir)Assets\tarkov_data.db')"
+           Text="The app project no longer copies Assets\tarkov_data.db into the test output, so the fixtures have no seed to read. Point TestSeed at wherever the app now bundles its seed." />
+  </Target>
 
   <ItemGroup>
     <Using Include="Xunit" />

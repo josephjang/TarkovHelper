@@ -213,7 +213,7 @@ public sealed class ProfileAttributionE2ETests : E2ETestBase
     {
         public static AttributionFixtureQuests Load()
         {
-            var assetDb = Path.Combine(AppContext.BaseDirectory, "tarkov_data.db");
+            var assetDb = TestSeed.DatabasePath;
             using var connection = new SqliteConnection($"Data Source={assetDb};Mode=ReadOnly");
             connection.Open();
 
