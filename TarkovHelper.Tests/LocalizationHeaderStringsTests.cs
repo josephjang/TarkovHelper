@@ -7,7 +7,9 @@ namespace TarkovHelper.Tests;
 /// Completeness guard for the header/tab/settings strings added by the top-bar
 /// redesign (LocalizationService.Header.cs): every key must resolve to a non-empty,
 /// non-placeholder string in all three languages, and format keys must keep their
-/// {0} slot.
+/// {0} slot. Also pins how the title-bar update pill assembles those strings
+/// (<see cref="HeaderUpdatePill"/>), where the spoken name and the visible label
+/// have to agree.
 /// </summary>
 public class LocalizationHeaderStringsTests
 {
@@ -122,6 +124,112 @@ public class LocalizationHeaderStringsTests
             Assert.NotEqual(GetString(en, key), GetString(ja, key));
         }
     }
+
+    #region Update pill (title bar)
+
+    private const string PillVersion = "v2026.8.0";
+
+    // WCAG 2.5.3 Label in Name: speech input activates a control by the words printed on
+    // it, so the pill's UIA Name must be its visible label and not the sentence-long
+    // tooltip. Both pill branches, all three languages.
+    [Theory]
+    [InlineData(AppLanguage.EN, false)]
+    [InlineData(AppLanguage.EN, true)]
+    [InlineData(AppLanguage.KO, false)]
+    [InlineData(AppLanguage.KO, true)]
+    [InlineData(AppLanguage.JA, false)]
+    [InlineData(AppLanguage.JA, true)]
+    public void The_update_pill_name_is_its_visible_label(AppLanguage language, bool isSuperseded)
+    {
+        var loc = TestLocalization.WithLanguage(language);
+
+        var pill = HeaderUpdatePill.For(loc, PillVersion, isSuperseded);
+
+        Assert.False(string.IsNullOrWhiteSpace(pill.Label));
+        Assert.Equal(pill.Label, pill.AutomationName);
+    }
+
+    // The explanation is not dropped when it stops being the name: it keeps its version
+    // slot and moves to HelpText, the UIA slot for text too long to be a name.
+    [Theory]
+    [InlineData(AppLanguage.EN, false)]
+    [InlineData(AppLanguage.EN, true)]
+    [InlineData(AppLanguage.KO, false)]
+    [InlineData(AppLanguage.KO, true)]
+    [InlineData(AppLanguage.JA, false)]
+    [InlineData(AppLanguage.JA, true)]
+    public void The_update_pill_explanation_becomes_help_text(AppLanguage language, bool isSuperseded)
+    {
+        var loc = TestLocalization.WithLanguage(language);
+
+        var pill = HeaderUpdatePill.For(loc, PillVersion, isSuperseded);
+
+        Assert.Equal(pill.Description, pill.HelpText);
+        Assert.Contains(PillVersion, pill.HelpText);
+        Assert.NotEqual(pill.Label, pill.HelpText);
+    }
+
+    // The exact spoken strings, including the two the tooltip-as-name shape got wrong: JA
+    // announced "クリックして更新 ... をインストール" over a pill reading "v2026.8.0 に更新", and a
+    // superseded EN pill announced a whole paragraph over "Update for latest data".
+    [Theory]
+    [InlineData(AppLanguage.EN, false, "Update v2026.8.0")]
+    [InlineData(AppLanguage.KO, false, "v2026.8.0 업데이트")]
+    [InlineData(AppLanguage.JA, false, "v2026.8.0 に更新")]
+    [InlineData(AppLanguage.EN, true, "Update for latest data")]
+    [InlineData(AppLanguage.KO, true, "데이터 갱신하려면 업데이트")]
+    [InlineData(AppLanguage.JA, true, "最新データには更新が必要")]
+    public void The_update_pill_announces_the_words_on_the_button(
+        AppLanguage language, bool isSuperseded, string expectedName)
+    {
+        var loc = TestLocalization.WithLanguage(language);
+
+        var pill = HeaderUpdatePill.For(loc, PillVersion, isSuperseded);
+
+        Assert.Equal(expectedName, pill.AutomationName);
+    }
+
+    // A superseded build must not read like ordinary optional maintenance: the escalation
+    // is the whole point of the branch, so label and explanation both have to change.
+    [Theory]
+    [InlineData(AppLanguage.EN)]
+    [InlineData(AppLanguage.KO)]
+    [InlineData(AppLanguage.JA)]
+    public void The_superseded_pill_differs_from_the_ordinary_one(AppLanguage language)
+    {
+        var loc = TestLocalization.WithLanguage(language);
+
+        var ordinary = HeaderUpdatePill.For(loc, PillVersion, isSuperseded: false);
+        var superseded = HeaderUpdatePill.For(loc, PillVersion, isSuperseded: true);
+
+        Assert.NotEqual(ordinary.Label, superseded.Label);
+        Assert.NotEqual(ordinary.Description, superseded.Description);
+    }
+
+    // The tone is the other half of that escalation and is decided here, beside the wording,
+    // so MainWindow only renders it. Pinned in all three languages because it is the same
+    // branch that picks the words: a future language-specific branch must not pick a tone
+    // that disagrees with them.
+    [Theory]
+    [InlineData(AppLanguage.EN)]
+    [InlineData(AppLanguage.KO)]
+    [InlineData(AppLanguage.JA)]
+    public void The_superseded_pill_asks_for_the_warning_tone(AppLanguage language)
+    {
+        var loc = TestLocalization.WithLanguage(language);
+
+        Assert.Equal(HeaderUpdatePillTone.Success,
+            HeaderUpdatePill.For(loc, PillVersion, isSuperseded: false).Tone);
+        Assert.Equal(HeaderUpdatePillTone.Warning,
+            HeaderUpdatePill.For(loc, PillVersion, isSuperseded: true).Tone);
+    }
+
+    [Fact]
+    public void The_update_pill_rejects_a_missing_localization_source()
+        => Assert.Throws<ArgumentNullException>(
+            () => HeaderUpdatePill.For(null!, PillVersion, isSuperseded: false));
+
+    #endregion
 
     [Theory]
     [InlineData(AppLanguage.EN, "PvP Zone", "PvE Zone", "PvP Season")]

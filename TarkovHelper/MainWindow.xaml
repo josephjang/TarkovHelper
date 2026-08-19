@@ -272,9 +272,11 @@
                                    Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
 
                         <!-- Version display. Idle: a passive (non-clickable) chip with the current
-                             version — manual checks live in Settings, auto-checks run every 3 min.
+                             version. Manual checks live in Settings, auto-checks run hourly.
                              Update available: the chip swaps for a green "Update vX.Y.Z" pill whose
-                             single action (install) is self-explanatory. -->
+                             single action (install) is self-explanatory. The same pill turns amber
+                             and names the reason when this build's data channel has been superseded
+                             (see UpdateVersionChipUI and HeaderUpdatePill). -->
                         <Border x:Name="ChipVersion" Background="{StaticResource BackgroundLightBrush}"
                                 CornerRadius="4" Padding="8,4" Margin="12,0,0,0"
                                 VerticalAlignment="Center"
@@ -284,11 +286,16 @@
                                        Foreground="{StaticResource TextSecondaryBrush}"
                                        VerticalAlignment="Center"/>
                         </Border>
+                        <!-- No Background, Foreground or AutomationProperties.Name here on purpose,
+                             unlike its Settings twin BtnUpdateAvailableSettings below:
+                             UpdateVersionChipUI assigns all three on every path that makes this
+                             button visible (green for an ordinary update, amber when the data
+                             channel is superseded, name = the visible label per WCAG 2.5.3), so a
+                             value declared here would never be observed and editing it would do
+                             nothing. UpdateStatusTests guards both halves of that asymmetry. -->
                         <Button x:Name="BtnVersionChip"
                                 Padding="8,3" Margin="12,0,0,0"
-                                Background="{StaticResource SuccessBrush}" Foreground="White"
                                 Click="InstallUpdate_Click"
-                                AutomationProperties.Name="Install update"
                                 Visibility="Collapsed">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE896;"
@@ -500,7 +507,7 @@
                     <!-- Tab Navigation. Labels are localized in code (UpdateAllLocalizedText).
                          TabButtonStyle colors the checked tab by setting the RadioButton's
                          Foreground, which explicit TextBlocks do NOT inherit (the implicit
-                         TextBlock style wins) — hence the scoped implicit style below, which
+                         TextBlock style wins). Hence the scoped implicit style below, which
                          mirrors each tab's Foreground onto its glyph/label TextBlocks. -->
                     <Border x:Name="TabNavigation" Grid.Row="0" Background="{StaticResource BackgroundMediumBrush}" Padding="16,0">
                         <StackPanel Orientation="Horizontal">
