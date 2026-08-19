@@ -25,7 +25,7 @@
 
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="DB Update Publisher" FontSize="20" FontWeight="Bold" Foreground="#D4D4D4"/>
-                    <TextBlock Text="Compare and publish database changes to TarkovHelper Assets folder"
+                    <TextBlock Text="Compare and publish the database to the data channel, and app assets to TarkovHelper"
                                Foreground="#888" Margin="0,4,0,0"/>
                 </StackPanel>
 
@@ -201,6 +201,7 @@
                     <ColumnDefinition Width="120"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="120"/>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
@@ -212,8 +213,17 @@
                          Background="#3E3E42" Foreground="White" BorderBrush="#555"
                          VerticalContentAlignment="Center" Padding="8,0"/>
 
-                <TextBlock x:Name="TxtSummary" Grid.Column="4" Text="" Foreground="#FFC107" FontWeight="Bold"
-                           VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                <!-- Republishing the same data under the version it already has. Installs
+                     download on the version alone, so keeping it spares every install a
+                     download of a database whose rows did not change. -->
+                <CheckBox x:Name="ChkKeepVersion" Grid.Column="4" Content="Keep current version"
+                          Foreground="#D4D4D4" VerticalAlignment="Center" Margin="20,0,0,0"
+                          IsEnabled="False"
+                          Checked="ChkKeepVersion_Changed" Unchecked="ChkKeepVersion_Changed"
+                          ToolTip="Publish this database under the version it already has, so installs do not download data that did not change."/>
+
+                <TextBlock x:Name="TxtSummary" Grid.Column="5" Text="" Foreground="#FFC107" FontWeight="Bold"
+                           VerticalAlignment="Center" HorizontalAlignment="Right" Margin="20,0,0,0"/>
             </Grid>
         </Border>
 
