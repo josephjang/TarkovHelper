@@ -70,6 +70,12 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
   플래그를 지우던 연쇄, 퍼블리시 게이트 밖에서 돌던 일곱 이벤트 팬아웃, 카운터
   하나로는 설명할 수 없던 편집 구간, 손으로 고친 행을 그대로 받아들이던 대량
   읽기를 조작해 보는 인터랙티브 랩 4개와 퀴즈 게이트를 포함합니다 (PR #46)
+- [2026-08-versioned-data-channel-code-guide.html](2026-08-versioned-data-channel-code-guide.html):
+  tarkov_data.db 자동 업데이트에 데이터 포맷 버전별 엔드포인트와 다운로드 검증을
+  도입한 변경을 다룹니다. 매니페스트의 크기와 해시, 그리고 user_version 스탬프가
+  설치 직전에 무엇을 걸러내는지, index.json 하나로 빌드가 뒤에 남았음을 알아내는
+  과정, 두 주소에 동시에 발행하며 미러 드리프트를 고치는 퍼블리시를 조작해 보는
+  인터랙티브 랩 3개와 퀴즈 게이트를 포함합니다 (PR #48)
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
   마커 API 분석
 
