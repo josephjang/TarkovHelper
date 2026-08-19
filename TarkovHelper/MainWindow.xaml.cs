@@ -95,10 +95,10 @@ public partial class MainWindow : Window
         // events fired during AutoStartLogMonitoring aren't missed; named handlers so
         // OnWindowClosing can unsubscribe them from these app-lifetime singletons
         // (a background raise after close must not dispatch against a torn-down
-        // window). InvokeAsync (never a blocking Invoke): MonitoringStatusChanged is
-        // raised while LogSyncService holds _watcherLock, so a blocking dispatch from
-        // a background raise can deadlock against a UI-thread Start/StopMonitoring
-        // call taking the same lock.
+        // window). All three handlers post and never block (UiDispatch.Post):
+        // MonitoringStatusChanged is raised while LogSyncService holds _watcherLock, so
+        // a blocking dispatch from a background raise can deadlock against a UI-thread
+        // Start/StopMonitoring call taking the same lock.
         _logSyncService.MonitoringStatusChanged += OnLogMonitoringStatusChanged;
         EftRaidEventService.Instance.MonitoringStateChanged += OnRaidMonitoringStateChanged;
         EftRaidEventService.Instance.RaidEvent += OnRaidEvent;
@@ -256,10 +256,10 @@ public partial class MainWindow : Window
             Tab_Checked(pendingTab, new RoutedEventArgs());
         }
 
-        // Start database update check (initial check + background updates every 5 minutes)
+        // Start database update check (initial check + hourly background updates)
         StartDatabaseUpdateService();
 
-        // Start app update service (check every 3 minutes)
+        // Start app update service (initial check + hourly re-checks)
         StartAppUpdateService();
 
         // Load and show quest data from DB
@@ -287,7 +287,7 @@ public partial class MainWindow : Window
         // frozen, which is the only signal that the silent data channel has stopped.
         dbUpdateService.UpdateCheckCompleted += OnDatabaseCheckCompleted;
 
-        // 백그라운드 업데이트 체크 시작 (5분마다)
+        // 백그라운드 업데이트 체크 시작 (즉시 1회 확인 후 1시간마다)
         dbUpdateService.StartBackgroundUpdates();
 
         _log.Info("Database update service started");
@@ -297,12 +297,30 @@ public partial class MainWindow : Window
     /// DB 업데이트 체크 완료 처리. 데이터 업데이트 자체는 조용히 두고, 이 빌드가 뒤에
     /// 남았는지만 UI에 반영한다 (그때 사용자가 할 수 있는 일은 앱 업데이트뿐이므로).
     /// </summary>
+    /// <remarks>
+    /// This is raised straight from the service's background timer thread, unlike
+    /// <see cref="DatabaseUpdateService.DatabaseUpdated"/>, which the service already hops
+    /// onto the UI thread itself. So the UI work is posted and never awaited: see
+    /// <see cref="UiDispatch.Post"/> for what a blocking Invoke would cost at shutdown.
+    /// </remarks>
     private void OnDatabaseCheckCompleted(object? sender, UpdateCheckResult e)
     {
-        Dispatcher.Invoke(() =>
+        UiDispatch.Post(Dispatcher, () =>
         {
-            UpdateVersionChipUI();
-            UpdateSettingsUpdateSectionUI();
+            // Posting steps outside the service's own containment (see
+            // DatabaseUpdateService.RaiseCompleted): this body runs later, on the
+            // dispatcher, where a throw would reach DispatcherUnhandledException and
+            // App.xaml.cs leaves it unhandled, ending the process. A failed repaint of
+            // the version chip must not do that, so contain it here as well.
+            try
+            {
+                UpdateVersionChipUI();
+                UpdateSettingsUpdateSectionUI();
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"Failed to refresh the update UI after a database check: {ex.Message}", ex);
+            }
         });
     }
 
@@ -317,12 +335,12 @@ public partial class MainWindow : Window
         // 각 서비스의 RefreshAsync()가 자동으로 호출됨
         // UI 페이지들은 서비스의 새로운 데이터를 사용하게 됨
 
-        // 필요시 사용자에게 알림 표시 가능
-        Dispatcher.Invoke(() =>
-        {
-            // 상태 표시줄이나 토스트 메시지로 업데이트 완료 알림 가능
-            _log.Debug("Database update notification displayed");
-        });
+        // 필요시 상태 표시줄이나 토스트 메시지로 업데이트 완료 알림 가능. 그런 UI를 붙일 때도
+        // 디스패처 홉은 필요 없다: 앱 실행 경로에서는 Application.Current가 항상 있고
+        // (Program.Main이 App을 만든 뒤에 MainWindow를 띄운다), DatabaseUpdateService는
+        // 그 경우 Application.Current.Dispatcher로 이 이벤트를 UI 스레드에 올려 준다.
+        // 지금 이 핸들러는 로그만 남기므로 홉 없이 그대로 기록한다.
+        _log.Debug("Database update notification displayed");
     }
 
     /// <summary>
@@ -2315,15 +2333,46 @@ public partial class MainWindow : Window
     private Brush TextSecondaryStatusBrush => _textSecondaryBrush ??= (Brush)FindResource("TextSecondaryBrush");
 
     // Named handlers (not lambdas) so OnWindowClosing can unsubscribe them from the
-    // app-lifetime singleton services.
+    // app-lifetime singleton services. All three can be raised off the UI thread
+    // (EftRaidEventService raises from its log-processing Task.Run continuations and
+    // from a 1 second poll timer), so all three hop the same way.
     private void OnLogMonitoringStatusChanged(object? sender, bool isMonitoring)
-        => Dispatcher.InvokeAsync(UpdateSyncStatusChip);
+        => PostSyncStatusChipRefresh();
 
     private void OnRaidMonitoringStateChanged(object? sender, bool isMonitoring)
-        => Dispatcher.InvokeAsync(UpdateSyncStatusChip);
+        => PostSyncStatusChipRefresh();
 
     private void OnRaidEvent(object? sender, EftRaidEventArgs e)
-        => Dispatcher.InvokeAsync(UpdateSyncStatusChip);
+        => PostSyncStatusChipRefresh();
+
+    /// <summary>
+    /// Repaint the sync/raid chip for a monitoring event raised on a background thread,
+    /// without holding that thread and without racing window teardown.
+    /// </summary>
+    /// <remarks>
+    /// The post is never awaited (see <see cref="UiDispatch.Post"/>): the raisers are
+    /// log-processing continuations and a poll timer, some of them holding the raising
+    /// service's watcher lock, the repaint is idempotent and carries no ordering
+    /// contract, and a raise that arrives after the window starts closing is dropped
+    /// instead of throwing. The body contains its own failures because it runs later, on
+    /// the dispatcher, where an escaping exception reaches DispatcherUnhandledException,
+    /// which App.xaml.cs leaves unhandled, ending the process. Same reason
+    /// <see cref="OnDatabaseCheckCompleted"/> contains its posted body.
+    /// </remarks>
+    private void PostSyncStatusChipRefresh()
+    {
+        UiDispatch.Post(Dispatcher, () =>
+        {
+            try
+            {
+                UpdateSyncStatusChip();
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"Failed to refresh the sync status chip: {ex.Message}", ex);
+            }
+        });
+    }
 
     /// <summary>
     /// Render the title-bar sync/raid status chip from live monitoring state
@@ -2586,7 +2635,7 @@ public partial class MainWindow : Window
         updateService.UpdateCheckStarted += OnUpdateCheckStarted;
         updateService.UpdateCheckCompleted += OnUpdateCheckCompleted;
 
-        // Start automatic update checking (every 3 minutes)
+        // Start automatic update checking (immediate check, then hourly)
         updateService.StartAutoCheck();
 
         _log.Info("App update service started");
@@ -2633,11 +2682,13 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Render the title-bar version display from UpdateService state: the single
-    /// writer for the chip. Update available: the green "Update vX.Y.Z" install pill.
-    /// Otherwise the passive chip: "Checking…" while a check runs, the version tinted
-    /// red with an explanatory tooltip when the last check failed (the bar's only
-    /// failure signal), or the plain version. Only the pill is interactive; manual
-    /// checks live in Settings.
+    /// writer for the chip. Update available: the green "Update vX.Y.Z" install pill,
+    /// amber and reworded (see <see cref="HeaderUpdatePill"/>) when this build's data
+    /// channel has been superseded.
+    /// Otherwise the passive chip: the localized "Checking" label while a check runs,
+    /// the version tinted red with an explanatory tooltip when the last check failed
+    /// (the bar's only failure signal), or the plain version. Only the pill is
+    /// interactive; manual checks live in Settings.
     /// </summary>
     private void UpdateVersionChipUI()
     {
@@ -2647,28 +2698,26 @@ public partial class MainWindow : Window
         if (update != null)
         {
             var version = UpdateService.FormatVersion(update.Version);
+            var pill = HeaderUpdatePill.For(_loc, version, DatabaseUpdateService.Instance.IsSuperseded);
 
-            // Superseded means this build's data channel has stopped, and the only thing
-            // that restores it is this very button. So the pill escalates rather than a
-            // second notice appearing elsewhere: it says why the update matters now, and
-            // trades the green "nice to have" tone for a warning one. Dark text on amber
-            // rather than the usual white, which would be unreadable at this size.
-            if (DatabaseUpdateService.Instance.IsSuperseded)
+            // A stopped data channel means this very button is the only thing that restarts
+            // it, so the pill escalates rather than a second notice appearing elsewhere: it
+            // says why the update matters now, and trades the green "nice to have" tone for
+            // a warning one. Which state that is stays HeaderUpdatePill's call, beside the
+            // wording; here it is only rendered. Dark text on amber rather than the usual
+            // white, which would be unreadable at this size.
+            (BtnVersionChip.Background, BtnVersionChip.Foreground) = pill.Tone switch
             {
-                TxtUpdatePillLabel.Text = _loc.HeaderUpdateForDataLabel;
-                BtnVersionChip.Background = WarningStatusBrush;
-                BtnVersionChip.Foreground = BackgroundDarkStatusBrush;
-                BtnVersionChip.ToolTip = string.Format(_loc.HeaderUpdateForDataTooltipFormat, version);
-            }
-            else
-            {
-                TxtUpdatePillLabel.Text = string.Format(_loc.HeaderUpdateAvailableFormat, version);
-                BtnVersionChip.Background = SuccessStatusBrush;
-                BtnVersionChip.Foreground = System.Windows.Media.Brushes.White;
-                BtnVersionChip.ToolTip = string.Format(_loc.HeaderVersionTooltipInstall, version);
-            }
+                HeaderUpdatePillTone.Warning => (WarningStatusBrush, BackgroundDarkStatusBrush),
+                _ => (SuccessStatusBrush, (Brush)System.Windows.Media.Brushes.White),
+            };
 
-            AutomationProperties.SetName(BtnVersionChip, (string)BtnVersionChip.ToolTip);
+            TxtUpdatePillLabel.Text = pill.Label;
+            BtnVersionChip.ToolTip = pill.Description;
+            // The spoken name stays the visible label (WCAG 2.5.3 Label in Name); the
+            // sentence goes to HelpText, which is where a UIA client expects to find it.
+            AutomationProperties.SetName(BtnVersionChip, pill.AutomationName);
+            AutomationProperties.SetHelpText(BtnVersionChip, pill.HelpText);
             BtnVersionChip.Visibility = Visibility.Visible;
             ChipVersion.Visibility = Visibility.Collapsed;
             return;
@@ -2702,7 +2751,9 @@ public partial class MainWindow : Window
     /// Render the Settings overlay's Application Update section. The install button
     /// is driven solely by update availability, while the status text reports the
     /// latest check outcome (via <see cref="UpdateService.GetStatusKind"/>), so a
-    /// failed re-check stays visible without hiding a previously found update.
+    /// failed re-check stays visible without hiding a previously found update. An
+    /// available update is worded by <see cref="SettingsUpdateStatus"/>, which names
+    /// the stopped data channel when this build's data format has been superseded.
     /// </summary>
     private void UpdateSettingsUpdateSectionUI()
     {
@@ -2730,18 +2781,16 @@ public partial class MainWindow : Window
         {
             UpdateStatusKind.Checking => (_loc.HeaderChecking, TextSecondaryStatusBrush),
             UpdateStatusKind.Failed => (_loc.UpdateStatusFailed, ErrorStatusBrush),
-            UpdateStatusKind.UpdateAvailable => (_loc.UpdateStatusAvailable, WarningStatusBrush),
+            // Superseded turns an optional update into the thing that restores data updates,
+            // so the wording says that (see SettingsUpdateStatus). The status vocabulary and
+            // its pinned GetStatusKind oracle stay untouched. Switch arms are evaluated
+            // lazily, so this still touches no other service unless an update is available.
+            UpdateStatusKind.UpdateAvailable => (
+                SettingsUpdateStatus.AvailableText(_loc, DatabaseUpdateService.Instance.IsSuperseded),
+                WarningStatusBrush),
             UpdateStatusKind.UpToDate => (_loc.UpdateStatusUpToDate, SuccessStatusBrush),
             _ => ("", TextSecondaryStatusBrush), // no check has completed yet
         };
-
-        // Superseded turns an optional update into the thing that restores data updates,
-        // so the wording says that. Only the text changes: the status vocabulary and its
-        // pinned oracle stay untouched.
-        if (kind == UpdateStatusKind.UpdateAvailable && DatabaseUpdateService.Instance.IsSuperseded)
-        {
-            TxtSettingsUpdateStatus.Text = _loc.UpdateStatusDataEnded;
-        }
 
         UpdateLastCheckTimeDisplay();
     }
@@ -2845,7 +2894,7 @@ public partial class MainWindow : Window
     private void OnWindowClosing(object? sender, CancelEventArgs e)
     {
         // Detach the handlers this window added to app-lifetime singletons, so a
-        // background raise (log watcher, raid poller, the 3-minute update timer)
+        // background raise (log watcher, raid poller, the hourly update timer)
         // during/after teardown can't dispatch UI work against a closed window.
         _logSyncService.MonitoringStatusChanged -= OnLogMonitoringStatusChanged;
         // Detached here too: the quest-event handler dispatches its whole body onto this
@@ -2859,7 +2908,7 @@ public partial class MainWindow : Window
         _profileTransitionCueTimer.Tick -= ProfileTransitionCueTimer_Tick;
         UpdateService.Instance.UpdateCheckStarted -= OnUpdateCheckStarted;
         UpdateService.Instance.UpdateCheckCompleted -= OnUpdateCheckCompleted;
-        // Same reason as the update timer above: the DB check runs on a 5-minute
+        // Same reason as the update timer above: the DB check runs on an hourly
         // background timer and would otherwise dispatch onto a closed window.
         DatabaseUpdateService.Instance.DatabaseUpdated -= OnDatabaseUpdated;
         DatabaseUpdateService.Instance.UpdateCheckCompleted -= OnDatabaseCheckCompleted;
