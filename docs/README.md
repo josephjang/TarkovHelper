@@ -76,6 +76,13 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
   설치 직전에 무엇을 걸러내는지, index.json 하나로 빌드가 뒤에 남았음을 알아내는
   과정, 두 주소에 동시에 발행하며 미러 드리프트를 고치는 퍼블리시를 조작해 보는
   인터랙티브 랩 3개와 퀴즈 게이트를 포함합니다 (PR #48)
+- [2026-08-versioned-data-channel-deep-review-guide.html](2026-08-versioned-data-channel-deep-review-guide.html):
+  바로 위 코드 가이드가 다룬 데이터 채널을 딥 리뷰가 다시 훑어 찾은, 조용히 실패하던
+  경로들과 수정을 다룹니다. 읽기 전용 속성 하나 때문에 매시간 6.9 MB를 다시 받으면서
+  영영 설치를 끝내지 못하던 파일 교체, 구독자 하나가 발견된 업데이트를 실패로 바꿔
+  버리던 체크, 앱이 거부하는 채널을 정상이라고 보고하던 퍼블리셔, 스스로 지워 버려서
+  한 번밖에 실패하지 못하던 스키마 드리프트 가드를 조작해 보는 인터랙티브 랩 4개와
+  퀴즈 게이트를 포함합니다 (PR #49)
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
   마커 API 분석
 
