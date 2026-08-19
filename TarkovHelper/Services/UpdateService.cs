@@ -30,7 +30,16 @@ namespace TarkovHelper.Services
         private readonly System.Timers.Timer _checkTimer;
         private readonly Version _currentVersion;
 
-        private bool _isChecking;
+        /// <summary>
+        /// <see cref="Idle"/> or <see cref="Checking"/>, claimed with <see cref="Interlocked"/>
+        /// rather than a bool: two callers can reach a check at once (the hourly timer and
+        /// the Settings button), and a read-then-write would let both through.
+        /// </summary>
+        private int _isChecking;
+
+        private const int Idle = 0;
+        private const int Checking = 1;
+
         private UpdateInfo? _availableUpdate;
         private DateTime? _lastCheckTime;
         private Exception? _lastCheckError;
@@ -53,7 +62,7 @@ namespace TarkovHelper.Services
         /// <summary>
         /// Whether an update check is in progress
         /// </summary>
-        public bool IsChecking => _isChecking;
+        public bool IsChecking => Volatile.Read(ref _isChecking) != Idle;
 
         /// <summary>
         /// Current application version
@@ -96,7 +105,7 @@ namespace TarkovHelper.Services
 
         /// <summary>
         /// Testable core of <see cref="StartAutoCheck()"/>: when disabled (the e2e
-        /// harness sets TARKOVHELPER_DISABLE_UPDATE_CHECK — see
+        /// harness sets TARKOVHELPER_DISABLE_UPDATE_CHECK, see
         /// <see cref="AppEnv.DisableUpdateCheck"/>), neither the timer nor the initial
         /// network check is started.
         /// </summary>
@@ -125,54 +134,123 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Manually check for updates
+        /// Manually check for updates.
+        /// <para>
+        /// One check raises <see cref="UpdateCheckStarted"/> once and
+        /// <see cref="UpdateCheckCompleted"/> exactly once, from the single exit below. Both
+        /// callers fire and forget the returned task (the hourly timer and the Settings
+        /// button), so an escaping exception would be an unobserved one no handler logs.
+        /// </para>
+        /// <para>
+        /// Both events are raised while the "a check is running" flag is still set, so a
+        /// subscriber that calls back in is answered "already in progress" rather than
+        /// starting a second check from inside the first one's own notification.
+        /// </para>
         /// </summary>
         public async Task<UpdateInfo?> CheckForUpdateAsync()
         {
-            if (_isChecking)
+            // Claimed atomically: a plain read-then-write lets two callers (the Settings
+            // button beside the hourly timer) both see "idle" and run two checks at once.
+            if (Interlocked.CompareExchange(ref _isChecking, Checking, Idle) != Idle)
             {
+                // The only exit that raises nothing: no check began here, so raising a
+                // completion would leave the started/completed pairing the subscribed UI
+                // uses to drive its progress affordance one event out of balance.
                 _log.Debug("Update check already in progress, skipping");
                 return _availableUpdate;
             }
 
-            _isChecking = true;
-            UpdateCheckStarted?.Invoke(this, EventArgs.Empty);
-            _log.Debug("Checking for updates...");
+            UpdateInfo? found;
+            Exception? error;
 
             try
             {
-                var response = await _httpClient.GetStringAsync(UpdateXmlUrl);
-                var updateInfo = ParseUpdateXml(response);
+                try
+                {
+                    RaiseStarted();
+                    _log.Debug("Checking for updates...");
 
-                if (updateInfo != null && updateInfo.Version > _currentVersion)
-                {
-                    _availableUpdate = updateInfo;
-                    _log.Info($"Update available: {updateInfo.Version} (current: {_currentVersion})");
+                    var response = await _httpClient.GetStringAsync(UpdateXmlUrl);
+                    var updateInfo = ParseUpdateXml(response);
+
+                    if (updateInfo != null && updateInfo.Version > _currentVersion)
+                    {
+                        _availableUpdate = updateInfo;
+                        _log.Info($"Update available: {updateInfo.Version} (current: {_currentVersion})");
+                    }
+                    else
+                    {
+                        _availableUpdate = null;
+                        _log.Debug($"No update available (current: {_currentVersion}, latest: {updateInfo?.Version})");
+                    }
+
+                    found = _availableUpdate;
+                    error = null;
                 }
-                else
+                catch (Exception ex)
                 {
-                    _availableUpdate = null;
-                    _log.Debug($"No update available (current: {_currentVersion}, latest: {updateInfo?.Version})");
+                    _log.Error("Failed to check for updates", ex);
+                    // Note: _availableUpdate is intentionally left as-is. An update found by
+                    // an earlier successful check remains installable while re-checks fail.
+                    found = null;
+                    error = ex;
                 }
 
                 _lastCheckTime = DateTime.Now;
-                _lastCheckError = null;
-                UpdateCheckCompleted?.Invoke(this, new UpdateCheckEventArgs(_availableUpdate, null));
-                return _availableUpdate;
-            }
-            catch (Exception ex)
-            {
-                _log.Error("Failed to check for updates", ex);
-                _lastCheckTime = DateTime.Now;
-                _lastCheckError = ex;
-                // Note: _availableUpdate is intentionally left as-is — an update found by an
-                // earlier successful check remains installable while re-checks are failing.
-                UpdateCheckCompleted?.Invoke(this, new UpdateCheckEventArgs(null, ex));
-                return null;
+                _lastCheckError = error;
+
+                // Outside the catch above, not merely inside a try: a completion subscriber
+                // that throws must not be classified as a failed check, which would record
+                // an error over a check that succeeded and raise a second completion saying
+                // no update was found. Still inside the flag, so a subscriber that calls
+                // back in is turned away, and inside the outer try, so nothing can leave the
+                // flag stuck on and make every later check "already in progress" forever.
+                RaiseCompleted(new UpdateCheckEventArgs(found, error));
             }
             finally
             {
-                _isChecking = false;
+                Interlocked.Exchange(ref _isChecking, Idle);
+            }
+
+            return found;
+        }
+
+        /// <summary>
+        /// Announces a check that is about to run. Contained for the same reason
+        /// <see cref="RaiseCompleted"/> is, and symmetrically: a listener exists to be told
+        /// what happened, so one that throws must not be able to cancel the work it was
+        /// merely being notified of. Uncontained, a single subscriber throwing on every raise
+        /// (the title-bar pill renderer touching a disposed control, say) would end every
+        /// check this install ever attempts while the log blamed the network.
+        /// </summary>
+        private void RaiseStarted()
+        {
+            try
+            {
+                UpdateCheckStarted?.Invoke(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"A subscriber to UpdateCheckStarted threw: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Reports a finished check. A subscriber that throws (the pill renderer resolving a
+        /// brush during shutdown is the realistic one) must not turn a completed check into
+        /// a failure, and must never reach <see cref="OnTimerElapsed"/>, which drops what it
+        /// gets: the timer discards the task, and App.xaml.cs hooks no
+        /// TaskScheduler.UnobservedTaskException, so the exception would vanish unlogged.
+        /// </summary>
+        private void RaiseCompleted(UpdateCheckEventArgs args)
+        {
+            try
+            {
+                UpdateCheckCompleted?.Invoke(this, args);
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"A subscriber to UpdateCheckCompleted threw: {ex.Message}");
             }
         }
 
@@ -212,8 +290,9 @@ namespace TarkovHelper.Services
 
         /// <summary>
         /// Pure mapping from update-service state to the status the UI should report.
-        /// Order matters: an in-progress check wins, then a failure — a failed re-check
-        /// must stay visible even while an update found earlier remains installable.
+        /// Order matters: an in-progress check wins, then a failure, because a failed
+        /// re-check must stay visible even while an update found earlier remains
+        /// installable.
         /// </summary>
         public static UpdateStatusKind GetStatusKind(
             bool isChecking, bool lastCheckFailed, bool updateAvailable, bool hasCompletedCheck)
