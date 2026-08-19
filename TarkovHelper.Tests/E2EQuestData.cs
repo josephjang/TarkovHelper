@@ -1,21 +1,18 @@
-using System.IO;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Services;
 
 namespace TarkovHelper.Tests;
 
 /// <summary>
-/// Quest test data derived from the bundled tarkov_data.db (copied to the test
-/// output) instead of hard-coded quest names, so the e2e tests survive database
-/// updates. Shared by QuestNavigationE2ETests and QuestCascadeConfirmE2ETests.
+/// Quest test data derived from the app's bundled tarkov_data.db (read in place at
+/// TestSeed.DatabasePath) instead of hard-coded quest names, so the e2e tests survive
+/// database updates. Shared by QuestNavigationE2ETests and QuestCascadeConfirmE2ETests.
 /// All queries assume a fresh profile: no progress, default player level.
 /// The WHERE clauses are assembled from the alias-parameterized fragments below
 /// so the availability rules cannot drift between queries.
 /// </summary>
 internal static class E2EQuestData
 {
-    private static string AssetDbPath => Path.Combine(AppContext.BaseDirectory, "tarkov_data.db");
-
     /// <summary>
     /// Opens the asset db read-only, runs one command, and hands it to
     /// <paramref name="read"/>: the single home for the connection plumbing all
@@ -23,7 +20,7 @@ internal static class E2EQuestData
     /// </summary>
     private static T Query<T>(string sql, Func<SqliteCommand, T> read)
     {
-        using var connection = new SqliteConnection($"Data Source={AssetDbPath};Mode=ReadOnly");
+        using var connection = new SqliteConnection($"Data Source={TestSeed.DatabasePath};Mode=ReadOnly");
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = sql;

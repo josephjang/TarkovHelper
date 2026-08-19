@@ -318,7 +318,7 @@ public sealed class SeasonalProfileE2ETests : E2ETestBase
     {
         public static SeasonalFixtureData Load()
         {
-            var assetDb = Path.Combine(AppContext.BaseDirectory, "tarkov_data.db");
+            var assetDb = TestSeed.DatabasePath;
             using var connection = new SqliteConnection($"Data Source={assetDb};Mode=ReadOnly");
             connection.Open();
 
