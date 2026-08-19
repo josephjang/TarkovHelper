@@ -177,9 +177,11 @@ principle from `feature-fork-release-process.md`.
   - `<AssemblyMetadata Include="TarkovDataFormatVersion" ... />` exposes the
     number to code.
 - `DatabaseUpdateService.DataFormatVersion` reads that metadata once at type
-  initialization and derives `INDEX_URL`, `CHANNEL_BASE_URL`, and
-  `MANIFEST_URL` from it. Missing or unparseable metadata throws there: a build
-  wired that badly must fail loudly, never fail soft onto some default endpoint.
+  initialization: which data format a build reads identifies the build, not the
+  wire, so it stays on the client. `DataChannel` derives `INDEX_URL`,
+  `CHANNEL_BASE_URL`, and `MANIFEST_URL` from it. Missing or unparseable
+  metadata throws on that read: a build wired that badly must fail loudly, never
+  fail soft onto some default endpoint.
 
 One property therefore selects the seed, the polled URLs, and the version the
 app claims to read, so a bump is one reviewable diff and skew between them is
@@ -206,11 +208,16 @@ mechanically impossible.
   The prefix is what lets a build that only knows sha256 tell "a digest I cannot
   check" apart from "no digest at all"; without it the two are indistinguishable
   and verification switches itself off silently.
-- Integrity fields are **optional to the reader**: absent, unparseable, or
-  naming an unknown algorithm all mean "install without verifying", with a log
-  line. Refusing would turn a future hash upgrade into a breaking change for
-  every build in the field. They are **mandatory in the repository**, enforced by
-  `DataChannelMirrorTests`, so they can only go missing deliberately.
+- Integrity fields are **optional to the reader**: absent, or naming an
+  algorithm this build does not implement, both mean "install without verifying",
+  with a log line. Refusing an unimplemented algorithm would turn a future hash
+  upgrade into a breaking change for every build in the field. A digest that is
+  present but not in `<algorithm>:<hex>` form is different and is **refused**:
+  a bare hex string is the shape the prefix exists to rule out, so reading it
+  leniently would switch verification off in exactly the case the prefix was
+  introduced to make visible. Integrity fields are **mandatory in the
+  repository**, enforced by `DataChannelMirrorTests`, so they can only go missing
+  deliberately.
 - `database.file` is data, not a constant, which leaves room to later give the
   payload a version-stamped filename (immutable URLs) without changing a reader.
 - Unknown fields are ignored, so an endpoint can carry information for newer
@@ -229,18 +236,26 @@ After the bytes arrive and before they replace the working database:
 1. `size`, when present, must match.
 2. `digest`, when present and checkable, must match.
 3. The database's own `PRAGMA user_version` must be this build's data format
-   version, or 0.
+   version.
 
 Any failure discards the temp file and leaves both the working database and the
 local bookmark untouched, so the next check retries rather than recording a
 version it did not actually install.
 
 `user_version` is the 32-bit slot SQLite reserves for the application and never
-reads itself. 0 means "no claim" and is accepted, because databases published
-before stamping existed have to keep working. Failing to read the stamp at all is
-not a rejection: the bytes already matched the digest, so the file is what the
-publisher served, and discarding a verified download over an unreadable pragma
-would be the worse outcome.
+reads itself. An unstamped database reads 0, which is not "format 0" but "this
+file makes no claim", and is refused. Every publish stamps the database before
+hashing it and aborts if the stamp cannot be written, so a payload that arrives
+unstamped did not come from a publish: it is a directory populated by hand, a
+copy from the wrong build, or a half-finished bump, which is exactly what this
+check exists to catch. It is also the payload whose manifest is most likely to
+carry no digest, so accepting it would install a file that nothing verified.
+
+Failing to read the stamp at all is likewise a rejection. A file SQLite cannot
+open is not a database, and the integrity fields that would otherwise have
+caught it are optional, so the refusal is the only thing standing between a
+truncated download or an error page served with a 200 and a working database
+replaced by bytes no reader can open.
 
 ### Being left behind
 
@@ -286,8 +301,10 @@ main never serves a half-published mirror.
 ### Files touched
 
 - `TarkovHelper/TarkovHelper.csproj` (version property, metadata, seed items)
-- `TarkovHelper/Services/DatabaseUpdateService.cs` (derived URLs, document
-  readers, verification, superseded state, test seam)
+- `TarkovHelper/Services/DataChannel.cs` (new: endpoint URLs and the document
+  readers, the wire half of the channel)
+- `TarkovHelper/Services/DatabaseUpdateService.cs` (data format pin, polling,
+  download, verification, superseded state, test seam)
 - `TarkovHelper/MainWindow.xaml.cs` (update pill escalation, Settings status)
 - `TarkovHelper/Services/LocalizationService.Header.cs` (pill and status
   strings, three languages)
@@ -446,12 +463,17 @@ nothing else in the tool was checking that what it ships is one.
     carries its `user_version` stamp. This is also the CI tripwire for a
     half-published commit on main.
   - Localization: the pill and status keys resolve in EN, KO, and JA.
-- **Data format drift** (`DataFormatDriftTests`): snapshots the published
-  database's tables and declared column types into `DataFormatBaseline.v<N>.json`
-  and fails when a table or column disappears or is retyped, while allowing
-  additions freely. The first run writes the baseline and fails deliberately, so
-  a deleted baseline cannot silently reappear and pass against whatever the
-  database happens to hold that day.
+- **Data format drift** (`DataFormatDriftTests`): compares the published
+  database's tables and declared column types against the committed
+  `DataFormatBaseline.v<N>.json` and fails when a table or column disappears or
+  is retyped. An addition is safe for readers but fails too, because a column
+  the baseline does not record cannot be missed when a later publish drops it:
+  the run writes the widened baseline beside the committed one as
+  `DataFormatBaseline.v<N>.proposed.json`, and the maintainer reviews it, moves
+  it into place, and commits it with the publish. A missing baseline is proposed
+  the same way, and a break proposes nothing at all. The test never writes the
+  committed baseline itself, so a re-run with nothing adopted in between stays
+  red instead of passing against a file the run wrote for itself.
   - **What it cannot cover:** a field whose meaning changed or whose permitted
     range narrowed, because nothing in the file says what a value means. Those
     stay a human judgement against the question in Vocabulary, and a green run is
@@ -461,8 +483,10 @@ nothing else in the tool was checking that what it ships is one.
   internal constructor seam (channel root plus assets directory;
   `InternalsVisibleTo` already exists). Covers a complete update, a digest
   mismatch, a truncated payload, a digest naming an algorithm this build cannot
-  check, absent integrity fields, a mismatched `user_version`, supersession
-  including that a failed index fetch does not clear it, and the two refusals.
+  check, a digest that names no algorithm at all, absent integrity fields, a
+  mismatched `user_version`, an unstamped payload, a payload SQLite cannot open,
+  supersession including that a failed index fetch does not clear it, and the two
+  document-level refusals.
   The server is a raw `TcpListener` rather than `HttpListener`, which needs
   elevation or a netsh URL reservation this suite cannot assume, and it records
   requested paths so a test can prove the negative that a check which found
