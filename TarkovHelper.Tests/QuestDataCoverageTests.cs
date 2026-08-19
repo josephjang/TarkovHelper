@@ -20,7 +20,7 @@ public class QuestDataCoverageTests
     [Fact(Skip = "Requires the regenerated tarkov_data.db (data/korean-quest-names-db branch).")]
     public void Quests_have_sufficient_korean_name_coverage()
     {
-        var dbPath = Path.Combine(AppContext.BaseDirectory, "tarkov_data.db");
+        var dbPath = TestSeed.DatabasePath;
         Assert.True(File.Exists(dbPath), $"Asset DB not found at {dbPath}");
 
         using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
