@@ -1,7 +1,5 @@
 using System.IO;
-using System.Security.Cryptography;
 using System.Text.Json;
-using Microsoft.Data.Sqlite;
 using TarkovHelper.Services;
 
 namespace TarkovHelper.Tests;
@@ -38,26 +36,6 @@ public sealed class DataChannelMirrorTests
     private static string AssetsDir() =>
         Path.Combine(TestRepo.Root(), "TarkovHelper", "Assets");
 
-    private static string Sha256Of(string path)
-    {
-        using var stream = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(stream));
-    }
-
-    private static void AssertSameBytes(string expectedPath, string actualPath, string why)
-    {
-        Assert.True(File.Exists(expectedPath), $"{expectedPath} is missing");
-        Assert.True(File.Exists(actualPath), $"{actualPath} is missing");
-
-        var expectedLength = new FileInfo(expectedPath).Length;
-        var actualLength = new FileInfo(actualPath).Length;
-        Assert.True(expectedLength == actualLength,
-            $"{why}\n  {expectedPath} is {expectedLength} bytes\n  {actualPath} is {actualLength} bytes");
-
-        Assert.True(Sha256Of(expectedPath) == Sha256Of(actualPath),
-            $"{why}\n  {expectedPath} and {actualPath} are the same size but differ.");
-    }
-
     [Fact]
     public void The_channel_directory_holds_both_endpoint_files()
     {
@@ -70,7 +48,7 @@ public sealed class DataChannelMirrorTests
     [Fact]
     public void The_assets_mirror_matches_the_channel_database()
     {
-        AssertSameBytes(
+        TestFiles.AssertSameBytes(
             Path.Combine(ChannelDir(), DatabaseFile),
             Path.Combine(AssetsDir(), DatabaseFile),
             $"TarkovHelper/Assets and data/v{MirroredFormatVersion} are two addresses for one data format "
@@ -80,7 +58,7 @@ public sealed class DataChannelMirrorTests
     [Fact]
     public void The_assets_mirror_matches_the_channel_version_stamp()
     {
-        AssertSameBytes(
+        TestFiles.AssertSameBytes(
             Path.Combine(ChannelDir(), VersionFile),
             Path.Combine(AssetsDir(), VersionFile),
             $"The version stamps of TarkovHelper/Assets and data/v{MirroredFormatVersion} disagree, so the two "
@@ -97,12 +75,12 @@ public sealed class DataChannelMirrorTests
         var channelDir = Path.Combine(
             TestRepo.Root(), "data", $"v{DatabaseUpdateService.DataFormatVersion}");
 
-        AssertSameBytes(
+        TestFiles.AssertSameBytes(
             Path.Combine(channelDir, DatabaseFile),
             Path.Combine(seedDir, DatabaseFile),
             "The bundled seed database is not the one this build's channel serves; check the "
             + "csproj seed items and rebuild.");
-        AssertSameBytes(
+        TestFiles.AssertSameBytes(
             Path.Combine(channelDir, VersionFile),
             Path.Combine(seedDir, VersionFile),
             "The bundled version stamp is not the one this build's channel serves, so a fresh "
@@ -121,11 +99,11 @@ public sealed class DataChannelMirrorTests
         var manifestPath = Path.Combine(channelDir, "manifest.json");
 
         Assert.True(File.Exists(manifestPath), $"data/v{format}/manifest.json is missing");
-        var manifest = DatabaseUpdateService.ParseManifest(File.ReadAllText(manifestPath));
+        var manifest = DataChannel.ParseManifest(File.ReadAllText(manifestPath));
         Assert.True(manifest != null, $"data/v{format}/manifest.json does not satisfy the app's own reader");
 
         Assert.Equal(format, manifest!.DataFormatVersion);
-        Assert.True(manifest.SchemaVersion <= DatabaseUpdateService.MAX_SUPPORTED_SCHEMA_VERSION,
+        Assert.True(manifest.SchemaVersion <= DataChannel.MAX_SUPPORTED_SCHEMA_VERSION,
             $"The committed manifest declares schema {manifest.SchemaVersion}, which this build cannot read.");
 
         var databasePath = Path.Combine(channelDir, manifest.Database.File);
@@ -138,7 +116,7 @@ public sealed class DataChannelMirrorTests
             "The committed manifest has no digest, which would disable download verification for every client.");
         Assert.Equal(new FileInfo(databasePath).Length, manifest.Database.Size);
         Assert.Equal(
-            $"sha256:{Sha256Of(databasePath).ToLowerInvariant()}",
+            TestDigest.Sha256Digest(databasePath),
             manifest.Database.Digest!.ToLowerInvariant());
 
         // The bookmark seeded into installs has to name the same version the manifest does.
@@ -155,15 +133,7 @@ public sealed class DataChannelMirrorTests
         var format = DatabaseUpdateService.DataFormatVersion;
         var databasePath = Path.Combine(TestRepo.Root(), "data", $"v{format}", DatabaseFile);
 
-        int stamped;
-        using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly"))
-        {
-            connection.Open();
-            using var command = connection.CreateCommand();
-            command.CommandText = "PRAGMA user_version";
-            stamped = Convert.ToInt32(command.ExecuteScalar());
-        }
-        SqliteConnection.ClearAllPools();
+        var stamped = TestSqlite.ReadDataFormatStamp(databasePath);
 
         Assert.True(stamped == format,
             $"data/v{format}/{DatabaseFile} is stamped with data format {stamped}, expected {format}. "
@@ -212,7 +182,7 @@ public sealed class DataChannelMirrorTests
         var indexPath = Path.Combine(TestRepo.Root(), "data", "index.json");
         Assert.True(File.Exists(indexPath), "data/index.json is missing: no build could tell whether it is current");
 
-        var index = DatabaseUpdateService.ParseIndex(File.ReadAllText(indexPath));
+        var index = DataChannel.ParseIndex(File.ReadAllText(indexPath));
         Assert.True(index != null, "data/index.json does not satisfy the app's own reader");
 
         Assert.True(index!.CurrentDataFormatVersion >= DatabaseUpdateService.DataFormatVersion,
