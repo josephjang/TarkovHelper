@@ -11,6 +11,19 @@
 > nothing in it has shipped when it merges, and each phase documents its own
 > design in its own spec.
 
+> Superseded in part by `feature-quest-data-1-1-refresh.spec.md` (2026-08-21):
+> the Technical Decision "Loyalty is a column on `Quests`, not a requirements
+> table" and the phase-3 bullet's `MinTraderLevel` column are reversed. The 1.1
+> data gates four ordinary quests on loyalty with a trader other than their
+> giver, the case that decision named as its fallback trigger, so loyalty is
+> published as a per-trader `QuestTraderRequirements` table; the phase-4
+> bullet's column read becomes a read of that table, feature-detected by table
+> existence. Also reversed: the phase-2 and phase-3 bullets' requirement that
+> the channel reader be in the field before the first 1.1 publish. That publish
+> stays additive under data format 1 and goes out from the merge the release is
+> cut right after, minutes before the release that carries the reader. Every
+> other decision here stands.
+
 ## Summary
 
 Three ideas carry the whole program. First, the 1.1 quest data lands through
