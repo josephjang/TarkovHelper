@@ -981,26 +981,39 @@ public partial class MainWindow : Window
             message.AppendLine($"- Item IDs available: {result.SnapshotItemIds}");
             message.AppendLine();
             message.AppendLine($"Filled: {result.QuestsFilled} quests, {result.ItemsFilled} items");
-            if (result.HandBridgesApplied.Count > 0)
-            {
-                message.AppendLine();
-                message.AppendLine("Applied hand bridges (rows no snapshot can supply):");
-                foreach (var bridge in result.HandBridgesApplied)
-                    message.AppendLine($"- {bridge}");
-            }
+
+            // Every hand bridge is listed, applied or not. A bridge changes none of the counts
+            // above, so reporting only the ones that fired would make a run where the bridge
+            // matched nothing read exactly like a successful one, and the row it exists for
+            // would lose every user's recorded progress at the next refresh.
+            var unappliedBridges = result.HandBridgesNeedingAttention;
+            message.AppendLine();
+            message.AppendLine("Hand bridges (rows no snapshot can supply):");
+            foreach (var bridge in result.HandBridges)
+                message.AppendLine($"- {bridge.Summary}");
 
             message.AppendLine();
             message.AppendLine($"Still without an ID: {result.QuestsStillMissing}/{result.QuestsTotal} quests, "
                 + $"{result.ItemsStillMissing}/{result.ItemsTotal} items");
 
-            ViewModel.StatusMessage =
-                $"Backfill complete: {result.QuestsFilled} quests, {result.ItemsFilled} items";
+            if (unappliedBridges.Count > 0)
+            {
+                message.AppendLine();
+                message.AppendLine(
+                    $"{unappliedBridges.Count} hand bridge(s) did not apply. Check them before publishing: "
+                    + "a refresh cannot carry a rename whose row has no external ID.");
+            }
+
+            ViewModel.StatusMessage = unappliedBridges.Count > 0
+                ? $"Backfill complete with {unappliedBridges.Count} unapplied hand bridge(s): "
+                    + $"{result.QuestsFilled} quests, {result.ItemsFilled} items"
+                : $"Backfill complete: {result.QuestsFilled} quests, {result.ItemsFilled} items";
 
             MessageBox.Show(
                 message.ToString(),
-                "Backfill Complete",
+                unappliedBridges.Count > 0 ? "Backfill Complete - Check Hand Bridges" : "Backfill Complete",
                 MessageBoxButton.OK,
-                MessageBoxImage.Information);
+                unappliedBridges.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (Exception ex)
         {

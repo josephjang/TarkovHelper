@@ -26,6 +26,10 @@ internal sealed class RefreshPipelineFixture : IDisposable
     }
 
     public string BasePath { get; }
+
+    /// <summary>What the editor calls its working folder: the caches and the logs live under it.</summary>
+    public string WikiDataDir => Path.Combine(BasePath, "wiki_data");
+
     public string CacheDir { get; }
     public string DatabasePath { get; }
 
@@ -35,8 +39,14 @@ internal sealed class RefreshPipelineFixture : IDisposable
 
     public RefreshDataService CreateService() => new(BasePath);
 
+    /// <summary>
+    /// Everything the run reported as it went, so a test can assert a decision the database does
+    /// not record: a table left alone, a duplicate collapsed.
+    /// </summary>
+    public List<string> ProgressMessages { get; } = new();
+
     public Task<RefreshResult> RefreshAsync() =>
-        CreateService().RefreshDataFromCacheAsync(DatabasePath);
+        CreateService().RefreshDataFromCacheAsync(DatabasePath, progress: ProgressMessages.Add);
 
     #region Caches
 
@@ -53,7 +63,6 @@ internal sealed class RefreshPipelineFixture : IDisposable
                 RevisionId = 1,
                 CachedAt = DateTime.UtcNow,
                 ContentFetchedAt = DateTime.UtcNow,
-                IsSeasonal = WikiQuestService.ExtractIsSeasonal(content),
             };
         }
 
@@ -209,6 +218,60 @@ internal sealed class RefreshPipelineFixture : IDisposable
         return this;
     }
 
+    /// <summary>
+    /// Seeds a prerequisite row exactly as an earlier publish would have written it, so a test
+    /// can watch a refresh remove one the new data no longer produces.
+    /// </summary>
+    /// <param name="groupId">
+    /// The OR group the row was published in. The wiki parser numbered its terms from 1, which
+    /// is what all 546 non-Collector rows in data/v1/tarkov_data.db carry; the game-derived
+    /// pipeline emits 0. Since GroupId is part of the row key, that difference alone re-keys a
+    /// row whose prerequisite edge is unchanged.
+    /// </param>
+    /// <param name="id">
+    /// The row key to publish under, when a test needs a key no current scheme produces:
+    /// Collector's 248 published rows are keyed <c>&lt;collectorId&gt;_&lt;questId&gt;</c> by a
+    /// hand-built concatenation that predates <c>RowHash</c>. Defaults to the key the current
+    /// scheme computes for the row.
+    /// </param>
+    public RefreshPipelineFixture WithQuestRequirement(
+        string questName,
+        string requiredQuestName,
+        string requirementType = "Complete",
+        int groupId = 0,
+        string? id = null)
+    {
+        var row = new DbQuestRequirement
+        {
+            QuestId = WikiQuestIdentity.IdFor(questName),
+            RequiredQuestId = WikiQuestIdentity.IdFor(requiredQuestName),
+            RequirementType = requirementType,
+            GroupId = groupId,
+        };
+        row.Id = id ?? row.ComputeId();
+
+        using (var connection = new SqliteConnection($"Data Source={DatabasePath}"))
+        {
+            connection.Open();
+            using var cmd = new SqliteCommand(
+                "INSERT INTO QuestRequirements "
+                + "(Id, QuestId, RequiredQuestId, RequirementType, GroupId, ContentHash, UpdatedAt) "
+                + "VALUES (@Id, @QuestId, @RequiredQuestId, @RequirementType, @GroupId, @ContentHash, @UpdatedAt)",
+                connection);
+            cmd.Parameters.AddWithValue("@Id", row.Id);
+            cmd.Parameters.AddWithValue("@QuestId", row.QuestId);
+            cmd.Parameters.AddWithValue("@RequiredQuestId", row.RequiredQuestId);
+            cmd.Parameters.AddWithValue("@RequirementType", row.RequirementType);
+            cmd.Parameters.AddWithValue("@GroupId", row.GroupId);
+            cmd.Parameters.AddWithValue("@ContentHash", row.ComputeContentHash());
+            cmd.Parameters.AddWithValue("@UpdatedAt", DateTime.UtcNow.ToString("o"));
+            cmd.ExecuteNonQuery();
+        }
+
+        SqliteConnection.ClearAllPools();
+        return this;
+    }
+
     /// <summary>Reads back one column for every quest row, keyed by name.</summary>
     public Dictionary<string, string?> ReadQuestColumn(string column)
     {
@@ -291,6 +354,20 @@ internal sealed class RefreshPipelineFixture : IDisposable
     public static string SeasonalPage() =>
         Page(extraRequirement: "* Must be playing in the [[Seasons#Season 1: KORD BREACH|Seasonal mode]].");
 
+    /// <param name="wikiLink">
+    /// The record's <c>wikiLink</c>. Defaults to the page the title names, which is what the
+    /// resolver's first pass matches on; pass anything else to reach its later passes.
+    /// </param>
+    /// <param name="normalizedName">
+    /// The record's <c>normalizedName</c>. Defaults to the slug of the title, which is what the
+    /// resolver's second pass matches on; pass anything else to reach the alias pass.
+    /// </param>
+    /// <param name="failedBy">
+    /// The record's <c>failConditions</c>: what the game records as failing this task. Only the
+    /// <c>taskStatus</c> kind names a task, and it is what the refresh reads to find the quest
+    /// whose completion fails a prerequisite. Default is none, which is the shape of every task
+    /// nothing can fail and of a task cache written before the field was carried.
+    /// </param>
     public static TarkovDevQuestCacheItem Task(
         string id,
         string title,
@@ -299,13 +376,16 @@ internal sealed class RefreshPipelineFixture : IDisposable
         bool kappaRequired = false,
         string faction = "Any",
         (string TraderId, int Level)[]? loyalty = null,
-        (string TaskId, string Status)[]? requires = null) =>
+        (string TaskId, string Status)[]? requires = null,
+        string? wikiLink = null,
+        string? normalizedName = null,
+        (string Type, string? TaskId, string[] Status)[]? failedBy = null) =>
         new()
         {
             Id = id,
             NameEN = title,
-            NormalizedName = QuestIdentityResolver.NormalizeQuestName(title),
-            WikiLink = WikiQuestIdentity.PageLinkFor(title),
+            NormalizedName = normalizedName ?? QuestIdentityResolver.NormalizeQuestName(title),
+            WikiLink = wikiLink ?? WikiQuestIdentity.PageLinkFor(title),
             Trader = traderId,
             MinPlayerLevel = minPlayerLevel,
             KappaRequired = kappaRequired,
@@ -316,7 +396,23 @@ internal sealed class RefreshPipelineFixture : IDisposable
             TaskRequirements = (requires ?? Array.Empty<(string, string)>())
                 .Select(r => new TarkovDevTaskPrerequisite { TaskId = r.TaskId, Status = new List<string> { r.Status } })
                 .ToList(),
+            FailConditions = (failedBy ?? Array.Empty<(string, string?, string[])>())
+                .Select(f => new TarkovDevTaskFailCondition
+                {
+                    Type = f.Type,
+                    TaskId = f.TaskId,
+                    Status = f.Status.ToList(),
+                })
+                .ToList(),
         };
+
+    /// <summary>
+    /// The fail condition that makes two quests exclusive: this task is failed the moment
+    /// <paramref name="twinTaskId"/> completes, which is what upstream records for the two 1.1
+    /// pairs the refresh turns back into OR groups.
+    /// </summary>
+    public static (string Type, string? TaskId, string[] Status) FailedByCompleting(string twinTaskId) =>
+        ("taskStatus", twinTaskId, new[] { "complete" });
 
     #endregion
 

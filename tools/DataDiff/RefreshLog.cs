@@ -7,8 +7,15 @@ namespace DataDiff;
 /// <summary>
 /// The JSON side of a refresh run: what the identity resolver decided, including the things a
 /// database comparison cannot see because they never reached the database - pages held back for
-/// lack of a game record, records with no page, pages several records claimed, and where the
-/// wiki and the game disagree about a quest's prerequisites.
+/// lack of a game record, records with no page, pages several records claimed, where the wiki
+/// and the game disagree about a quest's prerequisites, and which pages only matched because a
+/// hand written alias said so.
+/// <para>
+/// It also carries the renames and title reuses the resolver itself observed. Those overlap with
+/// what the database comparison derives, but not everywhere: the comparison infers a title reuse
+/// from two external IDs, so against a previous database written before the backfill it finds
+/// none, while the resolver saw every one of them.
+/// </para>
 /// </summary>
 public sealed class RefreshLog
 {
@@ -29,6 +36,9 @@ public sealed class RefreshLog
 
     [JsonPropertyName("collisions")]
     public List<CollisionEntry>? Collisions { get; set; }
+
+    [JsonPropertyName("renames")]
+    public List<RenameEntry>? Renames { get; set; }
 
     [JsonPropertyName("titleReuses")]
     public List<RenameEntry>? TitleReuses { get; set; }
@@ -68,6 +78,39 @@ public sealed class RefreshLog
             report.AppendLine("|---|---:|");
             foreach (var (name, value) in Counts.OrderBy(c => c.Key, StringComparer.Ordinal))
                 report.AppendLine($"| {name} | {value} |");
+            report.AppendLine();
+        }
+
+        // Rendered from the log rather than left to the database comparison, which infers title
+        // reuse from two external IDs and therefore finds none at all against a previous database
+        // written before the backfill - the very run where a reuse is most likely to be missed.
+        if (TitleReuses is { Count: > 0 })
+        {
+            report.AppendLine("### Titles the resolver saw change owner");
+            report.AppendLine();
+            report.AppendLine("Another imported quest now carries the old title. Keying by page would have moved "
+                + "this quest's recorded progress onto that other quest.");
+            report.AppendLine();
+            report.AppendLine("| Previous title | Now titled | Game record | Row key kept |");
+            report.AppendLine("|---|---|---|---|");
+            foreach (var reuse in TitleReuses.OrderBy(r => r.PreviousName, StringComparer.Ordinal))
+                report.AppendLine($"| {reuse.PreviousName} | {reuse.Title} | `{reuse.BsgId}` | `{reuse.Id}` |");
+            report.AppendLine();
+        }
+
+        if (Renames is { Count: > 0 })
+        {
+            report.AppendLine("### Renames the resolver carried");
+            report.AppendLine();
+            report.AppendLine("The quest kept its row key and normalized name, so progress recorded under the old "
+                + "title still resolves.");
+            report.AppendLine();
+            report.AppendLine($"<details><summary>{Renames.Count} renames</summary>");
+            report.AppendLine();
+            foreach (var rename in Renames.OrderBy(r => r.PreviousName, StringComparer.Ordinal))
+                report.AppendLine($"- {rename.PreviousName} -> {rename.Title} (`{rename.BsgId}`, row key `{rename.Id}`)");
+            report.AppendLine();
+            report.AppendLine("</details>");
             report.AppendLine();
         }
 
@@ -151,6 +194,18 @@ public sealed class RefreshLog
             }
         }
 
+        if (AliasesUsed is { Count: > 0 })
+        {
+            report.AppendLine("### Pages matched only by a hand written alias");
+            report.AppendLine();
+            report.AppendLine("These pages do not reach their game record on their own. Each one is a standing "
+                + "guess that the alias list still points at the right record.");
+            report.AppendLine();
+            foreach (var title in AliasesUsed.OrderBy(t => t, StringComparer.Ordinal))
+                report.AppendLine($"- {title}");
+            report.AppendLine();
+        }
+
         if (UnusedAliases is { Count: > 0 })
         {
             report.AppendLine("### Alias entries that no longer fire");
@@ -195,6 +250,12 @@ public sealed class RefreshLog
         [JsonPropertyName("PreviousName")] public string PreviousName { get; set; } = "";
         [JsonPropertyName("Title")] public string Title { get; set; } = "";
         [JsonPropertyName("BsgId")] public string BsgId { get; set; } = "";
+
+        /// <summary>The row key the quest kept, which is what the recorded progress hangs off.</summary>
+        [JsonPropertyName("Id")] public string Id { get; set; } = "";
+
+        /// <summary>True when another imported quest now carries this quest's old title.</summary>
+        [JsonPropertyName("TitleReused")] public bool TitleReused { get; set; }
     }
 
     public sealed class DisagreementEntry

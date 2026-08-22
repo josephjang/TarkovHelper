@@ -32,11 +32,17 @@ namespace TarkovDBEditor.Services
     {
         private readonly TarkovDevJsonClient _jsonClient;
 
+        /// <summary>
+        /// True only when this service built the client. A client passed in belongs to whoever
+        /// passed it, the same rule <see cref="TarkovDevJsonClient"/> applies to a handler.
+        /// </summary>
+        private readonly bool _ownsJsonClient;
+
         private readonly string _cacheDir;
-        private readonly string _itemsCachePath;
-        private readonly string _questsCachePath;
-        private readonly string _hideoutCachePath;
-        private readonly string _tradersCachePath;
+        private readonly CacheFile<Dictionary<string, TarkovDevMultiLangItem>> _items;
+        private readonly CacheFile<List<TarkovDevQuestCacheItem>> _quests;
+        private readonly CacheFile<List<TarkovDevHideoutStation>> _hideout;
+        private readonly CacheFile<List<TarkovDevTraderCacheItem>> _traders;
 
         private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
 
@@ -44,25 +50,101 @@ namespace TarkovDBEditor.Services
         {
             basePath ??= Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "wiki_data");
             _cacheDir = Path.Combine(basePath, "cache");
-            _itemsCachePath = Path.Combine(_cacheDir, "tarkov_dev_items.json");
-            _questsCachePath = Path.Combine(_cacheDir, "tarkov_dev_quests.json");
-            _hideoutCachePath = Path.Combine(_cacheDir, "tarkov_dev_hideout.json");
-            _tradersCachePath = Path.Combine(_cacheDir, "tarkov_dev_traders.json");
-
             Directory.CreateDirectory(_cacheDir);
 
+            // Four files, one description each: the file name, the envelope that wraps the
+            // collection on disk, and which of its fields the collection is.
+            _items = Define(
+                "tarkov_dev_items.json",
+                (TarkovDevItemsCache c) => c.Items,
+                (value, cachedAt, sourceLastModified) => new TarkovDevItemsCache
+                {
+                    CachedAt = cachedAt,
+                    SourceLastModified = sourceLastModified,
+                    Items = value
+                });
+
+            _quests = Define(
+                "tarkov_dev_quests.json",
+                (TarkovDevQuestsCache c) => c.Quests,
+                (value, cachedAt, sourceLastModified) => new TarkovDevQuestsCache
+                {
+                    CachedAt = cachedAt,
+                    SourceLastModified = sourceLastModified,
+                    Quests = value
+                });
+
+            _hideout = Define(
+                "tarkov_dev_hideout.json",
+                (TarkovDevHideoutCache c) => c.Stations,
+                (value, cachedAt, sourceLastModified) => new TarkovDevHideoutCache
+                {
+                    CachedAt = cachedAt,
+                    SourceLastModified = sourceLastModified,
+                    Stations = value
+                });
+
+            _traders = Define(
+                "tarkov_dev_traders.json",
+                (TarkovDevTradersCache c) => c.Traders,
+                (value, cachedAt, sourceLastModified) => new TarkovDevTradersCache
+                {
+                    CachedAt = cachedAt,
+                    SourceLastModified = sourceLastModified,
+                    Traders = value
+                });
+
+            _ownsJsonClient = jsonClient == null;
             _jsonClient = jsonClient ?? new TarkovDevJsonClient(_cacheDir);
         }
 
         #region Cache Management
 
-        public bool HasCachedItems() => File.Exists(_itemsCachePath);
+        /// <summary>
+        /// One cache file: where it lives, how it is read, and how it is written. The count the
+        /// accounting needs comes from the value itself, which is why <typeparamref name="TValue"/>
+        /// is a collection: a dictionary and a list both answer <c>Count</c>, and neither can be
+        /// counted by the wrong rule.
+        /// </summary>
+        private sealed class CacheFile<TValue> where TValue : class, System.Collections.ICollection
+        {
+            public required string Path { get; init; }
 
-        public bool HasCachedQuests() => File.Exists(_questsCachePath);
+            /// <summary>Reads the file, or null when there is none. Throws on a damaged one.</summary>
+            public required Func<CancellationToken, Task<TValue?>> LoadAsync { get; init; }
 
-        public bool HasCachedHideout() => File.Exists(_hideoutCachePath);
+            /// <summary>Writes the file, stamped with upstream's own <c>Last-Modified</c>.</summary>
+            public required Func<TValue, DateTime?, CancellationToken, Task> SaveAsync { get; init; }
+        }
 
-        public bool HasCachedTraders() => File.Exists(_tradersCachePath);
+        /// <summary>
+        /// Describes one cache file. The path is closed over rather than looked up later, so a
+        /// file cannot be described by one path and written to another, and "cached at is now"
+        /// is decided here rather than once per file.
+        /// </summary>
+        /// <param name="fileName">The cache file's name under <c>wiki_data/cache/</c>.</param>
+        /// <param name="read">The collection inside the envelope the file holds.</param>
+        /// <param name="wrap">Builds the envelope to write, given the value and the two stamps.</param>
+        private CacheFile<TValue> Define<TCache, TValue>(
+            string fileName,
+            Func<TCache, TValue?> read,
+            Func<TValue, DateTime, DateTime?, TCache> wrap)
+            where TCache : class
+            where TValue : class, System.Collections.ICollection
+        {
+            var path = Path.Combine(_cacheDir, fileName);
+            return new CacheFile<TValue>
+            {
+                Path = path,
+                LoadAsync = async cancellationToken =>
+                {
+                    var cache = await LoadCacheAsync<TCache>(path, cancellationToken);
+                    return cache == null ? null : read(cache);
+                },
+                SaveAsync = (value, sourceLastModified, cancellationToken) =>
+                    WriteCacheAsync(path, wrap(value, DateTime.UtcNow, sourceLastModified), cancellationToken),
+            };
+        }
 
         /// <summary>
         /// A tolerant status read for the UI: counts and ages, with an unreadable file
@@ -78,24 +160,38 @@ namespace TarkovDBEditor.Services
         {
             var info = new TarkovDevCacheInfo();
 
-            info.ItemsCachedAt = TryGetWriteTime(_itemsCachePath);
-            info.ItemsCount = TryCount(_itemsCachePath, json =>
+            info.ItemsCachedAt = TryGetWriteTime(_items.Path);
+            info.ItemsCount = TryCount(_items.Path, json =>
                 JsonSerializer.Deserialize<TarkovDevItemsCache>(json)?.Items?.Count ?? 0);
 
-            info.QuestsCachedAt = TryGetWriteTime(_questsCachePath);
-            info.QuestsCount = TryCount(_questsCachePath, json =>
+            info.QuestsCachedAt = TryGetWriteTime(_quests.Path);
+            info.QuestsCount = TryCount(_quests.Path, json =>
                 JsonSerializer.Deserialize<TarkovDevQuestsCache>(json)?.Quests?.Count ?? 0);
 
-            info.HideoutCachedAt = TryGetWriteTime(_hideoutCachePath);
-            info.HideoutCount = TryCount(_hideoutCachePath, json =>
+            info.HideoutCachedAt = TryGetWriteTime(_hideout.Path);
+            info.HideoutCount = TryCount(_hideout.Path, json =>
                 JsonSerializer.Deserialize<TarkovDevHideoutCache>(json)?.Stations?.Count ?? 0);
 
-            info.TradersCachedAt = TryGetWriteTime(_tradersCachePath);
-            info.TradersCount = TryCount(_tradersCachePath, json =>
+            info.TradersCachedAt = TryGetWriteTime(_traders.Path);
+            info.TradersCount = TryCount(_traders.Path, json =>
                 JsonSerializer.Deserialize<TarkovDevTradersCache>(json)?.Traders?.Count ?? 0);
 
             return info;
         }
+
+        /// <summary>
+        /// When the task cache was last confirmed current: the quests file's last write time,
+        /// the same value <see cref="GetCacheInfo"/> reports as
+        /// <see cref="TarkovDevCacheInfo.QuestsCachedAt"/>, and null when there is no quests
+        /// cache file. See that method's remarks for why the write time is the answer rather
+        /// than the <c>cachedAt</c> field inside the file.
+        /// <para>
+        /// Separate from <see cref="GetCacheInfo"/> because the refresh wants this timestamp and
+        /// nothing else, while the counts <see cref="GetCacheInfo"/> gathers alongside it cost a
+        /// full read and deserialization of every cache file, the items one being about 16 MB.
+        /// </para>
+        /// </summary>
+        public DateTime? GetQuestsCacheVerifiedAt() => TryGetWriteTime(_quests.Path);
 
         private static DateTime? TryGetWriteTime(string path)
         {
@@ -147,12 +243,8 @@ namespace TarkovDBEditor.Services
         }
 
         /// <summary>Cached items, keyed by the URL-decoded wiki page link.</summary>
-        public async Task<Dictionary<string, TarkovDevMultiLangItem>?> LoadCachedItemsAsync(
-            CancellationToken cancellationToken = default)
-        {
-            var cache = await LoadCacheAsync<TarkovDevItemsCache>(_itemsCachePath, cancellationToken);
-            return cache?.Items;
-        }
+        public Task<Dictionary<string, TarkovDevMultiLangItem>?> LoadCachedItemsAsync(
+            CancellationToken cancellationToken = default) => _items.LoadAsync(cancellationToken);
 
         /// <summary>
         /// Cached tasks. A list, not a dictionary keyed by <c>wikiLink</c>: ten wiki titles are
@@ -160,83 +252,49 @@ namespace TarkovDBEditor.Services
         /// saw last. Choosing among them is <see cref="QuestIdentityResolver"/>'s job and it
         /// needs to see all of them.
         /// </summary>
-        public async Task<List<TarkovDevQuestCacheItem>?> LoadCachedQuestsAsync(
-            CancellationToken cancellationToken = default)
-        {
-            var cache = await LoadCacheAsync<TarkovDevQuestsCache>(_questsCachePath, cancellationToken);
-            return cache?.Quests;
-        }
+        public Task<List<TarkovDevQuestCacheItem>?> LoadCachedQuestsAsync(
+            CancellationToken cancellationToken = default) => _quests.LoadAsync(cancellationToken);
 
-        public async Task<List<TarkovDevHideoutStation>?> LoadCachedHideoutAsync(
-            CancellationToken cancellationToken = default)
-        {
-            var cache = await LoadCacheAsync<TarkovDevHideoutCache>(_hideoutCachePath, cancellationToken);
-            return cache?.Stations;
-        }
+        public Task<List<TarkovDevHideoutStation>?> LoadCachedHideoutAsync(
+            CancellationToken cancellationToken = default) => _hideout.LoadAsync(cancellationToken);
 
-        public async Task<List<TarkovDevTraderCacheItem>?> LoadCachedTradersAsync(
-            CancellationToken cancellationToken = default)
-        {
-            var cache = await LoadCacheAsync<TarkovDevTradersCache>(_tradersCachePath, cancellationToken);
-            return cache?.Traders;
-        }
+        public Task<List<TarkovDevTraderCacheItem>?> LoadCachedTradersAsync(
+            CancellationToken cancellationToken = default) => _traders.LoadAsync(cancellationToken);
 
-        public async Task SaveItemsCacheAsync(
-            Dictionary<string, TarkovDevMultiLangItem> items,
-            DateTime? sourceLastModified = null,
-            CancellationToken cancellationToken = default)
-        {
-            await WriteCacheAsync(_itemsCachePath, new TarkovDevItemsCache
-            {
-                CachedAt = DateTime.UtcNow,
-                SourceLastModified = sourceLastModified,
-                Items = items
-            }, cancellationToken);
-        }
-
-        public async Task SaveQuestsCacheAsync(
-            List<TarkovDevQuestCacheItem> quests,
-            DateTime? sourceLastModified = null,
-            CancellationToken cancellationToken = default)
-        {
-            await WriteCacheAsync(_questsCachePath, new TarkovDevQuestsCache
-            {
-                CachedAt = DateTime.UtcNow,
-                SourceLastModified = sourceLastModified,
-                Quests = quests
-            }, cancellationToken);
-        }
-
-        public async Task SaveHideoutCacheAsync(
-            List<TarkovDevHideoutStation> stations,
-            DateTime? sourceLastModified = null,
-            CancellationToken cancellationToken = default)
-        {
-            await WriteCacheAsync(_hideoutCachePath, new TarkovDevHideoutCache
-            {
-                CachedAt = DateTime.UtcNow,
-                SourceLastModified = sourceLastModified,
-                Stations = stations
-            }, cancellationToken);
-        }
-
-        public async Task SaveTradersCacheAsync(
-            List<TarkovDevTraderCacheItem> traders,
-            DateTime? sourceLastModified = null,
-            CancellationToken cancellationToken = default)
-        {
-            await WriteCacheAsync(_tradersCachePath, new TarkovDevTradersCache
-            {
-                CachedAt = DateTime.UtcNow,
-                SourceLastModified = sourceLastModified,
-                Traders = traders
-            }, cancellationToken);
-        }
-
+        /// <summary>
+        /// Writes one cache file, through a temporary file so the destination is only ever the
+        /// whole old copy or the whole new one. A 16 MB write that dies halfway (cancellation, a
+        /// full disk) would otherwise leave a truncated file that reads as a damaged cache, and
+        /// the ETag commit that follows a successful write assumes exactly this: either the new
+        /// bytes are there, or nothing changed.
+        /// </summary>
         private static async Task WriteCacheAsync<T>(string path, T cache, CancellationToken cancellationToken)
         {
             var json = JsonSerializer.Serialize(cache, WriteOptions);
-            await File.WriteAllTextAsync(path, json, cancellationToken);
+            var tempPath = path + ".tmp";
+
+            try
+            {
+                await File.WriteAllTextAsync(tempPath, json, cancellationToken);
+                File.Move(tempPath, path, overwrite: true);
+            }
+            catch
+            {
+                TryDelete(tempPath);
+                throw;
+            }
+        }
+
+        private static void TryDelete(string path)
+        {
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A left-behind temporary file is replaced by the next write.
+            }
         }
 
         /// <summary>
@@ -266,6 +324,12 @@ namespace TarkovDBEditor.Services
         /// parts are read (fresh, or from the cache when unchanged) before the hideout part
         /// can name what a level requires.
         /// </para>
+        /// <para>
+        /// Order matters within a part too, and <see cref="RunCachePartAsync{TValue}"/> is the one
+        /// place it is decided: the fetch's ETags are committed only after its cache file is
+        /// written, so a write that fails leaves the next run asking unconditionally rather than
+        /// being told 304 about a revision this machine never stored.
+        /// </para>
         /// </summary>
         public async Task<TarkovDevCacheResult> CacheAllDataAsync(
             Action<string>? progress = null,
@@ -273,46 +337,19 @@ namespace TarkovDBEditor.Services
         {
             var result = new TarkovDevCacheResult();
 
-            var items = await RunPartAsync(result.Items, progress, cancellationToken, async () =>
-            {
-                var fetched = await _jsonClient.FetchItemsAsync(HasCachedItems(), progress, cancellationToken);
-                if (fetched == null)
-                {
-                    MarkVerified(_itemsCachePath);
-                    return (await LoadCachedItemsAsync(cancellationToken), true, (DateTime?)null);
-                }
+            var items = await RunCachePartAsync(_items, result.Items,
+                conditional => _jsonClient.FetchItemsAsync(conditional, progress, cancellationToken),
+                progress, cancellationToken);
 
-                await SaveItemsCacheAsync(fetched.Value, fetched.SourceLastModified, cancellationToken);
-                return (fetched.Value, false, fetched.SourceLastModified);
-            }, v => v?.Count ?? 0);
+            var traders = await RunCachePartAsync(_traders, result.Traders,
+                conditional => _jsonClient.FetchTradersAsync(conditional, progress, cancellationToken),
+                progress, cancellationToken);
 
-            var traders = await RunPartAsync(result.Traders, progress, cancellationToken, async () =>
-            {
-                var fetched = await _jsonClient.FetchTradersAsync(HasCachedTraders(), progress, cancellationToken);
-                if (fetched == null)
-                {
-                    MarkVerified(_tradersCachePath);
-                    return (await LoadCachedTradersAsync(cancellationToken), true, (DateTime?)null);
-                }
+            await RunCachePartAsync(_quests, result.Quests,
+                conditional => _jsonClient.FetchTasksAsync(conditional, progress, cancellationToken),
+                progress, cancellationToken);
 
-                await SaveTradersCacheAsync(fetched.Value, fetched.SourceLastModified, cancellationToken);
-                return (fetched.Value, false, fetched.SourceLastModified);
-            }, v => v?.Count ?? 0);
-
-            await RunPartAsync(result.Quests, progress, cancellationToken, async () =>
-            {
-                var fetched = await _jsonClient.FetchTasksAsync(HasCachedQuests(), progress, cancellationToken);
-                if (fetched == null)
-                {
-                    MarkVerified(_questsCachePath);
-                    return (await LoadCachedQuestsAsync(cancellationToken), true, (DateTime?)null);
-                }
-
-                await SaveQuestsCacheAsync(fetched.Value, fetched.SourceLastModified, cancellationToken);
-                return (fetched.Value, false, fetched.SourceLastModified);
-            }, v => v?.Count ?? 0);
-
-            await RunPartAsync(result.Hideout, progress, cancellationToken, async () =>
+            await RunCachePartAsync(_hideout, result.Hideout, conditional =>
             {
                 if (items == null || traders == null)
                 {
@@ -321,41 +358,64 @@ namespace TarkovDBEditor.Services
                         + "caches must be readable first. Fix those parts and re-run.");
                 }
 
-                var fetched = await _jsonClient.FetchHideoutAsync(
-                    items.Values, traders, HasCachedHideout(), progress, cancellationToken);
-                if (fetched == null)
-                {
-                    MarkVerified(_hideoutCachePath);
-                    return (await LoadCachedHideoutAsync(cancellationToken), true, (DateTime?)null);
-                }
-
-                await SaveHideoutCacheAsync(fetched.Value, fetched.SourceLastModified, cancellationToken);
-                return (fetched.Value, false, fetched.SourceLastModified);
-            }, v => v?.Count ?? 0);
+                return _jsonClient.FetchHideoutAsync(items.Values, traders, conditional, progress, cancellationToken);
+            }, progress, cancellationToken);
 
             result.CachedAt = DateTime.Now;
             return result;
         }
 
         /// <summary>
-        /// Runs one cache part, recording success, an upstream-unchanged keep, or the failure
-        /// that left the old file alone. Returns the part's value so a later part can use it.
+        /// Runs one cache part end to end: fetch conditionally when there is already a file to
+        /// keep, then either re-stamp what upstream reports unchanged or write the new value and
+        /// only then commit the fetch's ETags. Records success, a keep, or the failure that left
+        /// the old file alone, and returns the part's value so a later part can use it.
+        /// <para>
+        /// The write-before-commit order lives here once. An ETag committed before the bytes are
+        /// on disk tells the next run 304 about a revision this machine never stored, and the
+        /// refresh then publishes the old data with every freshness guard green.
+        /// </para>
         /// </summary>
-        private async Task<T?> RunPartAsync<T>(
+        /// <param name="fetch">
+        /// Reads the part from upstream. Its argument is whether the request may be conditional,
+        /// which it may only when there is a cache file a 304 would leave in place. Returns null
+        /// when upstream reported the part unchanged.
+        /// </param>
+        private async Task<TValue?> RunCachePartAsync<TValue>(
+            CacheFile<TValue> file,
             TarkovDevCachePart part,
+            Func<bool, Task<TarkovDevFetch<TValue>?>> fetch,
             Action<string>? progress,
-            CancellationToken cancellationToken,
-            Func<Task<(T? Value, bool Kept, DateTime? SourceLastModified)>> fetch,
-            Func<T?, int> count)
-            where T : class
+            CancellationToken cancellationToken)
+            where TValue : class, System.Collections.ICollection
         {
             try
             {
-                var (value, kept, sourceLastModified) = await fetch();
+                TValue? value;
+                bool kept;
+                DateTime? sourceLastModified;
+
+                var fetched = await fetch(File.Exists(file.Path));
+                if (fetched == null)
+                {
+                    MarkVerified(file.Path);
+                    value = await file.LoadAsync(cancellationToken);
+                    kept = true;
+                    sourceLastModified = null;
+                }
+                else
+                {
+                    await file.SaveAsync(fetched.Value, fetched.SourceLastModified, cancellationToken);
+                    fetched.CommitETags();
+                    value = fetched.Value;
+                    kept = false;
+                    sourceLastModified = fetched.SourceLastModified;
+                }
+
                 part.Success = true;
                 part.Kept = kept;
-                part.Count = count(value);
-                part.CachedAt = TryGetWriteTime(CachePathFor(part.Name));
+                part.Count = value?.Count ?? 0;
+                part.CachedAt = TryGetWriteTime(file.Path);
                 part.SourceLastModified = sourceLastModified;
                 progress?.Invoke(kept
                     ? $"{part.Name}: unchanged upstream, kept {part.Count} from {part.CachedAt:yyyy-MM-dd HH:mm}"
@@ -369,23 +429,14 @@ namespace TarkovDBEditor.Services
             catch (Exception ex)
             {
                 part.Success = false;
-                part.Kept = File.Exists(CachePathFor(part.Name));
+                part.Kept = File.Exists(file.Path);
                 part.Error = ex.Message;
-                part.CachedAt = TryGetWriteTime(CachePathFor(part.Name));
+                part.CachedAt = TryGetWriteTime(file.Path);
                 progress?.Invoke($"{part.Name}: failed ({ex.Message})"
                     + (part.Kept ? $"; kept the copy from {part.CachedAt:yyyy-MM-dd HH:mm}" : "; no cache to keep"));
                 return null;
             }
         }
-
-        private string CachePathFor(string partName) => partName switch
-        {
-            TarkovDevCacheResult.ItemsPart => _itemsCachePath,
-            TarkovDevCacheResult.QuestsPart => _questsCachePath,
-            TarkovDevCacheResult.HideoutPart => _hideoutCachePath,
-            TarkovDevCacheResult.TradersPart => _tradersCachePath,
-            _ => throw new ArgumentOutOfRangeException(nameof(partName), partName, "Unknown tarkov.dev cache part.")
-        };
 
         #endregion
 
@@ -570,7 +621,8 @@ namespace TarkovDBEditor.Services
 
         public void Dispose()
         {
-            _jsonClient.Dispose();
+            if (_ownsJsonClient)
+                _jsonClient.Dispose();
         }
     }
 
@@ -771,7 +823,7 @@ namespace TarkovDBEditor.Services
     {
         public TarkovDevCachePart(string name) => Name = name;
 
-        /// <summary>Display name, and the key <see cref="TarkovDevDataService"/> maps to a file.</summary>
+        /// <summary>Display name. Nothing is keyed by it.</summary>
         public string Name { get; }
 
         /// <summary>True when the part ended with a usable cache file, fresh or kept.</summary>
@@ -881,13 +933,90 @@ namespace TarkovDBEditor.Services
         [JsonPropertyName("availableDelaySecondsMin")]
         public int AvailableDelaySecondsMin { get; set; }
 
-        /// <summary>Loyalty gates only; reputation gates the app cannot express are dropped.</summary>
+        /// <summary>
+        /// Loyalty gates only; reputation gates the app cannot express are dropped. Never null,
+        /// for the same reason as <see cref="FailConditions"/> below.
+        /// </summary>
         [JsonPropertyName("traderLevelRequirements")]
-        public List<TarkovDevTaskTraderLevel> TraderLevelRequirements { get; set; } = new();
+        public List<TarkovDevTaskTraderLevel> TraderLevelRequirements
+        {
+            get => _traderLevelRequirements;
+            set => _traderLevelRequirements = value ?? new List<TarkovDevTaskTraderLevel>();
+        }
 
-        /// <summary>Prerequisite tasks, AND semantics (the API has no OR groups).</summary>
+        private List<TarkovDevTaskTraderLevel> _traderLevelRequirements = new();
+
+        /// <summary>
+        /// Prerequisite tasks, AND semantics (the API has no OR groups). Never null, for the
+        /// same reason as <see cref="FailConditions"/> below.
+        /// </summary>
         [JsonPropertyName("taskRequirements")]
-        public List<TarkovDevTaskPrerequisite> TaskRequirements { get; set; } = new();
+        public List<TarkovDevTaskPrerequisite> TaskRequirements
+        {
+            get => _taskRequirements;
+            set => _taskRequirements = value ?? new List<TarkovDevTaskPrerequisite>();
+        }
+
+        private List<TarkovDevTaskPrerequisite> _taskRequirements = new();
+
+        /// <summary>
+        /// What the game records as failing this task. Read by
+        /// <c>RefreshDataService.ExpandExclusiveAlternatives</c> to find the quest whose
+        /// completion fails a prerequisite, which is what turns a "complete or failed"
+        /// prerequisite into an OR group every build in the field can already read.
+        /// <para>
+        /// A cache file written before this field existed simply has no <c>failConditions</c>
+        /// key, which deserializes to the empty list here rather than throwing. The run then
+        /// reports every "complete or failed" prerequisite as un-expanded, by name, instead of
+        /// silently publishing a bare AND row; 'Debug > Cache Tarkov Dev Data' refills it. The
+        /// setter also absorbs an explicit <c>null</c>, because the derivation enumerates this
+        /// list without a null check and a hand-edited cache file is a real thing.
+        /// </para>
+        /// </summary>
+        [JsonPropertyName("failConditions")]
+        public List<TarkovDevTaskFailCondition> FailConditions
+        {
+            get => _failConditions;
+            set => _failConditions = value ?? new List<TarkovDevTaskFailCondition>();
+        }
+
+        private List<TarkovDevTaskFailCondition> _failConditions = new();
+    }
+
+    /// <summary>
+    /// One of upstream's own fail conditions on a task: something that makes the game mark the
+    /// task failed.
+    /// <para>
+    /// Only the <c>taskStatus</c> kind names another task, and it is the only kind the pipeline
+    /// acts on. The others are carried by <see cref="Type"/> alone (on the 1.1 capture:
+    /// traderStanding, shoot, extract, useItem, visit, plantItem) so that a run reporting a
+    /// prerequisite it could not expand can say what does fail it rather than only that no quest
+    /// does.
+    /// </para>
+    /// </summary>
+    public class TarkovDevTaskFailCondition
+    {
+        /// <summary>The kind of condition: <c>taskStatus</c>, <c>traderStanding</c>, and so on.</summary>
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "";
+
+        /// <summary>The task this condition is about, on a <c>taskStatus</c> condition only.</summary>
+        [JsonPropertyName("taskId")]
+        public string? TaskId { get; set; }
+
+        /// <summary>
+        /// The states of <see cref="TaskId"/> that fail this task. Every one of the 35
+        /// <c>taskStatus</c> fail conditions in the 1.1 capture reads <c>["complete"]</c>.
+        /// Never null; see <see cref="TarkovDevQuestCacheItem.FailConditions"/>.
+        /// </summary>
+        [JsonPropertyName("status")]
+        public List<string> Status
+        {
+            get => _status;
+            set => _status = value ?? new List<string>();
+        }
+
+        private List<string> _status = new();
     }
 
     /// <summary>A "loyalty level N with trader T" gate on a task.</summary>
@@ -906,8 +1035,19 @@ namespace TarkovDBEditor.Services
         [JsonPropertyName("taskId")]
         public string TaskId { get; set; } = "";
 
+        /// <summary>
+        /// Never null. The pipeline reads <c>Status.Count</c> without a null check
+        /// (<c>RefreshDataService.BuildRequirements</c>), and a cache file holding
+        /// <c>"status": null</c> deserializes past every check the loader makes.
+        /// </summary>
         [JsonPropertyName("status")]
-        public List<string> Status { get; set; } = new();
+        public List<string> Status
+        {
+            get => _status;
+            set => _status = value ?? new List<string>();
+        }
+
+        private List<string> _status = new();
     }
 
     public class TarkovDevHideoutCache
