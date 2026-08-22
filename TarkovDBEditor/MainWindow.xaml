@@ -53,6 +53,8 @@
                 <Separator/>
                 <MenuItem Header="Refresh Hideout Data..." Click="RefreshHideoutData_Click" ToolTip="Fetch hideout data from tarkov.dev and save to DB"/>
                 <Separator/>
+                <MenuItem Header="Backfill external IDs from snapshot..." Click="BackfillExternalIds_Click" ToolTip="Copy BsgId from an older database into rows that have none. Run once before the first 1.1 regeneration."/>
+                <Separator/>
                 <MenuItem Header="Map Editor..." Click="TestMap_Click"/>
                 <Separator/>
                 <MenuItem Header="Floor Setup..." Click="FloorSetup_Click" ToolTip="Y 좌표 기반 자동 Floor 감지 설정"/>
