@@ -14,10 +14,10 @@ public class QuestDataCoverageTests
     // to allow for translation gaps while still failing on a stale/English-only DB.
     private const double MinKoreanCoverage = 0.30;
 
-    // Skipped on the code branch: the regenerated DB ships on the `data/korean-quest-names-db`
-    // branch, so this code branch carries the upstream baseline DB (no Korean). Enable when
-    // validating the DB asset together with the data branch / before release.
-    [Fact(Skip = "Requires the regenerated tarkov_data.db (data/korean-quest-names-db branch).")]
+    // This was skipped with a reason naming a branch that does not exist: the Korean names it
+    // waits for landed in the 1.0.10 publish, and the guard has passed against the shipped
+    // database ever since. A test that never runs guards nothing, so it runs now.
+    [Fact]
     public void Quests_have_sufficient_korean_name_coverage()
     {
         var dbPath = TestSeed.DatabasePath;
@@ -46,7 +46,7 @@ public class QuestDataCoverageTests
         Assert.True(
             coverage >= MinKoreanCoverage,
             $"Korean quest-name coverage {coverage:P1} ({korean}/{total}) is below {MinKoreanCoverage:P0}. " +
-            "Regenerate the tarkov.dev cache and rebuild tarkov_data.db (PRD Phase 1.3).");
+            "Run 'Debug > Cache Tarkov Dev Data' and rebuild tarkov_data.db.");
     }
 
     private static bool ContainsHangul(string s)
