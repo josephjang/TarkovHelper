@@ -8,6 +8,15 @@
 > that reverses a decision here appends `Superseded by <doc>` below this line, in
 > the PR that reverses it.
 
+> Superseded in part by `feature-quest-data-1-1-refresh.md` (2026-08-21): the
+> release plan's first two releases (the seasonal profile alone, then the channel
+> reader with the icon pack) merge into one release cut from the 1.1 data publish,
+> and that publish goes out before the release because it stays additive; neither
+> phase had been released when phase 3 was designed. The "trader loyalty becomes a
+> first-class gate" decision stands, but its data is a per-trader requirement
+> list, not one value per quest, because 1.1 gates four ordinary quests on
+> loyalty with a trader other than their giver. Every other decision here stands.
+
 ## Summary
 
 Escape from Tarkov patch 1.1.0.0 ("Kord Breach", 2026-08-03) rebuilds quest
