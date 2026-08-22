@@ -43,6 +43,39 @@ API-backed services are for explicit population or synchronization workflows.
 Do not introduce an API dependency into normal browsing, editing, validation,
 or application runtime paths.
 
+`Debug > Cache Tarkov Dev Data` is the one action that talks to tarkov.dev, through
+`Services/TarkovDevJsonClient.cs` (json.tarkov.dev; the GraphQL endpoint has been down
+since about 2026-07-22). Everything downstream reads the cache files it writes.
+
+**An empty fetch is a failure, never an empty cache.** A 200 carrying an error body
+parsed to an empty set and overwrote the cache with `{}` in January 2026, and the
+publish that followed left `BsgId` NULL on all 488 quests and 4014 items for seven
+months: log sync matched nothing and hideout requirements resolved nothing that whole
+time. The refusals in `TarkovDevJsonClient` and the guards in
+`RefreshDataService.RefreshGuards` exist for that, and each one has a test in
+`RefreshGuardTests`. Do not soften one into a warning.
+
+### Quest Identity
+
+`Quests.Id` is base64 of a wiki page URL, but of the URL the quest was **first**
+published under. It is not recomputed from the current title.
+
+Patch 1.1 renamed 91 published quests and gave eight titles to a different quest than
+before, so a page-keyed refresh would have detached recorded progress from all of them
+and attached it to the wrong quest wherever a title was reused. Identity now follows
+the external game ID: `Services/QuestIdentityResolver.cs` matches a wiki page to a task,
+picks among the ten pages several records claim by a fixed order of evidence, and keeps
+the previous row's key and `NormalizedName` when the task ID matches.
+
+Two rules follow:
+
+- **`NormalizedName` is pinned to the app's SQL expression**
+  (`Services/QuestNormalizedName.cs`), not to tarkov.dev's slug. Recorded progress is
+  keyed by it, and every build switches to reading the column the moment it exists.
+- **The refresh refuses to run from a database whose `BsgId`s are NULL.** Run
+  `Debug > Backfill external IDs from snapshot...` first. The match-rate guard cannot
+  stand in for this: the pages still match, so nothing else looks wrong.
+
 ### WPF and Windows Forms Type Ambiguity
 
 The project enables both WPF and Windows Forms. In WPF code-behind files, add
@@ -114,7 +147,13 @@ MainWindow.xaml (.cs)
 Important areas:
 
 - `Services/DatabaseService.cs`: dynamic tables, CRUD, and `_schema_meta`.
-- `Services/RefreshDataService.cs`: cached wiki/API data import.
+- `Services/RefreshDataService.cs`: cached wiki/API data import, the publish guards.
+- `Services/TarkovDevJsonClient.cs`: json.tarkov.dev transport and its cache models.
+- `Services/QuestIdentityResolver.cs`: which pages become quests, and what key each keeps.
+- `Services/BsgIdBackfillService.cs`: the one-time external-ID repair.
+- `Resources/Data/quest-match-overrides.json`: pages the API links to a title that is
+  not a page. Every entry names the upstream report it waits on; the refresh report
+  flags an entry that no longer fires so it can be removed.
 - `Services/MapMarkerService.cs`: map marker persistence.
 - `Services/ApiMarkerService.cs`: imported API marker persistence.
 - `Services/HideoutDataService.cs`: hideout import and persistence.

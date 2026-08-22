@@ -121,12 +121,35 @@ CREATE TABLE Quests (
     RequiredPrestigeLevelApproved INTEGER NOT NULL DEFAULT 0,
     RequiredPrestigeLevelApprovedAt TEXT,
 
+    -- 진행 상황이 기록되는 키
+    NormalizedName TEXT,
+
     -- 승인 상태
     IsApproved INTEGER NOT NULL DEFAULT 0,
     ApprovedAt TEXT,
     UpdatedAt TEXT
 )
+-- Index: idx_quests_normalizedname (UNIQUE)
 ```
+
+`Id`는 위키 페이지 URL의 base64입니다. 단, **퀘스트가 처음 등록될 때의 제목**으로
+만들어진 값이며 이후 실행에서 현재 제목으로 다시 계산하지 않습니다. 패치 1.1이
+퀘스트 91개의 이름을 바꾸고 제목 8개의 주인을 서로 맞바꾼 뒤로, 페이지 주소를 키로
+쓰면 사용자가 기록한 진행 상황이 엉뚱한 퀘스트에 붙기 때문입니다. 이름이 바뀐
+퀘스트는 `BsgId`(게임 내부 ID)로 인식해 기존 `Id`를 그대로 유지합니다.
+
+`NormalizedName`은 앱이 이 컬럼이 없을 때 스스로 계산하던 식과 **정확히 같은 값**을
+담습니다:
+
+```sql
+LOWER(REPLACE(REPLACE(REPLACE(Name, ' ', '-'), '''', ''), '.', ''))
+```
+
+사용자의 퀘스트 진행 상황(`user_data.db`의 `QuestProgress.NormalizedName`)이 이 값으로
+저장되어 있고, 설치된 모든 빌드는 이 컬럼이 생기는 순간 컬럼 값을 읽기 시작합니다.
+따라서 tarkov.dev 스타일(`sew-it-good-part-4`)로 저장하면 퀘스트 228개의 진행 상황이
+조용히 사라집니다. 이름이 바뀐 퀘스트는 **원래 제목**에서 나온 값을 그대로 유지하므로,
+`NormalizedName`이 현재 `Name`과 일치하지 않을 수 있습니다(그것이 의도입니다).
 
 ### QuestRequirements
 
@@ -149,6 +172,38 @@ CREATE TABLE QuestRequirements (
 )
 -- Indexes: idx_questreq_questid, idx_questreq_requiredid
 ```
+
+`RequirementType`은 앱이 아는 세 값(`Complete`, `Accept`, `Fail`)만 사용합니다. 설치된
+빌드는 모르는 값을 "절대 충족되지 않음"으로 취급하므로, 다른 값이 들어가면 그 퀘스트는
+영원히 잠깁니다.
+
+### QuestTraderRequirements
+
+퀘스트별 트레이더 충성도(Loyalty Level) 요구사항을 저장합니다.
+
+```sql
+CREATE TABLE QuestTraderRequirements (
+    Id TEXT PRIMARY KEY,           -- "QTR|{QuestId}|{TraderId}"의 해시
+    QuestId TEXT NOT NULL,
+    TraderId TEXT NOT NULL,        -- tarkov.dev 트레이더 ID
+    TraderName TEXT NOT NULL,      -- 표시용 이름 (Prapor, Jaeger 등)
+    RequiredLevel INTEGER NOT NULL,-- 필요한 충성도 레벨
+    ContentHash TEXT,              -- 변경 감지용
+    IsApproved INTEGER NOT NULL DEFAULT 0,
+    ApprovedAt TEXT,
+    UpdatedAt TEXT,
+    FOREIGN KEY (QuestId) REFERENCES Quests(Id) ON DELETE CASCADE
+)
+-- Index: idx_questtraderreq_questid
+```
+
+`Quests`에 컬럼 하나를 두지 않고 별도 테이블로 만든 이유는, 1.1에서 퀘스트 5개가
+**자신을 주는 트레이더가 아닌** 트레이더의 충성도를 요구하기 때문입니다(Collector는
+7명을 한꺼번에 요구합니다). 컬럼 하나였다면 그 조건들이 조용히 사라집니다.
+`HideoutTraderRequirements`와 같은 모양입니다.
+
+행은 `requirementType == "level"`인 조건만 담습니다. tarkov.dev는 평판(reputation)
+조건도 같은 목록에 실어 보내지만 앱에는 그것을 표현할 자리가 없습니다.
 
 ### QuestObjectives
 
@@ -570,6 +625,10 @@ CREATE TABLE Traders (
          ├──────────────►┌──────────────────────┐
          │               │  QuestRequiredItems  │
          │               └──────────────────────┘
+         │
+         ├──────────────►┌──────────────────────────┐
+         │               │ QuestTraderRequirements  │
+         │               └──────────────────────────┘
          │
          └──────────────►┌──────────────────────┐
                          │    OptionalQuests    │
