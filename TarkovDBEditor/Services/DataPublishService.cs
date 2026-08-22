@@ -508,6 +508,55 @@ public class DataPublishService : IDisposable
     }
 
     /// <summary>
+    /// Runs the publish constraints over a candidate database file, and returns the refusal
+    /// the operator should see, or null when the file holds nothing a build in the field
+    /// would read wrongly.
+    /// <para>
+    /// This is the last gate a byte passes. The refresh checks the same rules over the rows
+    /// it built (<c>RefreshGuards.AssertPublishConstraints</c>), but the build phase is not
+    /// the only way a row reaches the file: a hand edit in the editor's DataGrid, a
+    /// <c>BsgIdBackfillService</c> run, or any correction made after a refresh writes
+    /// straight to the database, and <c>DatabaseService</c>'s generic UPDATE can rewrite
+    /// <c>Quests.Name</c> without <c>NormalizedName</c>. That desynchronization un-keys the
+    /// quest's recorded progress in every install, silently, and cannot be repaired after
+    /// the fact, because installs poll every five minutes and install what they download
+    /// without checking it. So this refuses rather than warns, and there is no override.
+    /// </para>
+    /// <para>
+    /// Read-only, like every other look this class takes at a database, and tolerant of a
+    /// candidate published before a column existed: the rules are stated over the values the
+    /// app reads, not the columns that hold them (see <see cref="PublishConstraints"/>).
+    /// </para>
+    /// </summary>
+    private static async Task<string?> DescribeUnpublishableDataAsync(string databasePath)
+    {
+        if (!File.Exists(databasePath)) return null;
+
+        PublishConstraints.Candidate candidate;
+        try
+        {
+            candidate = await PublishConstraints.ReadAsync(databasePath);
+        }
+        catch (SqliteException ex)
+        {
+            // A candidate SQLite cannot read is not a candidate anyone should publish, and
+            // the reasons differ enough that one catch-all would send the operator to the
+            // wrong remedy.
+            return DescribeSqliteFailure(databasePath, ex);
+        }
+
+        var problems = PublishConstraints.Problems(candidate);
+        if (problems.Count == 0) return null;
+
+        return PublishConstraints.Describe(
+                $"{databasePath} holds data the builds in the field cannot read correctly",
+                problems)
+            + "\n\nEvery install downloads what this publishes and applies it without checking it, "
+            + "so this stops here. Correct the rows named above in TarkovDBEditor, or re-run the "
+            + "refresh, and compare again.";
+    }
+
+    /// <summary>
     /// Writes the live data format version into a database's own header, whether that is
     /// the build output about to be copied to the endpoint or the endpoint copy itself
     /// when there is no build output to publish from. A published database then carries
@@ -665,6 +714,18 @@ public class DataPublishService : IDisposable
         {
             result.Success = false;
             result.ErrorMessage = DescribeSqliteFailure(sourceDbPath, ex);
+            return false;
+        }
+
+        // The preflight: what the operator is about to publish is checked against the rules
+        // every installed build reads by, before the window offers a Publish button at all.
+        // PublishDatabaseAsync checks the file it is actually copying as well, because a
+        // comparison can go stale between the two.
+        var unpublishable = await DescribeUnpublishableDataAsync(sourceDbPath);
+        if (unpublishable != null)
+        {
+            result.Success = false;
+            result.ErrorMessage = unpublishable;
             return false;
         }
 
@@ -1262,6 +1323,14 @@ public class DataPublishService : IDisposable
             // output to publish from. Copied even when the bytes are unchanged, so one
             // publish always leaves both endpoints byte-identical and described.
             //
+            // Checked here as well as in the comparison, against the file this step is
+            // actually about to copy: the comparison can be minutes old, and the editor can
+            // write to its own build output in between. Nothing has been copied yet, so the
+            // tree is exactly as it was.
+            progress?.Invoke("Checking publish constraints...");
+            var unpublishable = await DescribeUnpublishableDataAsync(sourceDbPath);
+            if (unpublishable != null) return Fail(result, unpublishable);
+
             // Stamp here, not during the comparison: this is the last moment before the
             // bytes are read, both endpoints receive the one stamped file, and a
             // comparison stays a read-only survey of the repository.
@@ -1291,6 +1360,14 @@ public class DataPublishService : IDisposable
             // is rewritten rather than only when it drifted, because stamping changes the
             // endpoint's bytes and the documents go on to give both copies the same
             // version token.
+            //
+            // Checked first even though these bytes are already on the channel: the Assets
+            // mirror is an endpoint pre-channel builds poll, so this step can still be the
+            // moment unreadable data reaches an install.
+            progress?.Invoke("Checking publish constraints...");
+            var unpublishableEndpoint = await DescribeUnpublishableDataAsync(channelDbPath);
+            if (unpublishableEndpoint != null) return Fail(result, unpublishableEndpoint);
+
             progress?.Invoke("Stamping data format...");
             var stampFailure = await StampDataFormatAsync(channelDbPath, comparison.LiveDataFormatVersion);
             if (stampFailure != null) return Fail(result, stampFailure);

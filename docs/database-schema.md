@@ -160,7 +160,8 @@ CREATE TABLE QuestRequirements (
     Id TEXT PRIMARY KEY,           -- "{QuestId}_{RequiredQuestId}" 형식
     QuestId TEXT NOT NULL,         -- 이 퀘스트
     RequiredQuestId TEXT NOT NULL, -- 선행 퀘스트
-    RequirementType TEXT NOT NULL DEFAULT 'Complete',  -- Complete, Start 등
+    RequirementType TEXT NOT NULL DEFAULT 'Complete',  -- Complete, Accept, Fail
+    AltRequirementType TEXT,       -- 같은 행을 충족시키는 두 번째 타입 (보통 NULL)
     DelayMinutes INTEGER,          -- 선행 퀘스트 완료 후 대기 시간 (분)
     GroupId INTEGER NOT NULL DEFAULT 0,  -- OR 그룹 (0 = AND, 같은 GroupId = OR)
     ContentHash TEXT,              -- 변경 감지용
@@ -176,6 +177,24 @@ CREATE TABLE QuestRequirements (
 `RequirementType`은 앱이 아는 세 값(`Complete`, `Accept`, `Fail`)만 사용합니다. 설치된
 빌드는 모르는 값을 "절대 충족되지 않음"으로 취급하므로, 다른 값이 들어가면 그 퀘스트는
 영원히 잠깁니다.
+
+`AltRequirementType`은 한 행을 충족시키는 두 번째 타입이며, 값 집합은
+`RequirementType`과 같고 대부분의 행에서 NULL입니다. 게임 데이터가 "완료 또는 실패"처럼
+하나의 타입으로 표현할 수 없는 선행 조건을 알려줄 때만 채워지고, 첫 번째 타입이 이미
+포함하는 상태는 넣지 않습니다(`Accept`는 진행 중과 완료를 모두 충족시키므로 "진행 중 또는
+완료"는 `Accept` 하나로 끝납니다). 앱은 두 컬럼을 하나의 status 목록으로 읽어 그중 하나만
+맞으면 충족으로 판정하고, 컬럼이 없는 예전 데이터베이스는 컬럼 존재 여부를 확인해
+그대로 읽습니다(`QuestDbService.LoadQuestRequirementsAsync`).
+
+이미 배포된 빌드는 이 컬럼을 읽지 않으므로, 두 번째 타입이 필요한 선행 조건 중 "그 퀘스트를
+실패시키는 다른 퀘스트"가 존재하는 경우에는 리프레시가 같은 사실을 OR 그룹으로도 기록합니다
+(`RefreshDataService.ExpandExclusiveAlternatives`). 1.1 기준으로 Building Foundations와
+Dangerous Road 두 개가 여기 해당하며, 두 행 모두 `RequirementType = 'Complete'`에 같은
+`GroupId`를 씁니다.
+
+한 퀘스트와 한 선행 퀘스트 조합에 대해 행은 하나만 존재해야 합니다. 앱은 선행 퀘스트 ID만으로
+행을 구분해서 뒤따르는 중복 행을 `GroupId`와 함께 버리므로, 두 행을 쓰면 그중 하나는 어떤
+빌드에서도 읽히지 않습니다. 리프레시는 쓰기 직전에 이 조건을 검사하고 위반하면 중단합니다.
 
 ### QuestTraderRequirements
 
