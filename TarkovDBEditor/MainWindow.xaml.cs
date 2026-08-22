@@ -686,28 +686,28 @@ public partial class MainWindow : Window
             ViewModel.StatusMessage = "Saving quest cache...";
             await questService.SaveCacheAsync();
 
-            // JSON 내보내기 (tarkov.dev 매칭 포함)
-            ViewModel.StatusMessage = "Exporting quests with tarkov.dev data...";
+            // JSON 내보내기 (위키 크롤 결과만; tarkov.dev 매칭은 Refresh 단계에서 수행)
+            ViewModel.StatusMessage = "Exporting quest pages...";
             var exportResult = await questService.ExportQuestsAsync(
                 questsPath,
                 progress => Dispatcher.Invoke(() => ViewModel.StatusMessage = progress));
 
-            ViewModel.StatusMessage = $"Quest export complete: {exportResult.TotalCount} quests ({exportResult.MatchedCount} matched)";
+            ViewModel.StatusMessage =
+                $"Quest export complete: {exportResult.TotalCount} pages ({exportResult.SeasonalCount} seasonal)";
 
             MessageBox.Show(
                 $"Quest export completed successfully!\n\n" +
                 $"Quest Cache (revision-based):\n" +
                 $"- New quests: {cacheUpdateResult.NewQuests}\n" +
                 $"- Updated: {cacheUpdateResult.Updated}\n" +
-                $"- Up-to-date (skipped): {cacheUpdateResult.UpToDate}\n" +
-                $"- Failed: {cacheUpdateResult.Failed}\n\n" +
-                $"tarkov.dev Enrichment:\n" +
-                $"- Total quests: {exportResult.TotalCount}\n" +
-                $"- Matched: {exportResult.MatchedCount}\n" +
-                $"- Missing (wiki only): {exportResult.MissingCount}\n\n" +
+                $"- Up-to-date (skipped): {cacheUpdateResult.UpToDate}\n\n" +
+                $"Pages exported:\n" +
+                $"- Total: {exportResult.TotalCount}\n" +
+                $"- Marked seasonal (imported without a game record): {exportResult.SeasonalCount}\n\n" +
+                $"Matching against tarkov.dev happens in 'Refresh Data', which is the only place that\n" +
+                $"decides quest identity.\n\n" +
                 $"Saved to:\n" +
                 $"- {questsPath}\n" +
-                $"- wiki_data/quest_missing.json\n" +
                 $"- wiki_data/cache/quest_cache.json",
                 "Quest Export Complete",
                 MessageBoxButton.OK,
@@ -863,15 +863,26 @@ public partial class MainWindow : Window
             message.AppendLine("Tarkov Dev data cache completed!");
             message.AppendLine();
 
-            if (cacheResult.ItemsSuccess)
-                message.AppendLine($"✓ Items: {cacheResult.ItemsCount} items cached");
-            else
-                message.AppendLine($"✗ Items failed: {cacheResult.ItemsError}");
-
-            if (cacheResult.QuestsSuccess)
-                message.AppendLine($"✓ Quests: {cacheResult.QuestsCount} quests cached");
-            else
-                message.AppendLine($"✗ Quests failed: {cacheResult.QuestsError}");
+            // Each part reports separately, and says whether its file was rewritten, kept
+            // because upstream reported it unchanged, or kept because the fetch failed. The
+            // age of a kept file is what the refresh staleness guard reads.
+            foreach (var part in cacheResult.Parts)
+            {
+                if (!part.Success)
+                {
+                    message.AppendLine($"✗ {part.Name} failed: {part.Error}");
+                    if (part.Kept)
+                        message.AppendLine($"    kept the copy from {part.CachedAt:yyyy-MM-dd HH:mm}");
+                }
+                else if (part.Kept)
+                {
+                    message.AppendLine($"= {part.Name}: unchanged upstream, kept {part.Count} from {part.CachedAt:yyyy-MM-dd HH:mm}");
+                }
+                else
+                {
+                    message.AppendLine($"✓ {part.Name}: {part.Count} cached");
+                }
+            }
 
             message.AppendLine();
             message.AppendLine($"Cached at: {cacheResult.CachedAt:yyyy-MM-dd HH:mm:ss}");
@@ -879,20 +890,123 @@ public partial class MainWindow : Window
             message.AppendLine("Cache files saved to:");
             message.AppendLine("- wiki_data/cache/tarkov_dev_items.json");
             message.AppendLine("- wiki_data/cache/tarkov_dev_quests.json");
+            message.AppendLine("- wiki_data/cache/tarkov_dev_traders.json");
+            message.AppendLine("- wiki_data/cache/tarkov_dev_hideout.json");
 
-            ViewModel.StatusMessage = $"Cache complete: {cacheResult.ItemsCount} items, {cacheResult.QuestsCount} quests";
+            ViewModel.StatusMessage =
+                $"Cache complete: {cacheResult.Items.Count} items, {cacheResult.Quests.Count} quests, "
+                + $"{cacheResult.Traders.Count} traders, {cacheResult.Hideout.Count} stations";
 
             MessageBox.Show(
                 message.ToString(),
                 "Cache Complete",
                 MessageBoxButton.OK,
-                cacheResult.ItemsSuccess && cacheResult.QuestsSuccess ? MessageBoxImage.Information : MessageBoxImage.Warning);
+                cacheResult.AllSucceeded ? MessageBoxImage.Information : MessageBoxImage.Warning);
         }
         catch (Exception ex)
         {
             ViewModel.StatusMessage = $"Cache failed: {ex.Message}";
             MessageBox.Show(
                 $"Cache failed:\n{ex.Message}",
+                "Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsEnabled = true;
+        }
+    }
+
+    /// <summary>
+    /// Copies external game IDs from an older database into the rows of the open one that have
+    /// none. Run once, against a working copy of the published database, before the first 1.1
+    /// regeneration: <see cref="RefreshDataService"/> refuses to run until it has been, because
+    /// without those IDs a refresh cannot recognise a renamed quest and would detach the
+    /// recorded progress of every one of them. See <see cref="BsgIdBackfillService"/>.
+    /// </summary>
+    private async void BackfillExternalIds_Click(object sender, RoutedEventArgs e)
+    {
+        if (!DatabaseService.Instance.IsConnected)
+        {
+            MessageBox.Show(
+                "Please open or create a database first.",
+                "No Database",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        var dialog = new OpenFileDialog
+        {
+            Title = "Select the snapshot database to copy external IDs from",
+            Filter = "SQLite database (*.db)|*.db|All files (*.*)|*.*",
+        };
+
+        if (dialog.ShowDialog() != true)
+            return;
+
+        var snapshotPath = dialog.FileName;
+        if (string.Equals(
+                Path.GetFullPath(snapshotPath),
+                Path.GetFullPath(DatabaseService.Instance.DatabasePath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show(
+                "The snapshot is the database that is open. Pick the older database to copy IDs from.",
+                "Same Database",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        ViewModel.StatusMessage = "Backfilling external IDs...";
+        IsEnabled = false;
+
+        try
+        {
+            var service = new BsgIdBackfillService();
+            var result = await service.BackfillAsync(
+                DatabaseService.Instance.DatabasePath,
+                snapshotPath,
+                progress => Dispatcher.Invoke(() => ViewModel.StatusMessage = progress));
+
+            ViewModel.LoadTables();
+
+            var message = new System.Text.StringBuilder();
+            message.AppendLine("Backfill completed.");
+            message.AppendLine();
+            message.AppendLine($"Snapshot: {Path.GetFileName(result.SnapshotDatabasePath)}");
+            message.AppendLine($"- Quest IDs available: {result.SnapshotQuestIds}");
+            message.AppendLine($"- Item IDs available: {result.SnapshotItemIds}");
+            message.AppendLine();
+            message.AppendLine($"Filled: {result.QuestsFilled} quests, {result.ItemsFilled} items");
+            if (result.HandBridgesApplied.Count > 0)
+            {
+                message.AppendLine();
+                message.AppendLine("Applied hand bridges (rows no snapshot can supply):");
+                foreach (var bridge in result.HandBridgesApplied)
+                    message.AppendLine($"- {bridge}");
+            }
+
+            message.AppendLine();
+            message.AppendLine($"Still without an ID: {result.QuestsStillMissing}/{result.QuestsTotal} quests, "
+                + $"{result.ItemsStillMissing}/{result.ItemsTotal} items");
+
+            ViewModel.StatusMessage =
+                $"Backfill complete: {result.QuestsFilled} quests, {result.ItemsFilled} items";
+
+            MessageBox.Show(
+                message.ToString(),
+                "Backfill Complete",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            ViewModel.StatusMessage = $"Backfill failed: {ex.Message}";
+            MessageBox.Show(
+                $"Backfill failed:\n{ex.Message}",
                 "Error",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);

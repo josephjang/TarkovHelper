@@ -19,7 +19,6 @@ namespace TarkovDBEditor.Services
         private readonly HttpClient _httpClient;
         private const string MediaWikiApiUrl = "https://escapefromtarkov.fandom.com/api.php";
         private const string SpecialExportUrl = "https://escapefromtarkov.fandom.com/wiki/Special:Export";
-        private const string TarkovDevApiUrl = "https://api.tarkov.dev/graphql";
 
         private readonly string _cacheDir;
         private readonly string _questCachePath;
@@ -29,6 +28,11 @@ namespace TarkovDBEditor.Services
         private Dictionary<string, CachedQuestInfo> _questCache = new();
 
         // 제외할 카테고리
+        // NOTE: "Seasonal quests" here means the recurring event quests, not the current
+        // season's KORD BREACH questline: those pages are in Category:Quests only and are
+        // recognised by the requirement line ExtractIsSeasonal reads. The day a wiki edit
+        // moves them into this category they would silently disappear, which is what the
+        // content guard pinning one of them by name is there to catch.
         private static readonly string[] ExcludeCategories = new[]
         {
             "Event quests",
@@ -402,6 +406,7 @@ namespace TarkovDBEditor.Services
             var completed = 0;
             var lockObj = new object();
             var semaphore = new SemaphoreSlim(5);
+            var batchFailures = new List<string>();
 
             progress?.Invoke($"Fetching quest content: {totalBatches} batches (5 parallel)...");
 
@@ -440,6 +445,7 @@ namespace TarkovDBEditor.Services
                             cached.RequiredEdition = ExtractRequiredEdition(content);
                             cached.ExcludedEdition = ExtractExcludedEdition(content);
                             cached.RequiredDecodeCount = ExtractRequiredDecodeCount(content);
+                            cached.IsSeasonal = ExtractIsSeasonal(content);
                         }
 
                         completed++;
@@ -449,13 +455,37 @@ namespace TarkovDBEditor.Services
                 }
                 catch (Exception ex)
                 {
-                    lock (lockObj) { result.Failed += batch.Count; }
+                    lock (lockObj)
+                    {
+                        result.Failed += batch.Count;
+                        batchFailures.Add($"{batch.Count} pages starting at '{batch[0]}': {ex.Message}");
+                    }
                     WriteLog($"Error fetching quests: {ex.Message}");
                 }
                 finally { semaphore.Release(); }
             });
 
             await Task.WhenAll(tasks);
+
+            if (batchFailures.Count > 0)
+            {
+                // Whatever did arrive is worth keeping: a re-run then only fetches what is
+                // still missing. Saved before the throw because the caller's save never runs.
+                await SaveCacheAsync(cancellationToken);
+
+                // A failed batch used to be counted and shrugged off, which is how the June
+                // run produced an empty cache out of 403s and still reported success. The wiki
+                // serves a Cloudflare challenge to some user agents and has answered 403 to
+                // Special:Export for a whole run before, so a partial crawl must not reach the
+                // database: quests whose pages never arrived would be deleted as stale.
+                throw new InvalidOperationException(
+                    $"{batchFailures.Count} of {totalBatches} Special:Export batches failed "
+                    + $"({result.Failed} pages). The quest cache is incomplete, so refreshing from it would "
+                    + "drop every quest whose page did not arrive. Re-run the export.\n  "
+                    + string.Join("\n  ", batchFailures.Take(10))
+                    + (batchFailures.Count > 10 ? $"\n  ... and {batchFailures.Count - 10} more" : ""));
+            }
+
             progress?.Invoke($"Quest cache update complete: {result.NewQuests} new, {result.Updated} updated, {result.UpToDate} unchanged");
             return result;
         }
@@ -566,6 +596,68 @@ namespace TarkovDBEditor.Services
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// True when the page's Requirements section says the quest can only be taken in the
+        /// current season.
+        /// <para>
+        /// This is the one exception to "a quest ships only when both sources have it". The
+        /// JSON API carries no record for the eighteen KORD BREACH quests in any game mode,
+        /// <c>pvp-season</c> included, so without this marker they would never appear. Two
+        /// spellings occur: the link the pages use today,
+        /// <c>[[Seasons#Season 1: KORD BREACH|Seasonal mode]]</c>, and the bare
+        /// <c>[[PvP Season]]</c> form an earlier census recorded.
+        /// </para>
+        /// <para>
+        /// Deliberately narrow: it reads the requirement bullet's link target, not the words
+        /// around it, so a page that merely mentions a season in prose is not imported without
+        /// a game record. <see cref="MentionsSeasonalMode"/> is the loose counterpart, used
+        /// only to notice that this one has stopped matching.
+        /// </para>
+        /// </summary>
+        public static bool ExtractIsSeasonal(string content)
+        {
+            if (string.IsNullOrEmpty(content))
+                return false;
+
+            var reqMatch = Regex.Match(content, @"==\s*Requirements\s*==\s*(.*?)(?===|\z)", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            if (!reqMatch.Success)
+                return false;
+
+            foreach (Match bullet in Regex.Matches(
+                reqMatch.Groups[1].Value,
+                @"^\*+\s*Must be playing in the\s*\[\[([^\]|]+)",
+                RegexOptions.IgnoreCase | RegexOptions.Multiline))
+            {
+                var target = bullet.Groups[1].Value.Trim();
+                if (target.StartsWith("Seasons#", StringComparison.OrdinalIgnoreCase)
+                    || target.Equals("PvP Season", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// True when the page's Requirements section mentions a seasonal mode at all, however
+        /// it is phrased. Only used to detect that <see cref="ExtractIsSeasonal"/>'s spelling
+        /// has moved: a crawl where pages say this but none is marked seasonal means the
+        /// marker changed upstream, and importing zero seasonal quests in silence is exactly
+        /// the failure the refresh guard exists to prevent.
+        /// </summary>
+        public static bool MentionsSeasonalMode(string content)
+        {
+            if (string.IsNullOrEmpty(content))
+                return false;
+
+            var reqMatch = Regex.Match(content, @"==\s*Requirements\s*==\s*(.*?)(?===|\z)", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            if (!reqMatch.Success)
+                return false;
+
+            return Regex.IsMatch(reqMatch.Groups[1].Value, @"season(al)?\s*mode|\[\[PvP Season|\[\[Seasons#", RegexOptions.IgnoreCase);
         }
 
         /// <summary>
@@ -889,7 +981,16 @@ namespace TarkovDBEditor.Services
             };
 
             // 맵 이름 추출 - [[Customs]], [[Factory]], [[Shoreline]] 등
-            var mapNames = new[] { "Customs", "Factory", "Shoreline", "Interchange", "Reserve", "Woods", "Lighthouse", "Streets of Tarkov", "Ground Zero", "Lab", "The Lab" };
+            // Longest names first so a shorter one that is a prefix (Lab / The Lab /
+            // The Labyrinth) cannot claim the line before the specific one is tried. The
+            // patterns below anchor on ]] or a word boundary, so the order is belt and braces.
+            // The Labyrinth, Terminal and Icebreaker are the maps patch 1.1 added.
+            var mapNames = new[]
+            {
+                "Streets of Tarkov", "The Labyrinth", "Ground Zero", "Interchange", "Lighthouse",
+                "Icebreaker", "Shoreline", "Terminal", "Customs", "Factory", "Reserve", "Woods",
+                "The Lab", "Lab"
+            };
             foreach (var mapName in mapNames)
             {
                 if (Regex.IsMatch(line, $@"\[\[{Regex.Escape(mapName)}\]\]", RegexOptions.IgnoreCase) ||
@@ -1727,170 +1828,18 @@ namespace TarkovDBEditor.Services
 
         #endregion
 
-        #region tarkov.dev API
-
-        /// <summary>
-        /// tarkov.dev에서 퀘스트 다국어 정보 가져오기
-        /// </summary>
-        public async Task<Dictionary<string, TarkovDevQuest>> FetchTarkovDevQuestsAsync(
-            Action<string>? progress = null,
-            CancellationToken cancellationToken = default)
-        {
-            progress?.Invoke("Fetching quests from tarkov.dev API...");
-
-            var query = @"
-            {
-                tasks(lang: en) {
-                    id
-                    tarkovDataId
-                    name
-                    normalizedName
-                    wikiLink
-                    trader { name }
-                }
-                ko: tasks(lang: ko) { id name }
-                ja: tasks(lang: ja) { id name }
-            }";
-
-            var requestBody = JsonSerializer.Serialize(new { query });
-            var content = new StringContent(requestBody, System.Text.Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync(TarkovDevApiUrl, content, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
-            using var doc = JsonDocument.Parse(json);
-
-            var result = new Dictionary<string, TarkovDevQuest>(StringComparer.OrdinalIgnoreCase);
-
-            if (!doc.RootElement.TryGetProperty("data", out var data))
-                return result;
-
-            // 한국어, 일본어 맵 생성
-            var koNames = new Dictionary<string, string>();
-            var jaNames = new Dictionary<string, string>();
-
-            if (data.TryGetProperty("ko", out var koTasks))
-            {
-                foreach (var task in koTasks.EnumerateArray())
-                {
-                    var id = task.GetProperty("id").GetString();
-                    var name = task.GetProperty("name").GetString();
-                    if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                        koNames[id] = name;
-                }
-            }
-
-            if (data.TryGetProperty("ja", out var jaTasks))
-            {
-                foreach (var task in jaTasks.EnumerateArray())
-                {
-                    var id = task.GetProperty("id").GetString();
-                    var name = task.GetProperty("name").GetString();
-                    if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                        jaNames[id] = name;
-                }
-            }
-
-            // 영어 기준으로 병합
-            if (data.TryGetProperty("tasks", out var tasks))
-            {
-                foreach (var task in tasks.EnumerateArray())
-                {
-                    var id = task.GetProperty("id").GetString();
-                    var name = task.GetProperty("name").GetString();
-                    var normalizedName = task.TryGetProperty("normalizedName", out var nn) ? nn.GetString() : null;
-                    var wikiLink = task.TryGetProperty("wikiLink", out var wl) ? wl.GetString() : null;
-                    var tarkovDataId = task.TryGetProperty("tarkovDataId", out var tdid) && tdid.ValueKind == JsonValueKind.Number ? tdid.GetInt32() : (int?)null;
-                    var trader = task.TryGetProperty("trader", out var tr) && tr.ValueKind == JsonValueKind.Object && tr.TryGetProperty("name", out var tn) ? tn.GetString() : null;
-
-                    if (string.IsNullOrEmpty(id))
-                        continue;
-
-                    var quest = new TarkovDevQuest
-                    {
-                        Id = id,
-                        TarkovDataId = tarkovDataId,
-                        NameEN = name ?? "",
-                        NormalizedName = normalizedName,
-                        NameKO = koNames.TryGetValue(id, out var ko) ? ko : name ?? "",
-                        NameJA = jaNames.TryGetValue(id, out var ja) ? ja : name ?? "",
-                        Trader = trader,
-                        WikiLink = wikiLink
-                    };
-
-                    // wikiLink가 있으면 키로 사용
-                    if (!string.IsNullOrEmpty(wikiLink))
-                    {
-                        result[wikiLink] = quest;
-                    }
-                }
-            }
-
-            progress?.Invoke($"Fetched {result.Count} quests from tarkov.dev");
-            WriteLog($"tarkov.dev quests: {result.Count}");
-
-            return result;
-        }
-
-        private string NormalizeWikiLink(string wikiLink)
-        {
-            if (string.IsNullOrEmpty(wikiLink))
-                return "";
-
-            // URL 디코딩
-            try
-            {
-                wikiLink = Uri.UnescapeDataString(wikiLink);
-            }
-            catch { }
-
-            // 위키 페이지 이름만 추출
-            var prefix = "https://escapefromtarkov.fandom.com/wiki/";
-            if (wikiLink.StartsWith(prefix))
-            {
-                wikiLink = wikiLink.Substring(prefix.Length);
-            }
-
-            return wikiLink.Replace("_", " ");
-        }
-
-        /// <summary>
-        /// Wiki 퀘스트 이름을 tarkov.dev normalizedName 형식으로 변환
-        /// (소문자, 공백->하이픈, 특수문자 제거)
-        /// </summary>
-        private string NormalizeQuestName(string questName)
-        {
-            // 소문자로 변환
-            var normalized = questName.ToLowerInvariant();
-
-            // "(quest)" 접미사 제거 (Wiki에서 동명이인 구분용)
-            if (normalized.EndsWith(" (quest)"))
-            {
-                normalized = normalized.Substring(0, normalized.Length - 8);
-            }
-
-            // 공백을 하이픈으로
-            normalized = normalized.Replace(" ", "-");
-
-            // 특수문자 제거 (알파벳, 숫자, 하이픈만 유지)
-            normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"[^a-z0-9\-]", "");
-
-            // 연속 하이픈 단일화
-            normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"-+", "-");
-
-            // 앞뒤 하이픈 제거
-            normalized = normalized.Trim('-');
-
-            return normalized;
-        }
-
-        #endregion
-
         #region 내보내기
 
         /// <summary>
-        /// 퀘스트 데이터를 JSON으로 내보내기
+        /// Writes the crawl to <c>wiki_quests.json</c>: one entry per cached page, with the
+        /// row key and page URL the refresh would mint for it.
+        /// <para>
+        /// It no longer contacts tarkov.dev. Matching a page to a game record now depends on
+        /// the previous database's external IDs and on a fixed order of evidence for the ten
+        /// pages several records share, none of which a standalone export has; doing it here
+        /// too would be a second, weaker answer to the same question.
+        /// <see cref="QuestIdentityResolver"/> is the one place that decides it.
+        /// </para>
         /// </summary>
         public async Task<QuestExportResult> ExportQuestsAsync(
             string outputPath,
@@ -1898,138 +1847,36 @@ namespace TarkovDBEditor.Services
             CancellationToken cancellationToken = default)
         {
             var result = new QuestExportResult();
+            var exported = new List<EnrichedQuest>();
 
-            // tarkov.dev 데이터 가져오기
-            var devQuests = await FetchTarkovDevQuestsAsync(progress, cancellationToken);
-
-            // tarkov.dev 데이터 저장 (디버깅용)
-            var devQuestsPath = Path.Combine(Path.GetDirectoryName(outputPath)!, "tarkov_dev_quests.json");
-            var devQuestsList = devQuests.Values.Select(q => new
+            foreach (var (questName, cached) in _questCache)
             {
-                q.Id,
-                q.NameEN,
-                q.NameKO,
-                q.NameJA,
-                q.WikiLink,
-                q.Trader
-            }).OrderBy(q => q.NameEN).ToList();
-            var devJson = JsonSerializer.Serialize(devQuestsList, new JsonSerializerOptions { WriteIndented = true });
-            await File.WriteAllTextAsync(devQuestsPath, devJson, cancellationToken);
-            progress?.Invoke($"Saved {devQuestsList.Count} tarkov.dev quests to tarkov_dev_quests.json");
-
-            progress?.Invoke("Matching quests with tarkov.dev data...");
-
-            var enrichedQuests = new List<EnrichedQuest>();
-            var missingQuests = new List<MissingQuest>();
-
-            // tarkov.dev wikiLink를 키로 하는 역인덱스 생성
-            var devQuestsByWikiLink = new Dictionary<string, TarkovDevQuest>(StringComparer.OrdinalIgnoreCase);
-            // normalizedName을 키로 하는 역인덱스 생성 (fallback용)
-            var devQuestsByNormalizedName = new Dictionary<string, TarkovDevQuest>(StringComparer.OrdinalIgnoreCase);
-            foreach (var dq in devQuests.Values)
-            {
-                if (!string.IsNullOrEmpty(dq.WikiLink))
+                exported.Add(new EnrichedQuest
                 {
-                    devQuestsByWikiLink[dq.WikiLink] = dq;
-                }
-                if (!string.IsNullOrEmpty(dq.NormalizedName))
-                {
-                    devQuestsByNormalizedName[dq.NormalizedName] = dq;
-                }
-            }
-
-            foreach (var kvp in _questCache)
-            {
-                var questName = kvp.Key;
-                var cached = kvp.Value;
-
-                // tarkov.dev와 동일한 형식으로 wikiLink 생성
-                // 공백 -> 언더스코어, 특수문자는 URL 인코딩 (단, 괄호는 인코딩하지 않음 - 별도 처리)
-                var encodedName = Uri.EscapeDataString(questName.Replace(" ", "_"))
-                    .Replace("%28", "(").Replace("%29", ")");  // 괄호는 인코딩 안함
-                var wikiPageLink = $"https://escapefromtarkov.fandom.com/wiki/{encodedName}";
-                var id = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(wikiPageLink));
-
-                var enriched = new EnrichedQuest
-                {
-                    Id = id,
+                    Id = WikiQuestIdentity.IdFor(questName),
                     Name = questName,
-                    WikiPageLink = wikiPageLink
-                };
-
-                // tarkov.dev 매칭 시도 (wikiLink로 매칭)
-                TarkovDevQuest? devQuest = null;
-                string matchMethod = "";
-
-                if (devQuestsByWikiLink.TryGetValue(wikiPageLink, out devQuest))
-                {
-                    matchMethod = "wikiLink";
-                }
-                else
-                {
-                    // Fallback: normalizedName으로 매칭 시도
-                    // Wiki 퀘스트 이름에서 normalizedName 생성 (소문자, 공백->하이픈, 특수문자 제거)
-                    var wikiNormalized = NormalizeQuestName(questName);
-                    if (devQuestsByNormalizedName.TryGetValue(wikiNormalized, out devQuest))
-                    {
-                        matchMethod = "normalizedName";
-                    }
-                }
-
-                if (devQuest != null)
-                {
-                    enriched.BsgId = devQuest.Id;
-                    enriched.NameEN = devQuest.NameEN;
-                    enriched.NameKO = devQuest.NameKO;
-                    enriched.NameJA = devQuest.NameJA;
-                    result.MatchedCount++;
-                    if (matchMethod == "normalizedName")
-                    {
-                        WriteLog($"Matched by normalizedName: '{questName}' -> '{devQuest.NameEN}' (id={devQuest.Id})");
-                    }
-                }
-                else
-                {
-                    // 매칭 실패 - Name을 다국어로 사용
-                    enriched.NameEN = questName;
-                    enriched.NameKO = questName;
-                    enriched.NameJA = questName;
-
-                    missingQuests.Add(new MissingQuest
-                    {
-                        WikiName = questName
-                    });
-                    result.MissingCount++;
-                }
-
-                enrichedQuests.Add(enriched);
+                    NameEN = questName,
+                    WikiPageLink = WikiQuestIdentity.PageLinkFor(questName),
+                    IsSeasonal = cached.IsSeasonal,
+                });
             }
 
-            result.TotalCount = enrichedQuests.Count;
+            result.TotalCount = exported.Count;
+            result.SeasonalCount = exported.Count(q => q.IsSeasonal);
 
-            // JSON 저장
             var questList = new EnrichedQuestList
             {
                 ExportedAt = DateTime.UtcNow,
                 TotalQuests = result.TotalCount,
-                MatchedQuests = result.MatchedCount,
-                MissingQuests = result.MissingCount,
-                Quests = enrichedQuests.OrderBy(q => q.Name).ToList()
+                SeasonalQuests = result.SeasonalCount,
+                Quests = exported.OrderBy(q => q.Name, StringComparer.Ordinal).ToList()
             };
 
             var json = JsonSerializer.Serialize(questList, new JsonSerializerOptions { WriteIndented = true });
             await File.WriteAllTextAsync(outputPath, json, cancellationToken);
 
-            // Missing 퀘스트 저장
-            if (missingQuests.Count > 0)
-            {
-                var missingPath = Path.Combine(Path.GetDirectoryName(outputPath)!, "quest_missing.json");
-                var missingJson = JsonSerializer.Serialize(missingQuests, new JsonSerializerOptions { WriteIndented = true });
-                await File.WriteAllTextAsync(missingPath, missingJson, cancellationToken);
-            }
-
-            progress?.Invoke($"Exported {result.TotalCount} quests ({result.MatchedCount} matched, {result.MissingCount} missing)");
-            WriteLog($"Export complete: {result.TotalCount} total, {result.MatchedCount} matched, {result.MissingCount} missing");
+            progress?.Invoke($"Exported {result.TotalCount} quest pages ({result.SeasonalCount} marked seasonal)");
+            WriteLog($"Export complete: {result.TotalCount} pages, {result.SeasonalCount} seasonal");
 
             return result;
         }
@@ -2085,6 +1932,14 @@ namespace TarkovDBEditor.Services
         [JsonPropertyName("requiredDecodeCount")]
         public int? RequiredDecodeCount { get; set; }
 
+        /// <summary>
+        /// True when the page's Requirements section marks the quest as playable only in the
+        /// current season. Such a page is imported without a game record; see
+        /// <see cref="WikiQuestService.ExtractIsSeasonal"/>.
+        /// </summary>
+        [JsonPropertyName("isSeasonal")]
+        public bool IsSeasonal { get; set; }
+
         [JsonPropertyName("cachedAt")]
         public DateTime CachedAt { get; set; }
 
@@ -2101,25 +1956,11 @@ namespace TarkovDBEditor.Services
         public int Failed { get; set; }
     }
 
-    public class TarkovDevQuest
-    {
-        public string Id { get; set; } = "";
-        public int? TarkovDataId { get; set; }
-        public string NameEN { get; set; } = "";
-        public string? NormalizedName { get; set; }
-        public string NameKO { get; set; } = "";
-        public string NameJA { get; set; } = "";
-        public string? Trader { get; set; }
-        public string? WikiLink { get; set; }
-    }
-
+    /// <summary>One page of the crawl, as the <c>wiki_quests.json</c> debug export records it.</summary>
     public class EnrichedQuest
     {
         [JsonPropertyName("id")]
         public string Id { get; set; } = "";
-
-        [JsonPropertyName("bsgId")]
-        public string? BsgId { get; set; }
 
         [JsonPropertyName("name")]
         public string Name { get; set; } = "";
@@ -2127,14 +1968,11 @@ namespace TarkovDBEditor.Services
         [JsonPropertyName("nameEN")]
         public string? NameEN { get; set; }
 
-        [JsonPropertyName("nameKO")]
-        public string? NameKO { get; set; }
-
-        [JsonPropertyName("nameJA")]
-        public string? NameJA { get; set; }
-
         [JsonPropertyName("wikiPageLink")]
         public string WikiPageLink { get; set; } = "";
+
+        [JsonPropertyName("isSeasonal")]
+        public bool IsSeasonal { get; set; }
     }
 
     public class EnrichedQuestList
@@ -2145,27 +1983,17 @@ namespace TarkovDBEditor.Services
         [JsonPropertyName("totalQuests")]
         public int TotalQuests { get; set; }
 
-        [JsonPropertyName("matchedQuests")]
-        public int MatchedQuests { get; set; }
-
-        [JsonPropertyName("missingQuests")]
-        public int MissingQuests { get; set; }
+        [JsonPropertyName("seasonalQuests")]
+        public int SeasonalQuests { get; set; }
 
         [JsonPropertyName("quests")]
         public List<EnrichedQuest> Quests { get; set; } = new();
     }
 
-    public class MissingQuest
-    {
-        [JsonPropertyName("wikiName")]
-        public string WikiName { get; set; } = "";
-    }
-
     public class QuestExportResult
     {
         public int TotalCount { get; set; }
-        public int MatchedCount { get; set; }
-        public int MissingCount { get; set; }
+        public int SeasonalCount { get; set; }
     }
 
     /// <summary>

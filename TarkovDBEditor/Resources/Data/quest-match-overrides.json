@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "Pages the tarkov.dev task set points at a title that is not a wiki page, so neither the",
+    "wikiLink nor the normalized name can bridge them. Without an entry here the page has no",
+    "game record, the liveness rule holds it back, and the quest leaves the app.",
+    "",
+    "Every entry names the upstream report it waits on: this list is a workaround, not a",
+    "second source of truth. The refresh report flags an entry whose page matches without it,",
+    "which is how an entry gets retired once upstream fixes the link.",
+    "",
+    "Set by docs/decisions/feature-quest-data-1-1-refresh.spec.md, 'Matching, identity",
+    "carry-over and liveness'. Same spirit as WikiQuestService's TraderNameAliases and",
+    "ItemNameAliases."
+  ],
+  "overrides": [
+    {
+      "pageTitle": "New Beginning (Prestige 2)",
+      "taskId": "6761ff17cdc36bd66102e9d0",
+      "upstreamIssue": "https://github.com/the-hideout/tarkov-data-manager/issues/851",
+      "note": "wikiLink points at the German title Neuanfang, which has no page; normalizedName is new-beginning-2 against the page's new-beginning-prestige-2."
+    },
+    {
+      "pageTitle": "New Beginning (Prestige 3)",
+      "taskId": "6848100b00afffa81f09e365",
+      "upstreamIssue": "https://github.com/the-hideout/tarkov-data-manager/issues/851",
+      "note": "Same Neuanfang link as Prestige 2."
+    },
+    {
+      "pageTitle": "New Beginning (Prestige 4)",
+      "taskId": "68481881f43abfdda2058369",
+      "upstreamIssue": "https://github.com/the-hideout/tarkov-data-manager/issues/851",
+      "note": "Same Neuanfang link as Prestige 2. Prestige 5 and 6 have no record at all and leave the app until the API carries them."
+    }
+  ]
+}

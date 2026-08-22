@@ -163,15 +163,22 @@ public class QuestRequirementsViewModel : INotifyPropertyChanged
         // Migrate OptionalPoints column if not exists
         await MigrateOptionalPointsColumnAsync(connection);
 
+        // NormalizedName arrives with the 1.1 refresh, so a database opened before one has run
+        // (the published copy the regeneration starts from, for instance) does not have it yet.
+        // Selected conditionally rather than migrated in: this view only reads, and the refresh
+        // is the one place allowed to mint the value.
+        var hasNormalizedName = await ColumnExistsAsync(connection, "Quests", "NormalizedName");
+
         // Load all quests with MinLevel, MinScavKarma, Location, Faction, KappaRequired, RequiredEdition, ExcludedEdition, RequiredDecodeCount, IsApproved
-        var questSql = @"SELECT Id, Name, NameEN, NameKO, NameJA, WikiPageLink, Trader, BsgId,
+        var questSql = $@"SELECT Id, Name, NameEN, NameKO, NameJA, WikiPageLink, Trader, BsgId,
                          MinLevel, MinLevelApproved, MinLevelApprovedAt,
                          MinScavKarma, MinScavKarmaApproved, MinScavKarmaApprovedAt,
                          Location, Faction, KappaRequired, RequiredEdition, RequiredEditionApproved, RequiredEditionApprovedAt,
                          ExcludedEdition, ExcludedEditionApproved, ExcludedEditionApprovedAt,
                          RequiredDecodeCount, RequiredDecodeCountApproved, RequiredDecodeCountApprovedAt,
                          RequiredPrestigeLevel, RequiredPrestigeLevelApproved, RequiredPrestigeLevelApprovedAt,
-                         IsApproved, ApprovedAt
+                         IsApproved, ApprovedAt,
+                         {(hasNormalizedName ? "NormalizedName" : "NULL")} as NormalizedName
                          FROM Quests ORDER BY Name";
         await using var questCmd = new SqliteCommand(questSql, connection);
         await using var questReader = await questCmd.ExecuteReaderAsync();
@@ -211,7 +218,10 @@ public class QuestRequirementsViewModel : INotifyPropertyChanged
                 RequiredPrestigeLevelApproved = !questReader.IsDBNull(27) && questReader.GetInt64(27) != 0,
                 RequiredPrestigeLevelApprovedAt = questReader.IsDBNull(28) ? null : DateTime.Parse(questReader.GetString(28)),
                 IsApproved = !questReader.IsDBNull(29) && questReader.GetInt64(29) != 0,
-                ApprovedAt = questReader.IsDBNull(30) ? null : DateTime.Parse(questReader.GetString(30))
+                ApprovedAt = questReader.IsDBNull(30) ? null : DateTime.Parse(questReader.GetString(30)),
+                // Appended to the SELECT rather than placed beside Name so every ordinal above
+                // keeps its position; this reader indexes by number.
+                NormalizedName = questReader.IsDBNull(31) ? null : questReader.GetString(31)
             });
         }
 
@@ -1294,6 +1304,20 @@ public class QuestRequirementsViewModel : INotifyPropertyChanged
         return (approved, total);
     }
 
+    /// <summary>True when <paramref name="tableName"/> already has <paramref name="columnName"/>.</summary>
+    private static async Task<bool> ColumnExistsAsync(SqliteConnection connection, string tableName, string columnName)
+    {
+        await using var cmd = new SqliteCommand($"PRAGMA table_info({tableName})", connection);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
     private async Task MigrateOptionalPointsColumnAsync(SqliteConnection connection)
     {
         // Check if OptionalPoints column exists using PRAGMA table_info
@@ -1357,6 +1381,13 @@ public class QuestItem : INotifyPropertyChanged
     public string? NameKO { get; set; }
     public string? NameJA { get; set; }
     public string? WikiPageLink { get; set; }
+
+    /// <summary>
+    /// The key the app files recorded progress under. Read-only here: it is minted by the
+    /// refresh and pinned to the row's original title, so editing it would orphan progress.
+    /// </summary>
+    public string? NormalizedName { get; set; }
+
     public string? Trader { get; set; }
     public string? Location { get; set; }
     public string? BsgId { get; set; }
