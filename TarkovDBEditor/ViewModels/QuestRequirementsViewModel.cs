@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Data.Common;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -170,15 +171,16 @@ public class QuestRequirementsViewModel : INotifyPropertyChanged
         var hasNormalizedName = await ColumnExistsAsync(connection, "Quests", "NormalizedName");
 
         // Load all quests with MinLevel, MinScavKarma, Location, Faction, KappaRequired, RequiredEdition, ExcludedEdition, RequiredDecodeCount, IsApproved
-        var questSql = $@"SELECT Id, Name, NameEN, NameKO, NameJA, WikiPageLink, Trader, BsgId,
+        // Read by column name below, so this list can be reordered or extended freely.
+        var questSql = $@"SELECT Id, Name, {(hasNormalizedName ? "NormalizedName" : "NULL")} as NormalizedName,
+                         NameEN, NameKO, NameJA, WikiPageLink, Trader, BsgId,
                          MinLevel, MinLevelApproved, MinLevelApprovedAt,
                          MinScavKarma, MinScavKarmaApproved, MinScavKarmaApprovedAt,
                          Location, Faction, KappaRequired, RequiredEdition, RequiredEditionApproved, RequiredEditionApprovedAt,
                          ExcludedEdition, ExcludedEditionApproved, ExcludedEditionApprovedAt,
                          RequiredDecodeCount, RequiredDecodeCountApproved, RequiredDecodeCountApprovedAt,
                          RequiredPrestigeLevel, RequiredPrestigeLevelApproved, RequiredPrestigeLevelApprovedAt,
-                         IsApproved, ApprovedAt,
-                         {(hasNormalizedName ? "NormalizedName" : "NULL")} as NormalizedName
+                         IsApproved, ApprovedAt
                          FROM Quests ORDER BY Name";
         await using var questCmd = new SqliteCommand(questSql, connection);
         await using var questReader = await questCmd.ExecuteReaderAsync();
@@ -188,40 +190,38 @@ public class QuestRequirementsViewModel : INotifyPropertyChanged
         {
             quests.Add(new QuestItem
             {
-                Id = questReader.GetString(0),
-                Name = questReader.GetString(1),
-                NameEN = questReader.IsDBNull(2) ? null : questReader.GetString(2),
-                NameKO = questReader.IsDBNull(3) ? null : questReader.GetString(3),
-                NameJA = questReader.IsDBNull(4) ? null : questReader.GetString(4),
-                WikiPageLink = questReader.IsDBNull(5) ? null : questReader.GetString(5),
-                Trader = questReader.IsDBNull(6) ? null : questReader.GetString(6),
-                BsgId = questReader.IsDBNull(7) ? null : questReader.GetString(7),
-                MinLevel = questReader.IsDBNull(8) ? null : questReader.GetInt32(8),
-                MinLevelApproved = !questReader.IsDBNull(9) && questReader.GetInt64(9) != 0,
-                MinLevelApprovedAt = questReader.IsDBNull(10) ? null : DateTime.Parse(questReader.GetString(10)),
-                MinScavKarma = questReader.IsDBNull(11) ? null : questReader.GetInt32(11),
-                MinScavKarmaApproved = !questReader.IsDBNull(12) && questReader.GetInt64(12) != 0,
-                MinScavKarmaApprovedAt = questReader.IsDBNull(13) ? null : DateTime.Parse(questReader.GetString(13)),
-                Location = questReader.IsDBNull(14) ? null : questReader.GetString(14),
-                Faction = questReader.IsDBNull(15) ? null : questReader.GetString(15),
-                KappaRequired = !questReader.IsDBNull(16) && questReader.GetInt64(16) != 0,
-                RequiredEdition = questReader.IsDBNull(17) ? null : questReader.GetString(17),
-                RequiredEditionApproved = !questReader.IsDBNull(18) && questReader.GetInt64(18) != 0,
-                RequiredEditionApprovedAt = questReader.IsDBNull(19) ? null : DateTime.Parse(questReader.GetString(19)),
-                ExcludedEdition = questReader.IsDBNull(20) ? null : questReader.GetString(20),
-                ExcludedEditionApproved = !questReader.IsDBNull(21) && questReader.GetInt64(21) != 0,
-                ExcludedEditionApprovedAt = questReader.IsDBNull(22) ? null : DateTime.Parse(questReader.GetString(22)),
-                RequiredDecodeCount = questReader.IsDBNull(23) ? null : questReader.GetInt32(23),
-                RequiredDecodeCountApproved = !questReader.IsDBNull(24) && questReader.GetInt64(24) != 0,
-                RequiredDecodeCountApprovedAt = questReader.IsDBNull(25) ? null : DateTime.Parse(questReader.GetString(25)),
-                RequiredPrestigeLevel = questReader.IsDBNull(26) ? null : questReader.GetInt32(26),
-                RequiredPrestigeLevelApproved = !questReader.IsDBNull(27) && questReader.GetInt64(27) != 0,
-                RequiredPrestigeLevelApprovedAt = questReader.IsDBNull(28) ? null : DateTime.Parse(questReader.GetString(28)),
-                IsApproved = !questReader.IsDBNull(29) && questReader.GetInt64(29) != 0,
-                ApprovedAt = questReader.IsDBNull(30) ? null : DateTime.Parse(questReader.GetString(30)),
-                // Appended to the SELECT rather than placed beside Name so every ordinal above
-                // keeps its position; this reader indexes by number.
-                NormalizedName = questReader.IsDBNull(31) ? null : questReader.GetString(31)
+                Id = questReader.GetString(questReader.GetOrdinal("Id")),
+                Name = questReader.GetString(questReader.GetOrdinal("Name")),
+                NormalizedName = TextOrNull(questReader, "NormalizedName"),
+                NameEN = TextOrNull(questReader, "NameEN"),
+                NameKO = TextOrNull(questReader, "NameKO"),
+                NameJA = TextOrNull(questReader, "NameJA"),
+                WikiPageLink = TextOrNull(questReader, "WikiPageLink"),
+                Trader = TextOrNull(questReader, "Trader"),
+                BsgId = TextOrNull(questReader, "BsgId"),
+                MinLevel = IntOrNull(questReader, "MinLevel"),
+                MinLevelApproved = Flag(questReader, "MinLevelApproved"),
+                MinLevelApprovedAt = TimestampOrNull(questReader, "MinLevelApprovedAt"),
+                MinScavKarma = IntOrNull(questReader, "MinScavKarma"),
+                MinScavKarmaApproved = Flag(questReader, "MinScavKarmaApproved"),
+                MinScavKarmaApprovedAt = TimestampOrNull(questReader, "MinScavKarmaApprovedAt"),
+                Location = TextOrNull(questReader, "Location"),
+                Faction = TextOrNull(questReader, "Faction"),
+                KappaRequired = Flag(questReader, "KappaRequired"),
+                RequiredEdition = TextOrNull(questReader, "RequiredEdition"),
+                RequiredEditionApproved = Flag(questReader, "RequiredEditionApproved"),
+                RequiredEditionApprovedAt = TimestampOrNull(questReader, "RequiredEditionApprovedAt"),
+                ExcludedEdition = TextOrNull(questReader, "ExcludedEdition"),
+                ExcludedEditionApproved = Flag(questReader, "ExcludedEditionApproved"),
+                ExcludedEditionApprovedAt = TimestampOrNull(questReader, "ExcludedEditionApprovedAt"),
+                RequiredDecodeCount = IntOrNull(questReader, "RequiredDecodeCount"),
+                RequiredDecodeCountApproved = Flag(questReader, "RequiredDecodeCountApproved"),
+                RequiredDecodeCountApprovedAt = TimestampOrNull(questReader, "RequiredDecodeCountApprovedAt"),
+                RequiredPrestigeLevel = IntOrNull(questReader, "RequiredPrestigeLevel"),
+                RequiredPrestigeLevelApproved = Flag(questReader, "RequiredPrestigeLevelApproved"),
+                RequiredPrestigeLevelApprovedAt = TimestampOrNull(questReader, "RequiredPrestigeLevelApprovedAt"),
+                IsApproved = Flag(questReader, "IsApproved"),
+                ApprovedAt = TimestampOrNull(questReader, "ApprovedAt")
             });
         }
 
@@ -395,6 +395,42 @@ public class QuestRequirementsViewModel : INotifyPropertyChanged
 
         ApplyFilter();
     }
+
+    #region Column readers
+
+    // The quest projection is read by column name so that its SELECT list can grow or be
+    // reordered without renumbering anything. A conditionally projected column still resolves,
+    // because both branches alias it to the same name.
+
+    /// <summary>Text column, or null when the row has none.</summary>
+    private static string? TextOrNull(DbDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+    }
+
+    /// <summary>Integer column, or null when the row has none.</summary>
+    private static int? IntOrNull(DbDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? null : reader.GetInt32(ordinal);
+    }
+
+    /// <summary>Timestamp column, or null when the row has none.</summary>
+    private static DateTime? TimestampOrNull(DbDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? null : DateTime.Parse(reader.GetString(ordinal));
+    }
+
+    /// <summary>Boolean column stored as INTEGER: NULL and 0 are false, anything else is true.</summary>
+    private static bool Flag(DbDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return !reader.IsDBNull(ordinal) && reader.GetInt64(ordinal) != 0;
+    }
+
+    #endregion
 
     public void ApplyFilter()
     {

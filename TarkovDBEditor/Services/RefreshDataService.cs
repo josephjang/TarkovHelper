@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Data.Common;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -117,20 +118,23 @@ namespace TarkovDBEditor.Services
                 // Read before the write transaction opens: these rows are what a renamed quest
                 // carries its identity across, so they have to describe the database as it was.
                 var previousQuests = await LoadPreviousQuestRowsAsync(databasePath, cancellationToken);
+                var previousKappaQuests = await LoadPreviousKappaQuestCountAsync(databasePath, cancellationToken);
                 logBuilder.AppendLine(
                     $"Previous quest rows: {previousQuests.Count} "
-                    + $"({previousQuests.Count(q => !string.IsNullOrEmpty(q.BsgId))} with an external ID)");
+                    + $"({previousQuests.Count(q => !string.IsNullOrEmpty(q.BsgId))} with an external ID, "
+                    + $"{previousKappaQuests} flagged Kappa)");
 
                 // 캐시된 Quests 로드
                 progress?.Invoke("Loading cached quests...");
-                var questsResult = await LoadQuestsFromCacheAsync(existingItems, previousQuests, progress, cancellationToken);
+                var questsResult = await LoadQuestsFromCacheAsync(
+                    existingItems, previousQuests, previousKappaQuests, progress, cancellationToken);
                 logBuilder.AppendLine($"Quests loaded from cache: {questsResult.Quests.Count} quests");
                 logBuilder.AppendLine($"Requirements: {questsResult.Requirements.Count}");
                 logBuilder.AppendLine($"TraderRequirements: {questsResult.TraderRequirements.Count}");
                 logBuilder.AppendLine($"Objectives: {questsResult.Objectives.Count}");
                 logBuilder.AppendLine($"OptionalQuests: {questsResult.OptionalQuests.Count}");
                 logBuilder.AppendLine($"RequiredItems: {questsResult.RequiredItems.Count}");
-                AppendIdentitySummary(logBuilder, questsResult.Identity);
+                AppendIdentitySummary(logBuilder, questsResult);
 
                 // Dogtag 아이템 자동 생성 (QuestRequiredItems/Objectives에서 필요한 경우)
                 // EnsureDogtagItemsExist는 생성된 아이템을 existingItems에도 추가함
@@ -239,16 +243,18 @@ namespace TarkovDBEditor.Services
                 // (so a renamed item keeps the icon file named after its row key) as well as
                 // for quests.
                 var previousQuests = await LoadPreviousQuestRowsAsync(databasePath, cancellationToken);
+                var previousKappaQuests = await LoadPreviousKappaQuestCountAsync(databasePath, cancellationToken);
                 var previousItems = await LoadPreviousItemRowsAsync(databasePath, cancellationToken);
                 logBuilder.AppendLine(
                     $"Previous rows: {previousQuests.Count} quests "
-                    + $"({previousQuests.Count(q => !string.IsNullOrEmpty(q.BsgId))} with an external ID), "
+                    + $"({previousQuests.Count(q => !string.IsNullOrEmpty(q.BsgId))} with an external ID, "
+                    + $"{previousKappaQuests} flagged Kappa), "
                     + $"{previousItems.Count} items "
                     + $"({previousItems.Count(i => !string.IsNullOrEmpty(i.BsgId))} with an external ID)");
 
                 // The carry-over guard runs before the crawl, not after it: a run that cannot
                 // preserve identity should cost the operator a message, not an hour of network.
-                AssertPreviousDatabaseIsBackfilled(previousQuests);
+                RefreshGuards.AssertPreviousDatabaseIsBackfilled(previousQuests);
 
                 // Wiki 데이터 수집 (Items)
                 progress?.Invoke("Fetching Wiki item categories...");
@@ -274,9 +280,10 @@ namespace TarkovDBEditor.Services
 
                 // Wiki 데이터 수집 (Quests)
                 progress?.Invoke("Fetching Wiki quests...");
-                var questsResult = await FetchAndProcessQuestsAsync(itemsResult.Items, previousQuests, progress, cancellationToken);
+                var questsResult = await FetchAndProcessQuestsAsync(
+                    itemsResult.Items, previousQuests, previousKappaQuests, progress, cancellationToken);
                 logBuilder.AppendLine($"Quests fetched: {questsResult.Quests.Count} quests");
-                AppendIdentitySummary(logBuilder, questsResult.Identity);
+                AppendIdentitySummary(logBuilder, questsResult);
 
                 // 새 리비전 생성
                 var newRevision = new RevisionInfo
@@ -491,7 +498,9 @@ namespace TarkovDBEditor.Services
                 };
 
                 // tarkov.dev 매칭
-                var normalizedLink = NormalizeWikiLink(item.WikiPageLink);
+                // The same decoding the task and item indexes are keyed by, from the one copy of
+                // it: a second copy here would be a second answer to "is this the same page".
+                var normalizedLink = TarkovDevJsonClient.NormalizeWikiLink(item.WikiPageLink);
                 if (!string.IsNullOrEmpty(normalizedLink) && devItems.TryGetValue(normalizedLink, out var devItem))
                 {
                     dbItem.BsgId = devItem.BsgId;
@@ -535,12 +544,14 @@ namespace TarkovDBEditor.Services
         #region Quest building
 
         /// <summary>
-        /// Writes the parts of a resolve a human reads in the run log: what was renamed, what
-        /// was held back, and which pages several game records claimed. The full lists go to
-        /// the JSON log the diff report consumes.
+        /// Writes the parts of a run a human reads in the run log: what was renamed, what was
+        /// held back, which pages several game records claimed, which previous rows nothing
+        /// carried, and which prerequisites reached no row. The full lists go to the JSON log
+        /// the diff report consumes.
         /// </summary>
-        private static void AppendIdentitySummary(StringBuilder logBuilder, QuestIdentityResolution? resolution)
+        private static void AppendIdentitySummary(StringBuilder logBuilder, QuestsFetchResult result)
         {
+            var resolution = result.Identity;
             if (resolution == null)
                 return;
 
@@ -553,6 +564,8 @@ namespace TarkovDBEditor.Services
             logBuilder.AppendLine($"Pages held back (no game record, not seasonal): {resolution.HeldBackPages.Count}");
             logBuilder.AppendLine($"Game records with no wiki page: {resolution.TasksWithoutPage.Count}");
             logBuilder.AppendLine($"Pages claimed by several game records: {resolution.Collisions.Count}");
+            logBuilder.AppendLine($"Previous rows no imported quest kept: {resolution.UncarriedPreviousRows.Count}");
+            logBuilder.AppendLine($"Game prerequisites with no row to point at: {result.StrandedPrerequisites.Count}");
 
             foreach (var reuse in resolution.TitleReuses)
                 logBuilder.AppendLine($"  [TITLE REUSE] '{reuse.PreviousName}' -> '{reuse.Title}' (task {reuse.BsgId})");
@@ -570,14 +583,35 @@ namespace TarkovDBEditor.Services
                     $"  [ALIAS UNUSED] '{alias.PageTitle}' no longer needs its override; upstream may have fixed "
                     + $"{alias.UpstreamIssue}. Remove the entry.");
             }
+
+            // Named one by one rather than counted: the eighteen seasonal quests are 3.7% of
+            // 488, permanently under the match-rate guard's threshold, so without this line the
+            // rows whose recorded progress the write orphans reach no durable artefact at all.
+            foreach (var row in resolution.UncarriedPreviousRows)
+            {
+                logBuilder.AppendLine(
+                    $"  [ROW ABANDONED] '{row.Name}' ({row.Id}) - no imported quest kept this key"
+                    + (string.IsNullOrEmpty(row.BsgId)
+                        ? "; it has no external ID, so nothing in a run could carry it"
+                        : ""));
+            }
+
+            foreach (var prerequisite in result.StrandedPrerequisites)
+            {
+                logBuilder.AppendLine(
+                    $"  [PREREQUISITE STRANDED] '{prerequisite.Quest}' requires task {prerequisite.TaskId}, "
+                    + $"which no row can name: {prerequisite.Reason}.");
+            }
         }
 
         /// <summary>
-        /// Thresholds a refresh refuses to cross. Each one describes a way the pipeline has
-        /// failed silently before: a wiki crawl that half arrived, a task cache that was
-        /// overwritten with an empty set, or a previous database whose external IDs were gone.
-        /// Crossing one is always a source problem, never something to publish.
-        /// See docs/decisions/feature-quest-data-1-1-refresh.spec.md, "Pipeline guards".
+        /// The refusals a refresh makes before it writes anything, with the thresholds they
+        /// measure against. Each one describes a way the pipeline has failed silently before: a
+        /// wiki crawl that half arrived, a task cache that was overwritten with an empty set, or
+        /// a previous database whose external IDs were gone. Crossing one is always a source
+        /// problem, never something to publish.
+        /// See docs/decisions/feature-quest-data-1-1-refresh.spec.md, "Pipeline guards", and
+        /// RefreshGuardTests, which pins every one of them.
         /// </summary>
         internal static class RefreshGuards
         {
@@ -596,14 +630,445 @@ namespace TarkovDBEditor.Services
             /// </summary>
             public const double MaxLostMatches = 0.05;
 
-            /// <summary>Above this share of imported quests without a trader, the trader cache is wrong.</summary>
-            public const double MaxTradersMissing = 0.05;
+            /// <summary>
+            /// Above this share of previously published quests whose row key no newly published
+            /// row keeps, recorded progress is being orphaned in the field rather than carried.
+            /// </summary>
+            public const double MaxLostRowKeys = 0.05;
+
+            // The trader-NULL share a publish refuses over is
+            // PublishConstraints.MaxTradersMissing: it is measured over the candidate file too,
+            // so it is declared beside the rule it bounds rather than here.
+
+            /// <summary>
+            /// Above this share of the things a child table describes disappearing in one run,
+            /// the new list is a collapsed parse or a partial fetch rather than the game losing
+            /// that much at once.
+            /// <para>
+            /// Measured over each row's natural identity (see
+            /// <see cref="AssertDeleteBudgetHeld"/>), never over its computed row key, so a run
+            /// that only re-keys a table costs nothing against the budget. Every one of the 794
+            /// rows in the published QuestRequirements table is keyed by a scheme this pipeline
+            /// no longer produces (546 by RowHash over a wiki-assigned GroupId of 1 or more, 248
+            /// by Collector's old <c>&lt;collectorId&gt;_&lt;questId&gt;</c> concatenation), so a
+            /// key measure would read 794 of 794 deleted and refuse the first 1.1 run outright.
+            /// </para>
+            /// <para>
+            /// Loose on purpose even so, because 1.1 genuinely removes a lot of prerequisite
+            /// edges: it replaces the wiki's chains with the game's, and it takes the Kappa flag
+            /// off all but 13 quests, which shortens Collector's synthesized list from 248 rows
+            /// to 12. Simulated against data/v1/tarkov_data.db and the live task set, the run
+            /// loses 596 of the 794 published (QuestId, RequiredQuestId) pairs, 75%. Anything
+            /// tighter refuses the run this pipeline was rebuilt for.
+            /// </para>
+            /// <para>
+            /// What it still catches is what <c>Count &gt; 0</c> cannot see, because one row is
+            /// not zero rows: a list that came back with a single prerequisite passes the
+            /// emptiness check and then deletes every other row through the foreign keys. On the
+            /// same table that reads 793 of 794 pairs gone, 99.9%.
+            /// </para>
+            /// <para>
+            /// It does NOT catch the Kappa set collapsing on its own while the game's chains
+            /// arrive intact: that is 620 of 794 pairs, 78%, under the limit. That loss has its
+            /// own guards, above, and <see cref="AssertCollectorsChainIsInTheKappaSet"/> below.
+            /// </para>
+            /// </summary>
+            public const double MaxRowsDeletedShare = 0.80;
+
+            /// <summary>
+            /// Below this many existing identities the share above says nothing, so the budget
+            /// does not apply. A share needs a denominator: in a table describing one thing,
+            /// losing it reads as 100% gone, and in a table of three, 67%. The published child
+            /// tables hold hundreds to thousands (794 prerequisite edges, 488 quests, 4014
+            /// items), so a table this small is a new one or a test one, never the collapse this
+            /// guards against.
+            /// </summary>
+            public const int MinRowsForDeleteBudget = 10;
+
+            /// <summary>
+            /// Refuses a write that would lose more of a table than a patch plausibly can. Runs
+            /// inside the write transaction, which the caller rolls back, so the file on disk is
+            /// untouched either way.
+            /// </summary>
+            /// <param name="existingIdentities">
+            /// The natural identity of every row the table already holds: the fields that say
+            /// which thing in the game the row is about, NOT the row key. A prerequisite edge is
+            /// its (QuestId, RequiredQuestId) pair however the key over it was computed, so an
+            /// edge that survives a change of key scheme is not a deletion and must not read as
+            /// one. Tables whose row key is upstream's own id (Items, Traders) pass that id;
+            /// Quests passes its row key, which is the identity the whole carry-over preserves
+            /// and which <see cref="MaxLostRowKeys"/> guards ten times tighter.
+            /// </param>
+            /// <param name="newIdentities">The same projection over the rows about to be written.</param>
+            /// <param name="rowsToDelete">
+            /// How many rows the delete loop will actually remove, reported alongside the
+            /// measure so a re-key is visible as the gap between the two.
+            /// </param>
+            public static void AssertDeleteBudgetHeld(
+                string table,
+                IEnumerable<string> existingIdentities,
+                IEnumerable<string> newIdentities,
+                int rowsToDelete,
+                Action<string>? progress)
+            {
+                var lost = new HashSet<string>(existingIdentities, StringComparer.Ordinal);
+                var existingCount = lost.Count;
+                if (existingCount < MinRowsForDeleteBudget)
+                    return;
+
+                lost.ExceptWith(newIdentities);
+
+                var share = (double)lost.Count / existingCount;
+                if (share <= MaxRowsDeletedShare)
+                {
+                    progress?.Invoke(
+                        $"{table}: {lost.Count} of {existingCount} row identities are gone ({share:P1}); "
+                        + $"{rowsToDelete} rows deleted by key");
+                    return;
+                }
+
+                throw new InvalidOperationException(
+                    $"{lost.Count} of {existingCount} row identities in {table} ({share:P0}) are gone from the new "
+                    + $"list, over the {MaxRowsDeletedShare:P0} limit. A list that came back this much shorter is a "
+                    + "collapsed parse or a partial fetch, not the game. (A run that only re-keys the table costs "
+                    + "nothing here: the budget is measured over what each row is about, not over its computed key.)");
+            }
+
+            /// <summary>
+            /// Above this share of the pages that talk about a seasonal mode failing to match
+            /// the marker, the wiki's wording has moved rather than the game's content: the
+            /// pages left unmatched are held back and their rows deleted.
+            /// </summary>
+            public const double MaxSeasonalPagesMissingTheMarker = 0.25;
 
             /// <summary>
             /// How far the task cache may lag the wiki crawl before the pair stops describing
             /// one moment in the game.
             /// </summary>
             public static readonly TimeSpan MaxTaskCacheLag = TimeSpan.FromDays(7);
+
+            public static void AssertTaskCacheIsCurrent(DateTime? taskCacheVerifiedAt, Action<string>? progress)
+            {
+                if (!taskCacheVerifiedAt.HasValue)
+                    return;
+
+                var lag = DateTime.Now - taskCacheVerifiedAt.Value;
+                if (lag > MaxTaskCacheLag)
+                {
+                    throw new InvalidOperationException(
+                        $"The tarkov.dev task cache was last confirmed current {lag.TotalDays:F0} days ago, more than "
+                        + $"{MaxTaskCacheLag.TotalDays:F0}. The wiki crawl and the game rules would describe "
+                        + "different moments in the game. Run 'Debug > Cache Tarkov Dev Data' first.");
+                }
+
+                progress?.Invoke($"tarkov.dev task cache last confirmed {lag.TotalHours:F0} hours ago");
+            }
+
+            /// <summary>
+            /// The guard the whole carry-over rests on. See the class remarks on
+            /// <see cref="BsgIdBackfillService"/> for why a database without external IDs cannot
+            /// be refreshed safely.
+            /// </summary>
+            public static void AssertPreviousDatabaseIsBackfilled(IReadOnlyList<PreviousQuestRow> previousQuests)
+            {
+                if (previousQuests.Count == 0)
+                    return;
+
+                var missing = previousQuests.Count(q => string.IsNullOrEmpty(q.BsgId));
+                var share = (double)missing / previousQuests.Count;
+                if (share <= MaxPreviousQuestsWithoutBsgId)
+                    return;
+
+                throw new InvalidOperationException(
+                    $"{missing} of {previousQuests.Count} quests in the current database have no external ID "
+                    + $"({share:P0}, over the {MaxPreviousQuestsWithoutBsgId:P0} limit). Refreshing now would "
+                    + "mint a fresh row key for every quest patch 1.1 renamed, detaching the recorded progress of each one "
+                    + "in every build in the field. Run 'Debug > Backfill external IDs from snapshot...' first.");
+            }
+
+            /// <summary>
+            /// A published quest losing its game record is normal in a patch that removes quests;
+            /// a lot of them losing it at once is an upstream problem.
+            /// <para>
+            /// Measured twice, because the two measurements miss different rows. The first reads
+            /// the external IDs, and so can only see the rows that have one. The second reads the
+            /// row key, which is what recorded progress is filed under and what
+            /// <see cref="UpsertQuestsAsync"/> deletes a row by, so it covers the rows the
+            /// backfill left without an ID as well: those cannot be carried at all, and the
+            /// backfill guard above deliberately tolerates a tenth of them.
+            /// </para>
+            /// </summary>
+            public static void AssertMatchRateHeld(
+                IReadOnlyList<PreviousQuestRow> previousQuests,
+                QuestIdentityResolution resolution,
+                Action<string>? progress)
+            {
+                if (previousQuests.Count == 0)
+                    return;
+
+                var previouslyMatched = previousQuests.Where(q => !string.IsNullOrEmpty(q.BsgId)).ToList();
+                if (previouslyMatched.Count > 0)
+                {
+                    var carriedBsgIds = new HashSet<string>(
+                        resolution.Quests.Where(q => q.Task != null).Select(q => q.Task!.Id), StringComparer.OrdinalIgnoreCase);
+                    var lost = previouslyMatched.Count(q => !carriedBsgIds.Contains(q.BsgId!));
+                    var share = (double)lost / previouslyMatched.Count;
+
+                    if (share > MaxLostMatches)
+                    {
+                        throw new InvalidOperationException(
+                            $"{lost} of {previouslyMatched.Count} published quests ({share:P0}) would lose their game record, "
+                            + $"over the {MaxLostMatches:P0} limit. A patch removes quests; it does not remove this "
+                            + "many at once. Check that the task cache is complete before publishing.");
+                    }
+
+                    progress?.Invoke($"{lost} of {previouslyMatched.Count} published quests lost their game record ({share:P1})");
+                }
+
+                // The resolver's own list rather than a second computation of it: same
+                // resolution.Quests keys, same previous rows, same ordinal comparison. Two
+                // copies of one rule are two answers waiting to disagree, and this one is also
+                // what the run log names row by row.
+                var orphaned = resolution.UncarriedPreviousRows;
+                var keyShare = (double)orphaned.Count / previousQuests.Count;
+
+                if (keyShare > MaxLostRowKeys)
+                {
+                    throw new InvalidOperationException(
+                        $"{orphaned.Count} of {previousQuests.Count} published quests ({keyShare:P0}) would lose their row key, "
+                        + $"over the {MaxLostRowKeys:P0} limit: {string.Join(", ", orphaned.Take(10).Select(q => q.Name))}. "
+                        + "Their rows are deleted and the progress recorded against them in every build in the field is "
+                        + "orphaned. A row with no external ID cannot be carried at all, so check the backfill before "
+                        + "checking the task cache.");
+                }
+
+                progress?.Invoke($"{orphaned.Count} of {previousQuests.Count} published quests lost their row key ({keyShare:P1})");
+            }
+
+            /// <summary>
+            /// Refuses a crawl whose seasonal marker has stopped matching. Pages that talk about
+            /// a seasonal mode while the marker recognises none of them means the wording moved
+            /// upstream, and importing zero seasonal quests without saying so is exactly the kind
+            /// of silence this pipeline keeps producing.
+            /// <para>
+            /// A share rather than "not one matched": a wiki edit that reworded seventeen of the
+            /// eighteen KORD BREACH pages leaves one matching, and the other seventeen would then
+            /// be held back and deleted with their objectives and prerequisites. None of them
+            /// carries an external ID, so no other guard can see them.
+            /// </para>
+            /// </summary>
+            public static void AssertSeasonalMarkerStillMatches(int seasonalPages, int pagesMissingTheMarker)
+            {
+                if (pagesMissingTheMarker == 0)
+                    return;
+
+                var talkingAboutSeason = seasonalPages + pagesMissingTheMarker;
+                var share = (double)pagesMissingTheMarker / talkingAboutSeason;
+                if (share <= MaxSeasonalPagesMissingTheMarker)
+                    return;
+
+                throw new InvalidOperationException(
+                    $"{pagesMissingTheMarker} of {talkingAboutSeason} quest pages that mention a seasonal mode in their "
+                    + $"Requirements section ({share:P0}, over the {MaxSeasonalPagesMissingTheMarker:P0} limit) do not "
+                    + "match the marker ExtractIsSeasonal reads, so those seasonal quests would silently leave the app. "
+                    + "The wiki's wording has moved; update ExtractIsSeasonal and its tests.");
+            }
+
+            /// <summary>
+            /// Names what the Kappa set was before this run beside what it is after, and refuses
+            /// a run that would empty it.
+            /// <para>
+            /// The set is unusually easy to lose without noticing. Nothing else measures it: the
+            /// row counts hold, the vocabularies are clean, the match rate is untouched, and
+            /// Collector's prerequisite list is derived from these flags, so losing them takes
+            /// the list with it (<see cref="SynthesizeCollectorRequirements"/>). Yet it is
+            /// deliberately NOT a proportional threshold. Patch 1.1 removed the Kappa
+            /// requirement from almost every quest (wiki Template:Infobox quest revision 348972,
+            /// "Remove quest Kappa requirement as part of 1.1.0.0 task changes"), and the API
+            /// agrees: 248 flagged quests in the published database against 13 upstream. Any
+            /// share small enough to catch a bad collapse would refuse that regeneration, which
+            /// is the one this pipeline was rebuilt for. So the refusal is at the only point no
+            /// patch can reach, an empty set, and the rest is reported for a human to read
+            /// beside the diff report's row counts.
+            /// </para>
+            /// <para>
+            /// The collapse that is a defect rather than a patch is caught by shape instead, in
+            /// <see cref="AssertCollectorsChainIsInTheKappaSet"/>.
+            /// </para>
+            /// </summary>
+            public static void AssertKappaSetDidNotVanish(
+                int previousKappaQuests,
+                IReadOnlyList<DbQuest> quests,
+                Action<string>? progress)
+            {
+                var flagged = quests.Count(q => q.KappaRequired);
+
+                if (previousKappaQuests > 0 && flagged == 0)
+                {
+                    throw new InvalidOperationException(
+                        $"No quest is flagged as required for the Kappa container; the current database flags "
+                        + $"{previousKappaQuests}. Collector's prerequisite list is derived from that flag, so "
+                        + "publishing this would leave Collector with no prerequisites and the app's Kappa gauge "
+                        + "with nothing to count. Check that the task cache carries kappaRequired before publishing.");
+                }
+
+                progress?.Invoke($"Kappa quests: {flagged} (the current database flags {previousKappaQuests})");
+            }
+
+            /// <summary>
+            /// Every quest Collector's own game record requires, directly or through the chain,
+            /// must be in the Kappa set.
+            /// <para>
+            /// This is the assumption <see cref="BuildRequirements"/> rests on when it skips
+            /// Collector's API prerequisites: they are already members of the synthesized set, so
+            /// taking both would write the same row twice. If one of them is not flagged, the
+            /// skip drops it and no other row replaces it. Collector then ships unlocked by a
+            /// prerequisite the game still enforces, and nothing else in the run can see it.
+            /// </para>
+            /// <para>
+            /// It is also the shape check the count cannot do. Upstream derives kappaRequired
+            /// from exactly this closure (13 flagged = Collector plus its 12 transitive
+            /// prerequisites on the 1.1 capture), so a flag that stops arriving - a renamed
+            /// field, a retyped value, a mapping that quietly reads false - leaves the chain
+            /// naming quests that are no longer in the set, and this refuses. A patch that
+            /// genuinely shortens Collector's chain moves both together and passes.
+            /// </para>
+            /// </summary>
+            public static void AssertCollectorsChainIsInTheKappaSet(
+                IReadOnlyList<TarkovDevQuestCacheItem> tasks,
+                QuestIdentityResolution resolution,
+                IReadOnlyList<DbQuest> quests,
+                Action<string>? progress)
+            {
+                var taskById = new Dictionary<string, TarkovDevQuestCacheItem>(StringComparer.OrdinalIgnoreCase);
+                foreach (var task in tasks)
+                {
+                    if (!string.IsNullOrEmpty(task.Id))
+                        taskById[task.Id] = task;
+                }
+
+                var collector = tasks.FirstOrDefault(t => IsCollectorTaskId(t.Id) || IsCollectorName(t.NameEN));
+                if (collector == null)
+                    return;
+
+                // No Collector row means no prerequisite list to be wrong about. The synthesis
+                // reports that case itself, and refusing here would name a quest this run is
+                // not publishing.
+                if (!quests.Any(q => IsCollector(q)))
+                    return;
+
+                // The transitive closure of Collector's own prerequisites, Collector excluded:
+                // upstream's own definition of the Kappa set.
+                var chain = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var pending = new Stack<string>(collector.TaskRequirements.Select(r => r.TaskId));
+                while (pending.Count > 0)
+                {
+                    var taskId = pending.Pop();
+                    if (string.IsNullOrEmpty(taskId) || !chain.Add(taskId))
+                        continue;
+                    if (taskById.TryGetValue(taskId, out var task))
+                    {
+                        foreach (var prerequisite in task.TaskRequirements)
+                            pending.Push(prerequisite.TaskId);
+                    }
+                }
+
+                chain.Remove(collector.Id);
+                if (chain.Count == 0)
+                {
+                    progress?.Invoke("Collector's game record names no prerequisites; nothing to cross-check the Kappa set against");
+                    return;
+                }
+
+                // Only the chain members this run imported: one the run held back or never
+                // matched has no row to flag, and BuildRequirements already names it as a
+                // stranded prerequisite.
+                var questIdByTaskId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var quest in resolution.Quests.Where(q => q.Task != null))
+                    questIdByTaskId[quest.Task!.Id] = quest.Id;
+
+                var rowById = quests.ToDictionary(q => q.Id, StringComparer.Ordinal);
+
+                var imported = 0;
+                var unflagged = new List<string>();
+                foreach (var taskId in chain)
+                {
+                    if (!questIdByTaskId.TryGetValue(taskId, out var questId) ||
+                        !rowById.TryGetValue(questId, out var row))
+                    {
+                        continue;
+                    }
+
+                    imported++;
+                    if (!row.KappaRequired)
+                        unflagged.Add($"{row.Name} ({taskId})");
+                }
+
+                if (unflagged.Count > 0)
+                {
+                    throw new InvalidOperationException(
+                        $"{unflagged.Count} of the {imported} imported quests Collector's own game record requires are "
+                        + $"not in the Kappa set: {string.Join(", ", unflagged.Take(10))}. Collector's prerequisite list "
+                        + "is built from that set and its own list is skipped to avoid writing each row twice, so these "
+                        + "prerequisites would reach no row at all and Collector would publish unlocked by them. Either "
+                        + "the kappaRequired flag stopped arriving or the game changed what Collector requires.");
+                }
+
+                progress?.Invoke(
+                    $"Collector's game chain: {chain.Count} tasks, {imported} imported, all in the Kappa set");
+            }
+
+            /// <summary>
+            /// The value vocabularies, row shapes and NULL rules the fielded build depends on. Each
+            /// of these is a way an additive publish could still break a build already installed: an
+            /// unknown requirement type locks a quest forever, an unknown faction hides it, a second
+            /// row for one quest/prerequisite pair is silently dropped by the reader, a quest that
+            /// requires itself is locked forever, and a normalized name that does not match what the
+            /// app computes silently orphans recorded progress.
+            /// <para>
+            /// The rules themselves live on <see cref="PublishConstraints"/>, declared once and
+            /// evaluated here over the rows this run built and again by <c>DataPublishService</c>
+            /// over the candidate file a publish is about to copy. This call is the earlier of the
+            /// two and the more informative, because it fails inside the run that produced the rows;
+            /// it is not the last one, because a row can still reach the file by a hand edit after
+            /// the run.
+            /// </para>
+            /// </summary>
+            public static void AssertPublishConstraints(QuestsFetchResult result, Action<string>? progress)
+            {
+                var candidate = PublishConstraints.Of(result);
+                var problems = PublishConstraints.Problems(candidate);
+
+                if (problems.Count > 0)
+                {
+                    throw new InvalidOperationException(PublishConstraints.Describe(
+                        "The refresh would publish data the builds in the field cannot read correctly",
+                        problems));
+                }
+
+                progress?.Invoke(PublishConstraints.DescribeHeld(candidate));
+            }
+
+            /// <summary>
+            /// Fails the moment two quests would share a row key or a normalized name, which is
+            /// the reachable collision: a renamed quest carries its old key while a new quest
+            /// mints the key the freed title makes. Run against the resolver's output rather than
+            /// only at the last gate, because everything in between indexes quests by their key
+            /// and would otherwise fail first with an anonymous duplicate-key error naming
+            /// neither quest.
+            /// </summary>
+            public static void AssertQuestIdentitiesAreUnique(IReadOnlyList<ResolvedQuest> quests)
+            {
+                var problems = PublishConstraints
+                    .DuplicateIdentityProblems(quests, q => q.Id, q => q.NormalizedName, q => q.Title)
+                    .ToList();
+                if (problems.Count == 0)
+                    return;
+
+                throw new InvalidOperationException(PublishConstraints.Describe(
+                    "The refresh would publish data the builds in the field cannot read correctly",
+                    problems));
+            }
         }
 
         /// <summary>
@@ -613,6 +1078,7 @@ namespace TarkovDBEditor.Services
         private async Task<QuestsFetchResult> FetchAndProcessQuestsAsync(
             List<DbItem> items,
             IReadOnlyList<PreviousQuestRow> previousQuests,
+            int previousKappaQuests,
             Action<string>? progress = null,
             CancellationToken cancellationToken = default)
         {
@@ -632,7 +1098,8 @@ namespace TarkovDBEditor.Services
                 .Where(kvp => crawled.Contains(kvp.Key))
                 .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.Ordinal);
 
-            return await BuildQuestsAsync(cached, items, previousQuests, progress, cancellationToken);
+            return await BuildQuestsAsync(
+                cached, items, previousQuests, previousKappaQuests, progress, cancellationToken);
         }
 
         /// <summary>
@@ -641,6 +1108,7 @@ namespace TarkovDBEditor.Services
         private async Task<QuestsFetchResult> LoadQuestsFromCacheAsync(
             List<DbItem> items,
             IReadOnlyList<PreviousQuestRow> previousQuests,
+            int previousKappaQuests,
             Action<string>? progress = null,
             CancellationToken cancellationToken = default)
         {
@@ -648,7 +1116,8 @@ namespace TarkovDBEditor.Services
             await questService.LoadCacheAsync(cancellationToken);
 
             return await BuildQuestsAsync(
-                questService.GetCachedQuests(), items, previousQuests, progress, cancellationToken);
+                questService.GetCachedQuests(), items, previousQuests, previousKappaQuests, progress,
+                cancellationToken);
         }
 
         /// <summary>
@@ -666,6 +1135,7 @@ namespace TarkovDBEditor.Services
             IReadOnlyDictionary<string, CachedQuestInfo> cachedQuests,
             List<DbItem> items,
             IReadOnlyList<PreviousQuestRow> previousQuests,
+            int previousKappaQuests,
             Action<string>? progress,
             CancellationToken cancellationToken)
         {
@@ -700,13 +1170,17 @@ namespace TarkovDBEditor.Services
                     + "refreshing; quests name their trader by id, which only that cache can resolve.");
             }
 
-            var cacheInfo = devService.GetCacheInfo();
-            AssertTaskCacheIsCurrent(cacheInfo.QuestsCachedAt, progress);
-            AssertPreviousDatabaseIsBackfilled(previousQuests);
+            // The timestamp only, not GetCacheInfo(): that also counts all four caches, and
+            // counting means reading and deserializing every one of their files. The items file
+            // is about 16 MB and nothing here looks inside it, and the quests and traders files
+            // were deserialized two calls above.
+            var questCacheVerifiedAt = devService.GetQuestsCacheVerifiedAt();
+            RefreshGuards.AssertTaskCacheIsCurrent(questCacheVerifiedAt, progress);
+            RefreshGuards.AssertPreviousDatabaseIsBackfilled(previousQuests);
 
             progress?.Invoke(
                 $"Loaded {tasks.Count} tasks and {traders.Count} traders from the tarkov.dev cache"
-                + (cacheInfo.QuestsCachedAt.HasValue ? $" (verified {cacheInfo.QuestsCachedAt:yyyy-MM-dd HH:mm})" : ""));
+                + (questCacheVerifiedAt.HasValue ? $" (verified {questCacheVerifiedAt:yyyy-MM-dd HH:mm})" : ""));
 
             var traderNamesById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var trader in traders)
@@ -720,7 +1194,11 @@ namespace TarkovDBEditor.Services
                 pages, tasks, previousQuests, QuestMatchOverrides.Load());
             result.Identity = resolution;
 
-            AssertMatchRateHeld(previousQuests, resolution, progress);
+            RefreshGuards.AssertMatchRateHeld(previousQuests, resolution, progress);
+            // Before anything indexes a quest by its key. Everything below builds dictionaries
+            // over Id, and a duplicate there would otherwise surface as an anonymous
+            // duplicate-key error carrying a base64 string and neither quest's name.
+            RefreshGuards.AssertQuestIdentitiesAreUnique(resolution.Quests);
 
             progress?.Invoke(
                 $"Resolved {resolution.Quests.Count} quests: {resolution.Renames.Count} renamed, "
@@ -737,7 +1215,15 @@ namespace TarkovDBEditor.Services
                 result.TraderRequirements.AddRange(BuildTraderRequirements(quest, traderNamesById));
             }
 
-            result.Requirements.AddRange(BuildRequirements(resolution, cachedQuests, questIdByTitle));
+            // A loyalty row's key is the (quest, trader) pair, so a record naming one trader
+            // twice would insert the same key twice and abort the regeneration on the primary
+            // key. Nothing upstream promises otherwise, and the prerequisites have carried the
+            // same collapse since the multi-status entries were found the hard way.
+            result.TraderRequirements = DeduplicateTraderRequirements(result.TraderRequirements, progress);
+
+            var (requirementRows, stranded) = BuildRequirements(resolution, cachedQuests, questIdByTitle, progress);
+            result.Requirements.AddRange(requirementRows);
+            result.StrandedPrerequisites = stranded;
             result.Requirements.AddRange(SynthesizeCollectorRequirements(result.Quests, progress));
             // A requirement row's key is the (quest, prerequisite, group) triple, so two rows
             // describing the same pair collide on the primary key and take the whole refresh
@@ -746,11 +1232,14 @@ namespace TarkovDBEditor.Services
             // discovered the hard way, mid-regeneration.
             result.Requirements = DeduplicateRequirements(result.Requirements, progress);
             result.PrerequisiteDisagreements = ComputePrerequisiteDisagreements(resolution, cachedQuests, questIdByTitle);
+            ReportFlattenedOrGroups(resolution, cachedQuests, progress);
             result.Objectives.AddRange(BuildObjectives(resolution, cachedQuests, itemLookup));
             result.OptionalQuests.AddRange(BuildOptionalQuests(resolution, cachedQuests, questIdByTitle));
             result.RequiredItems.AddRange(BuildRequiredItems(resolution, cachedQuests, itemLookup));
 
-            AssertPublishConstraints(result, progress);
+            RefreshGuards.AssertKappaSetDidNotVanish(previousKappaQuests, result.Quests, progress);
+            RefreshGuards.AssertCollectorsChainIsInTheKappaSet(tasks, resolution, result.Quests, progress);
+            RefreshGuards.AssertPublishConstraints(result, progress);
 
             progress?.Invoke(
                 $"Built {result.Quests.Count} quests, {result.Requirements.Count} prerequisites, "
@@ -764,17 +1253,16 @@ namespace TarkovDBEditor.Services
         }
 
         /// <summary>
-        /// Turns the cached pages into resolver input, and refuses a crawl whose seasonal
-        /// marker has stopped matching: pages that talk about a seasonal mode while none is
-        /// recognised means the wording moved upstream, and importing zero seasonal quests
-        /// without saying so is exactly the kind of silence this pipeline keeps producing.
+        /// Turns the cached pages into resolver input, and refuses a crawl whose seasonal marker
+        /// has stopped matching (see
+        /// <see cref="RefreshGuards.AssertSeasonalMarkerStillMatches"/>).
         /// </summary>
         private static List<WikiQuestPage> BuildWikiPages(
             IReadOnlyDictionary<string, CachedQuestInfo> cachedQuests,
             Action<string>? progress)
         {
             var pages = new List<WikiQuestPage>();
-            var mentionsSeasonal = 0;
+            var missingTheMarker = 0;
 
             foreach (var (title, cached) in cachedQuests)
             {
@@ -783,178 +1271,16 @@ namespace TarkovDBEditor.Services
 
                 var isSeasonal = WikiQuestService.ExtractIsSeasonal(cached.PageContent);
                 if (!isSeasonal && WikiQuestService.MentionsSeasonalMode(cached.PageContent))
-                    mentionsSeasonal++;
+                    missingTheMarker++;
 
                 pages.Add(new WikiQuestPage { Title = title, IsSeasonal = isSeasonal });
             }
 
             var seasonal = pages.Count(p => p.IsSeasonal);
-            if (seasonal == 0 && mentionsSeasonal > 0)
-            {
-                throw new InvalidOperationException(
-                    $"{mentionsSeasonal} quest pages mention a seasonal mode in their Requirements section, but none "
-                    + "matches the marker ExtractIsSeasonal reads, so every seasonal quest would silently leave the "
-                    + "app. The wiki's wording has moved; update ExtractIsSeasonal and its tests.");
-            }
+            RefreshGuards.AssertSeasonalMarkerStillMatches(seasonal, missingTheMarker);
 
             progress?.Invoke($"{pages.Count} quest pages with content, {seasonal} marked seasonal");
             return pages;
-        }
-
-        private static void AssertTaskCacheIsCurrent(DateTime? taskCacheVerifiedAt, Action<string>? progress)
-        {
-            if (!taskCacheVerifiedAt.HasValue)
-                return;
-
-            var lag = DateTime.Now - taskCacheVerifiedAt.Value;
-            if (lag > RefreshGuards.MaxTaskCacheLag)
-            {
-                throw new InvalidOperationException(
-                    $"The tarkov.dev task cache was last confirmed current {lag.TotalDays:F0} days ago, more than "
-                    + $"{RefreshGuards.MaxTaskCacheLag.TotalDays:F0}. The wiki crawl and the game rules would describe "
-                    + "different moments in the game. Run 'Debug > Cache Tarkov Dev Data' first.");
-            }
-
-            progress?.Invoke($"tarkov.dev task cache last confirmed {lag.TotalHours:F0} hours ago");
-        }
-
-        /// <summary>
-        /// The guard the whole carry-over rests on. See the class remarks on
-        /// <see cref="BsgIdBackfillService"/> for why a database without external IDs cannot be
-        /// refreshed safely.
-        /// </summary>
-        private static void AssertPreviousDatabaseIsBackfilled(IReadOnlyList<PreviousQuestRow> previousQuests)
-        {
-            if (previousQuests.Count == 0)
-                return;
-
-            var missing = previousQuests.Count(q => string.IsNullOrEmpty(q.BsgId));
-            var share = (double)missing / previousQuests.Count;
-            if (share <= RefreshGuards.MaxPreviousQuestsWithoutBsgId)
-                return;
-
-            throw new InvalidOperationException(
-                $"{missing} of {previousQuests.Count} quests in the current database have no external ID "
-                + $"({share:P0}, over the {RefreshGuards.MaxPreviousQuestsWithoutBsgId:P0} limit). Refreshing now would "
-                + "mint a fresh row key for every quest patch 1.1 renamed, detaching the recorded progress of each one "
-                + "in every build in the field. Run 'Debug > Backfill external IDs from snapshot...' first.");
-        }
-
-        /// <summary>
-        /// A published quest losing its game record is normal in a patch that removes quests;
-        /// a lot of them losing it at once is an upstream problem.
-        /// </summary>
-        private static void AssertMatchRateHeld(
-            IReadOnlyList<PreviousQuestRow> previousQuests,
-            QuestIdentityResolution resolution,
-            Action<string>? progress)
-        {
-            var previouslyMatched = previousQuests.Where(q => !string.IsNullOrEmpty(q.BsgId)).ToList();
-            if (previouslyMatched.Count == 0)
-                return;
-
-            var carriedBsgIds = new HashSet<string>(
-                resolution.Quests.Where(q => q.Task != null).Select(q => q.Task!.Id), StringComparer.OrdinalIgnoreCase);
-            var lost = previouslyMatched.Count(q => !carriedBsgIds.Contains(q.BsgId!));
-            var share = (double)lost / previouslyMatched.Count;
-
-            if (share > RefreshGuards.MaxLostMatches)
-            {
-                throw new InvalidOperationException(
-                    $"{lost} of {previouslyMatched.Count} published quests ({share:P0}) would lose their game record, "
-                    + $"over the {RefreshGuards.MaxLostMatches:P0} limit. A patch removes quests; it does not remove this "
-                    + "many at once. Check that the task cache is complete before publishing.");
-            }
-
-            progress?.Invoke($"{lost} of {previouslyMatched.Count} published quests lost their game record ({share:P1})");
-        }
-
-        /// <summary>
-        /// The value vocabularies and NULL rules the fielded build depends on. Each of these is
-        /// a way an additive publish could still break a build already installed: an unknown
-        /// requirement type locks a quest forever, an unknown faction hides it, and a normalized
-        /// name that does not match what the app computes silently orphans recorded progress.
-        /// </summary>
-        private static void AssertPublishConstraints(QuestsFetchResult result, Action<string>? progress)
-        {
-            var problems = new List<string>();
-
-            var badTypes = result.Requirements
-                .Where(r => r.RequirementType is not ("Complete" or "Accept" or "Fail"))
-                .Select(r => r.RequirementType)
-                .Distinct()
-                .ToList();
-            if (badTypes.Count > 0)
-            {
-                problems.Add(
-                    $"RequirementType outside {{Complete, Accept, Fail}}: {string.Join(", ", badTypes)}. "
-                    + "The fielded build treats an unknown type as never satisfied, locking the quest forever.");
-            }
-
-            var badFactions = result.Quests
-                .Where(q => q.Faction != null && q.Faction is not ("Bear" or "Usec"))
-                .Select(q => $"{q.Name} ({q.Faction})")
-                .ToList();
-            if (badFactions.Count > 0)
-            {
-                problems.Add(
-                    $"Faction outside {{NULL, Bear, Usec}}: {string.Join(", ", badFactions.Take(10))}. "
-                    + "The fielded build compares the string for equality, so any other value hides the quest.");
-            }
-
-            var missingTrader = result.Quests.Where(q => string.IsNullOrEmpty(q.Trader)).ToList();
-            if (result.Quests.Count > 0)
-            {
-                var share = (double)missingTrader.Count / result.Quests.Count;
-                if (share > RefreshGuards.MaxTradersMissing)
-                {
-                    problems.Add(
-                        $"{missingTrader.Count} of {result.Quests.Count} quests ({share:P0}) have no Trader, over the "
-                        + $"{RefreshGuards.MaxTradersMissing:P0} limit: "
-                        + string.Join(", ", missingTrader.Take(10).Select(q => q.Name)));
-                }
-            }
-
-            var blankNormalized = result.Quests.Where(q => string.IsNullOrEmpty(q.NormalizedName)).ToList();
-            if (blankNormalized.Count > 0)
-                problems.Add($"NormalizedName is empty on: {string.Join(", ", blankNormalized.Take(10).Select(q => q.Name))}");
-
-            var driftedNormalized = result.Quests
-                .Where(q => !string.IsNullOrEmpty(q.NormalizedName))
-                .Where(q =>
-                {
-                    var mintedTitle = WikiQuestIdentity.TitleOf(q.Id);
-                    return mintedTitle == null || QuestNormalizedName.SqlForm(mintedTitle) != q.NormalizedName;
-                })
-                .ToList();
-            if (driftedNormalized.Count > 0)
-            {
-                problems.Add(
-                    "NormalizedName does not match the value the app computes from the row key on: "
-                    + string.Join(", ", driftedNormalized.Take(10).Select(q => $"{q.Name} ({q.NormalizedName})"))
-                    + ". Progress recorded against these quests would not be found.");
-            }
-
-            foreach (var duplicate in result.Quests.GroupBy(q => q.Id, StringComparer.Ordinal).Where(g => g.Count() > 1))
-                problems.Add($"Two quests share the row key {duplicate.Key}: {string.Join(", ", duplicate.Select(q => q.Name))}");
-
-            foreach (var duplicate in result.Quests
-                .GroupBy(q => q.NormalizedName, StringComparer.Ordinal)
-                .Where(g => g.Key.Length > 0 && g.Count() > 1))
-            {
-                problems.Add(
-                    $"Two quests share the normalized name '{duplicate.Key}': "
-                    + string.Join(", ", duplicate.Select(q => q.Name)));
-            }
-
-            if (problems.Count > 0)
-            {
-                throw new InvalidOperationException(
-                    "The refresh would publish data the builds in the field cannot read correctly:\n  - "
-                    + string.Join("\n  - ", problems));
-            }
-
-            progress?.Invoke("Publish constraints hold (requirement types, factions, traders, normalized names)");
         }
 
         /// <summary>
@@ -1058,17 +1384,50 @@ namespace TarkovDBEditor.Services
         /// short (60 where it names fewer than the game does, Sew it Good - Part 4 among them),
         /// so it is no longer consulted for a quest the game describes. The cost is the wiki's
         /// OR groups on 15 quests, which the API has no equivalent for; they collapse to the
-        /// game's AND list and the diff report shows each one.
+        /// game's AND list and the diff report shows each one. Two of them come back, rebuilt
+        /// from the game's own fail conditions rather than from the wiki: see
+        /// <see cref="ExpandExclusiveAlternatives"/>.
+        /// </para>
+        /// <para>
+        /// A game prerequisite whose target this run did not import cannot become a row: the
+        /// foreign key has nothing to point at. Dropping it silently ships a short list,
+        /// so the app offers it to a player who has not met the real precondition. Every one is
+        /// named instead, classified by kind. There is deliberately NO threshold on the count:
+        /// the legitimate number varies per patch (35 in 1.1, the removed quests the API still
+        /// lists), so a number chosen now would refuse a valid regeneration later. The two-way
+        /// classification is what makes the illegitimate ones identifiable, by kind rather than
+        /// by volume.
+        /// </para>
+        /// <para>
+        /// The prerequisites the game reports as satisfied by more than one status are collected
+        /// as they are built and named by <see cref="ReportMultiStatusPrerequisites"/>, together
+        /// with what each one became. Fourteen of them is a list worth reading, not a count.
         /// </para>
         /// </summary>
-        private static IEnumerable<DbQuestRequirement> BuildRequirements(
+        private static (List<DbQuestRequirement> Rows, List<StrandedPrerequisite> Stranded) BuildRequirements(
             QuestIdentityResolution resolution,
             IReadOnlyDictionary<string, CachedQuestInfo> cachedQuests,
-            IReadOnlyDictionary<string, string> questIdByTitle)
+            IReadOnlyDictionary<string, string> questIdByTitle,
+            Action<string>? progress)
         {
+            var rows = new List<DbQuestRequirement>();
+            var stranded = new List<StrandedPrerequisite>();
+            var multiStatus = new List<MultiStatusPrerequisite>();
+            var expansions = new List<ExclusiveExpansion>();
+
             var questIdByBsgId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // The same set again, holding the game records themselves: the exclusive-alternative
+            // expansion reads a PREREQUISITE's own fail conditions to find the quest whose
+            // completion fails it.
+            var taskByBsgId = new Dictionary<string, TarkovDevQuestCacheItem>(StringComparer.OrdinalIgnoreCase);
             foreach (var quest in resolution.Quests.Where(q => q.Task != null))
+            {
                 questIdByBsgId[quest.Task!.Id] = quest.Id;
+                taskByBsgId[quest.Task.Id] = quest.Task;
+            }
+
+            var taskIdsWithoutPage = new HashSet<string>(
+                resolution.TasksWithoutPage.Select(t => t.TaskId), StringComparer.OrdinalIgnoreCase);
 
             foreach (var quest in resolution.Quests)
             {
@@ -1077,10 +1436,16 @@ namespace TarkovDBEditor.Services
                     // Collector's prerequisite list is the Kappa set, synthesized from the flags
                     // (see SynthesizeCollectorRequirements). The API also gives it five of its
                     // own, and all five are already in that set, so taking both would emit the
-                    // same row twice. Matched on the same names the synthesis matches on, so
-                    // exactly one of the two owns the list.
-                    if (IsCollector(quest.Title) || IsCollector(quest.Task.NameEN))
+                    // same row twice. Recognised by the same rule the synthesis uses, so exactly
+                    // one of the two owns the list whatever the quest is called this patch.
+                    if (IsCollector(quest))
                         continue;
+
+                    // Collected per quest rather than appended straight to rows: the OR groups
+                    // below are allocated per quest and have to see the whole list. Paired with
+                    // the game id each row came from, which is how the expansion finds the
+                    // prerequisite's own fail conditions; the id itself is never published.
+                    var questRows = new List<SourcedRequirement>();
 
                     foreach (var prerequisite in quest.Task.TaskRequirements)
                     {
@@ -1088,22 +1453,57 @@ namespace TarkovDBEditor.Services
                         // removed record, or one held back) has nothing to reference, and the
                         // foreign key would reject the row.
                         if (!questIdByBsgId.TryGetValue(prerequisite.TaskId, out var requiredQuestId))
+                        {
+                            stranded.Add(new StrandedPrerequisite
+                            {
+                                Quest = quest.Title,
+                                TaskId = prerequisite.TaskId,
+                                // TasksWithoutPage holds every record no page claimed, which
+                                // covers both the removed quests the API still lists and the
+                                // losing side of a page two records claimed. Either way nothing
+                                // imported it, which is the expected shape. The other branch is
+                                // a record a page DID claim while no quest kept it, and that is
+                                // a pipeline problem: nothing in the resolver can produce it
+                                // today, so it is the canary rather than the common case.
+                                Reason = taskIdsWithoutPage.Contains(prerequisite.TaskId)
+                                    ? "the target record matched no wiki page this run imported"
+                                    : "the target record was matched to a page but no imported quest holds it",
+                            });
+                            continue;
+                        }
+
+                        // A quest that requires itself can never be unlocked, and nothing
+                        // downstream checks for one. Upstream has no such entry today; the row
+                        // would be unrecoverable in the field if it ever did.
+                        if (requiredQuestId == quest.Id)
                             continue;
 
-                        yield return new DbQuestRequirement
+                        var mapped = MapRequirementStatuses(prerequisite.Status, quest.Title);
+                        if (prerequisite.Status.Count > 1)
+                        {
+                            multiStatus.Add(new MultiStatusPrerequisite(
+                                quest.Title, requiredQuestId, prerequisite.Status.ToList(), mapped));
+                        }
+
+                        questRows.Add(new SourcedRequirement(prerequisite.TaskId, new DbQuestRequirement
                         {
                             QuestId = quest.Id,
                             RequiredQuestId = requiredQuestId,
-                            RequirementType = MapRequirementStatuses(prerequisite.Status, quest.Title),
-                            // The API has no OR groups, so every row is one AND term. The app
-                            // reads a singleton group as AND, which is what the wiki parser's
-                            // 1..n numbering also produced.
+                            RequirementType = mapped.RequirementType,
+                            AltRequirementType = mapped.AltRequirementType,
+                            // The API has no OR groups, so every row starts as one AND term. The
+                            // app reads a singleton group as AND, which is what the wiki parser's
+                            // 1..n numbering also produced. ExpandExclusiveAlternatives moves the
+                            // handful that are really an either-or onto a group of their own.
                             GroupId = 0,
                             DelayMinutes = quest.Task.AvailableDelaySecondsMin > 0
                                 ? quest.Task.AvailableDelaySecondsMin / 60
                                 : null,
-                        };
+                        }));
                     }
+
+                    ExpandExclusiveAlternatives(quest, questRows, questIdByBsgId, taskByBsgId, expansions);
+                    rows.AddRange(questRows.Select(r => r.Row));
 
                     continue;
                 }
@@ -1116,16 +1516,295 @@ namespace TarkovDBEditor.Services
                     if (!TryResolveQuestId(questIdByTitle, parsed.QuestName, out var requiredQuestId))
                         continue;
 
-                    yield return new DbQuestRequirement
+                    // Collector's own page points its |previous field at itself, and the wiki is
+                    // edited by hand, so this is a page away at any time. A self-reference is a
+                    // quest locked forever in every install that downloads it. BuildOptionalQuests
+                    // has always dropped one; so does this.
+                    if (requiredQuestId == quest.Id)
+                        continue;
+
+                    rows.Add(new DbQuestRequirement
                     {
                         QuestId = quest.Id,
                         RequiredQuestId = requiredQuestId,
                         RequirementType = parsed.RequirementType,
                         DelayMinutes = parsed.DelayMinutes,
                         GroupId = parsed.GroupId,
-                    };
+                    });
                 }
             }
+
+            ReportMultiStatusPrerequisites(multiStatus, expansions, resolution, progress);
+
+            return (rows, stranded);
+        }
+
+        /// <summary>
+        /// A row being built, with the game id of the prerequisite it came from. That id is how
+        /// <see cref="ExpandExclusiveAlternatives"/> finds the prerequisite's own game record and
+        /// reads its fail conditions, and it never reaches the table, so it rides alongside the
+        /// row rather than on it.
+        /// </summary>
+        private sealed record SourcedRequirement(string TaskId, DbQuestRequirement Row);
+
+        /// <summary>One prerequisite the game reports as satisfied by several statuses.</summary>
+        private sealed record MultiStatusPrerequisite(
+            string QuestTitle,
+            string PrerequisiteQuestId,
+            IReadOnlyList<string> Statuses,
+            MappedRequirement Mapped);
+
+        /// <summary>
+        /// What became of one "complete or failed" prerequisite: the twin it was expanded into an
+        /// OR group with, or the reason it stayed a single row.
+        /// </summary>
+        private sealed record ExclusiveExpansion(
+            string QuestTitle,
+            string PrerequisiteQuestId,
+            string? TwinQuestId,
+            string? SkippedBecause);
+
+        /// <summary>The fail-condition kind that names another task; the only kind read here.</summary>
+        private const string TaskStatusFailCondition = "taskStatus";
+
+        /// <summary>
+        /// The quest whose completion fails <paramref name="prerequisite"/>, read off upstream's
+        /// own <c>failConditions</c>, or null and the reason there is none. Read: "this
+        /// prerequisite counts as met once THAT quest is done", which is what makes an either-or
+        /// out of a status a published row cannot hold.
+        /// <para>
+        /// The relation is <c>failConditions</c> of type <c>taskStatus</c> whose status list
+        /// includes <c>complete</c>: the prerequisite fails exactly when the named task
+        /// completes, so the two are exclusive and "prerequisite failed" and "twin complete" are
+        /// the same state. All 35 <c>taskStatus</c> fail conditions on the 1.1 capture read
+        /// <c>["complete"]</c>, so the status test changes nothing today; it is there because a
+        /// condition on the twin being merely started would not make the pair exclusive and must
+        /// not be read as if it did.
+        /// </para>
+        /// <para>
+        /// Exactly one such condition, never "the first of several". Twelve 1.1 tasks are failed
+        /// by two different quests each (Chemical - Part 4 and The Higher They Fly among them);
+        /// none is a "complete or failed" prerequisite today, but if one became one there would
+        /// be no single quest to name as the other branch, and picking one would publish a group
+        /// that says something the game does not.
+        /// </para>
+        /// <para>
+        /// This replaces a hand-transcribed pair table. The two pairs 1.1 has are the ones the
+        /// derivation finds (Swift Retribution is failed by Inevitable Response, Supply Plans by
+        /// Kind of Sabotage), and the two it does not expand are the two that would have been
+        /// wrong to transcribe: Getting Acquainted, whose only fail condition is a Lightkeeper
+        /// trader standing, and Battery Change, whose twin is a second Battery Change record
+        /// that loses their shared wiki page and so never becomes a row to point at (that one is
+        /// refused by the caller's own import check, not here).
+        /// </para>
+        /// </summary>
+        private static (string? TwinTaskId, string Reason) ReadExclusiveTwin(TarkovDevQuestCacheItem prerequisite)
+        {
+            var twins = prerequisite.FailConditions
+                .Where(c => string.Equals(c.Type, TaskStatusFailCondition, StringComparison.OrdinalIgnoreCase)
+                            && !string.IsNullOrEmpty(c.TaskId)
+                            && c.Status.Any(s => string.Equals(s, "complete", StringComparison.OrdinalIgnoreCase)))
+                .Select(c => c.TaskId!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (twins.Count == 1)
+                return (twins[0], "");
+
+            if (twins.Count > 1)
+            {
+                return (null,
+                    $"the game records {twins.Count} different quests as failing it "
+                    + $"({string.Join(", ", twins.OrderBy(id => id, StringComparer.Ordinal))}), so no single one is "
+                    + "the other branch");
+            }
+
+            var kinds = prerequisite.FailConditions
+                .Select(c => string.IsNullOrEmpty(c.Type) ? "(no type)" : c.Type)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(kind => kind, StringComparer.Ordinal)
+                .ToList();
+
+            return (null, kinds.Count == 0
+                ? "the game records nothing as failing it, so there is no other branch to name "
+                  + "(a task cache written before failConditions were carried also reads this way)"
+                : $"nothing that fails it is another quest completing (it is failed by: {string.Join(", ", kinds)})");
+        }
+
+        /// <summary>
+        /// Turns a prerequisite that a failed status also satisfies into the OR group every build
+        /// in the field can already read: "this prerequisite, or the quest whose completion fails
+        /// it", both at Complete.
+        /// <para>
+        /// This is the half of the fix that reaches installs that never update. They read
+        /// <c>RequirementType</c> and nothing else, so a row saying Complete locks the quest for a
+        /// player who took the other branch; an OR group says the same thing in a vocabulary they
+        /// have understood since before this change. It also restores what the published database
+        /// ships today, where both pairs came in from the wiki's own OR groups.
+        /// </para>
+        /// <para>
+        /// Which quest is the other branch is derived from upstream's own fail conditions
+        /// (<see cref="ReadExclusiveTwin"/>), not transcribed. The expansion is refused, and
+        /// reported, whenever the group would not be readable as written: the fielded reader
+        /// keys incoming requirement rows by prerequisite alone and discards every later row
+        /// naming the same one, so a twin the quest already requires would silently lose one of
+        /// the two rows and leave the other branch as a lone unsatisfiable group.
+        /// <see cref="RefreshGuards.AssertPublishConstraints"/> restates that over the finished
+        /// set, whatever produced the rows.
+        /// </para>
+        /// </summary>
+        /// <param name="taskByBsgId">
+        /// Every imported quest's game record, by game id. The fail conditions read here are the
+        /// PREREQUISITE's, not the quest's, so this looks up the record behind a row rather than
+        /// the row's own.
+        /// </param>
+        private static void ExpandExclusiveAlternatives(
+            ResolvedQuest quest,
+            List<SourcedRequirement> questRows,
+            IReadOnlyDictionary<string, string> questIdByBsgId,
+            IReadOnlyDictionary<string, TarkovDevQuestCacheItem> taskByBsgId,
+            List<ExclusiveExpansion> expansions)
+        {
+            // Rows arrive at GroupId 0, so the OR groups this quest gets are numbered from 1.
+            var nextGroupId = 1;
+            var alreadyRequired = new HashSet<string>(
+                questRows.Select(r => r.Row.RequiredQuestId), StringComparer.Ordinal);
+            var expanded = new List<SourcedRequirement>();
+
+            foreach (var sourced in questRows)
+            {
+                // Only a prerequisite a failure also satisfies has a branch to express. Read off
+                // the mapped row rather than the statuses so the two cannot disagree.
+                if (sourced.Row.AltRequirementType != nameof(RequirementStatus.Fail))
+                    continue;
+
+                void Skip(string because) => expansions.Add(new ExclusiveExpansion(
+                    quest.Title, sourced.Row.RequiredQuestId, null, because));
+
+                // The prerequisite's own game record. Present for every row that reaches here:
+                // a row exists only because its target resolved to an imported quest, and this
+                // map is built over exactly that set.
+                if (!taskByBsgId.TryGetValue(sourced.TaskId, out var prerequisiteTask))
+                {
+                    Skip($"this run read no game record for it ({sourced.TaskId})");
+                    continue;
+                }
+
+                var (twinTaskId, whyNoTwin) = ReadExclusiveTwin(prerequisiteTask);
+                if (twinTaskId == null)
+                {
+                    Skip(whyNoTwin);
+                    continue;
+                }
+
+                if (!questIdByBsgId.TryGetValue(twinTaskId, out var twinQuestId))
+                {
+                    Skip($"the quest that fails it ({twinTaskId}) was not imported by this run");
+                    continue;
+                }
+
+                // A quest that requires itself can never be unlocked, exactly as in the loop
+                // that built these rows.
+                if (twinQuestId == quest.Id)
+                {
+                    Skip("the quest that fails it is this quest");
+                    continue;
+                }
+
+                if (!alreadyRequired.Add(twinQuestId))
+                {
+                    Skip("the quest that fails it is already a prerequisite, which the fielded "
+                         + "reader would collapse onto one row");
+                    continue;
+                }
+
+                var groupId = nextGroupId++;
+                sourced.Row.GroupId = groupId;
+                expanded.Add(new SourcedRequirement(twinTaskId, new DbQuestRequirement
+                {
+                    QuestId = quest.Id,
+                    RequiredQuestId = twinQuestId,
+                    // Complete, not the prerequisite's own type: what satisfies this branch is
+                    // finishing the twin, and its own AltRequirementType would say nothing here.
+                    RequirementType = nameof(RequirementStatus.Complete),
+                    AltRequirementType = null,
+                    GroupId = groupId,
+                    // The same wait the quest imposes on the branch it was split from: both
+                    // branches unlock the same quest.
+                    DelayMinutes = sourced.Row.DelayMinutes,
+                }));
+
+                expansions.Add(new ExclusiveExpansion(
+                    quest.Title, sourced.Row.RequiredQuestId, twinQuestId, null));
+            }
+
+            questRows.AddRange(expanded);
+        }
+
+        /// <summary>
+        /// Names every prerequisite the game reports as satisfied by more than one status, and
+        /// what each one became. Fourteen in 1.1, four of them the "complete or failed" case that
+        /// no single requirement type covers, so the list is short enough to read and the ones
+        /// that still over-lock an install that never updates are worth reading by name.
+        /// </summary>
+        private static void ReportMultiStatusPrerequisites(
+            IReadOnlyList<MultiStatusPrerequisite> multiStatus,
+            IReadOnlyList<ExclusiveExpansion> expansions,
+            QuestIdentityResolution resolution,
+            Action<string>? progress)
+        {
+            if (progress == null || multiStatus.Count == 0)
+                return;
+
+            var titleByQuestId = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var quest in resolution.Quests)
+                titleByQuestId[quest.Id] = quest.Title;
+
+            string Name(string questId) => titleByQuestId.TryGetValue(questId, out var title) ? title : questId;
+
+            var named = multiStatus
+                .Select(m => $"{m.QuestTitle} <- {Name(m.PrerequisiteQuestId)} "
+                             + $"({string.Join(" or ", m.Statuses)} -> {m.Mapped.RequirementType}"
+                             + (m.Mapped.AltRequirementType == null ? "" : $" or {m.Mapped.AltRequirementType}") + ")")
+                .OrderBy(line => line, StringComparer.Ordinal)
+                .ToList();
+
+            progress.Invoke(
+                $"{named.Count} prerequisites are satisfied by more than one quest status. The row keeps the most "
+                + "permissive type and records anything that type does not already cover in AltRequirementType: "
+                + string.Join("; ", named));
+
+            if (expansions.Count == 0)
+                return;
+
+            var grouped = expansions
+                .Where(e => e.TwinQuestId != null)
+                .Select(e => $"{e.QuestTitle} ({Name(e.PrerequisiteQuestId)} or {Name(e.TwinQuestId!)})")
+                .OrderBy(line => line, StringComparer.Ordinal)
+                .ToList();
+            var lonely = expansions
+                .Where(e => e.TwinQuestId == null)
+                .Select(e => $"{e.QuestTitle} <- {Name(e.PrerequisiteQuestId)} ({e.SkippedBecause})")
+                .OrderBy(line => line, StringComparer.Ordinal)
+                .ToList();
+
+            var message = new StringBuilder(
+                $"{expansions.Count} of them are also satisfied by failing the prerequisite, which no single "
+                + "requirement type covers. ");
+            if (grouped.Count > 0)
+            {
+                message.Append($"{grouped.Count} ship as an OR group naming the quest whose completion fails the "
+                    + $"prerequisite, which every build in the field can read: {string.Join("; ", grouped)}. ");
+            }
+
+            if (lonely.Count > 0)
+            {
+                message.Append($"{lonely.Count} ship as one row, so only a build that reads AltRequirementType is "
+                    + "satisfied by the failure and older builds keep the quest locked for a player who failed the "
+                    + $"prerequisite: {string.Join("; ", lonely)}. ");
+            }
+
+            progress.Invoke(message.ToString().TrimEnd());
         }
 
         /// <summary>
@@ -1159,7 +1838,7 @@ namespace TarkovDBEditor.Services
 
                 // Collector's own page points its |previous field at itself, which is why the
                 // Kappa set is synthesized rather than parsed; comparing it here says nothing.
-                if (IsCollector(quest.Title))
+                if (IsCollector(quest))
                     continue;
 
                 var wiki = new HashSet<string>(StringComparer.Ordinal);
@@ -1199,54 +1878,167 @@ namespace TarkovDBEditor.Services
         }
 
         /// <summary>
-        /// Collapses the statuses that satisfy one prerequisite into the single requirement type
-        /// a row can hold.
+        /// Names the matched quests whose wiki page records alternatives (an OR group) where the
+        /// game reports one flat list.
         /// <para>
-        /// Fourteen 1.1 prerequisites name more than one: ten are "active or complete" and four
-        /// are "complete or failed". A row carries one type, and its identity is the
-        /// (quest, prerequisite, group) triple, so emitting one row per status would collide on
-        /// the primary key rather than express an alternative.
+        /// Their rows come from the game now, and the API has no OR groups, so every term of one
+        /// becomes an AND term unless <see cref="ExpandExclusiveAlternatives"/> rebuilt the group
+        /// from upstream's own fail conditions. That is the intended trade (see
+        /// <see cref="BuildRequirements"/>), but it is the one the prerequisite disagreement list
+        /// cannot show: when the game names exactly the alternatives the wiki did, the two sets
+        /// are equal and the comparison reads "agree" while the meaning changed from "either" to
+        /// "both". The spec makes these a named review item, so the run names them.
+        /// </para>
+        /// </summary>
+        private static void ReportFlattenedOrGroups(
+            QuestIdentityResolution resolution,
+            IReadOnlyDictionary<string, CachedQuestInfo> cachedQuests,
+            Action<string>? progress)
+        {
+            var flattened = new List<string>();
+
+            foreach (var quest in resolution.Quests)
+            {
+                // A quest with no game record still gets the wiki's groups verbatim.
+                if (quest.Task == null)
+                    continue;
+                if (!cachedQuests.TryGetValue(quest.Title, out var cached) || string.IsNullOrEmpty(cached.PageContent))
+                    continue;
+
+                // The wiki parser numbers AND terms 1..n and gives the members of one OR group
+                // the same number, so an alternative is a group with more than one member.
+                var hasAlternatives = WikiQuestService.ExtractPreviousQuests(cached.PageContent)
+                    .GroupBy(p => p.GroupId)
+                    .Any(g => g.Count() > 1);
+                if (hasAlternatives)
+                    flattened.Add(quest.Title);
+            }
+
+            if (flattened.Count == 0)
+                return;
+
+            progress?.Invoke(
+                $"{flattened.Count} quests list alternative prerequisites on the wiki that the game reports as one "
+                + "flat list, so every alternative becomes a requirement unless the run rebuilt the group from the "
+                + "game's own fail conditions (reported separately): "
+                + string.Join(", ", flattened.OrderBy(t => t, StringComparer.Ordinal))
+                + ". Read their prerequisite rows in the diff report before publishing.");
+        }
+
+        /// <summary>
+        /// The three requirement types a published row can hold, declared least to most
+        /// permissive. The declaration order IS the precedence, applied twice:
+        /// <see cref="MapRequirementStatuses"/> takes the maximum of the statuses one
+        /// prerequisite names, <see cref="DeduplicateRequirements"/> the maximum among duplicate
+        /// rows. Written once so the two cannot drift apart.
+        /// <para>
+        /// The member names are the values written to QuestRequirements.RequirementType.
+        /// <see cref="RefreshGuards.AssertPublishConstraints"/> deliberately does NOT read this
+        /// enum: its allow-list restates what the build in the field can read, and a type added
+        /// here must fail that guard until the app has a reading for it.
+        /// </para>
+        /// </summary>
+        public enum RequirementStatus
+        {
+            Fail = 0,
+            Complete = 1,
+            Accept = 2,
+        }
+
+        /// <summary>
+        /// The requirement types one prerequisite maps onto: the most permissive one, in
+        /// <c>RequirementType</c>, plus whatever that one does not already cover, in
+        /// <c>AltRequirementType</c> (NULL on the overwhelming majority of rows).
+        /// </summary>
+        public readonly record struct MappedRequirement(string RequirementType, string? AltRequirementType);
+
+        /// <summary>
+        /// Maps the statuses that satisfy one prerequisite onto the two type columns a row
+        /// carries.
+        /// <para>
+        /// Fourteen 1.1 prerequisites name more than one status: ten are "active or complete"
+        /// and four are "complete or failed". A row's identity is the (quest, prerequisite,
+        /// group) triple, so one row per status would collide on the primary key rather than
+        /// express an alternative; both types have to fit on one row.
         /// </para>
         /// <para>
-        /// The most permissive available type wins. "Accept" is satisfied by an active
+        /// The most permissive type wins <c>RequirementType</c>, and only a status it does not
+        /// already satisfy reaches <c>AltRequirementType</c>. "Accept" is satisfied by an active
         /// <em>and</em> by a completed prerequisite (<c>QuestProgressService.IsStatusSatisfied</c>),
-        /// so "active or complete" collapses onto it with nothing lost. "Complete or failed" has
-        /// no single equivalent and takes Complete, the path a player normally follows; the
-        /// alternative is over-locking, which the refresh report lists so the handful of quests
-        /// affected are reviewed rather than discovered.
+        /// so "active or complete" collapses onto Accept alone with nothing left over and
+        /// nothing lost. "Complete or failed" has no single equivalent, so it becomes
+        /// Complete with Fail alongside it: a build that reads the second column is satisfied by
+        /// either, exactly as the game is.
+        /// </para>
+        /// <para>
+        /// The second column reaches only builds that update. Every build already in the field
+        /// reads <c>RequirementType</c> alone and would lock a "complete or failed" quest for a
+        /// player who failed the prerequisite, which is why
+        /// <see cref="ExpandExclusiveAlternatives"/> also writes the same fact as an OR group
+        /// those builds can read. Whatever it cannot express there is named in the run's report
+        /// rather than left to be discovered.
         /// </para>
         /// </summary>
         // Public because it is a rule about the published data, not an implementation detail:
         // the guard tests pin it directly, and a change here changes what every build in the
         // field reads as a prerequisite.
-        public static string MapRequirementStatuses(IReadOnlyList<string> statuses, string questTitle)
+        public static MappedRequirement MapRequirementStatuses(IReadOnlyList<string> statuses, string questTitle)
         {
-            // An entry with no status at all means the ordinary "must be completed".
+            // An entry with no status at all means the ordinary "must be completed". This early
+            // return is load-bearing twice over: it is also what keeps the Max() below off an
+            // empty sequence, which would throw an InvalidOperationException naming nothing.
             if (statuses.Count == 0)
-                return "Complete";
+                return new MappedRequirement(RequirementStatus.Complete.ToString(), null);
 
-            var types = statuses.Select(s => MapRequirementStatus(s, questTitle)).ToList();
+            var named = statuses.Select(s => MapRequirementStatus(s, questTitle)).Distinct().ToList();
+            var primary = named.Max();
 
-            if (types.Contains("Accept")) return "Accept";
-            if (types.Contains("Complete")) return "Complete";
-            return "Fail";
+            // Only what the primary type does not already satisfy needs a column of its own.
+            var leftover = named.Where(s => !Satisfies(primary, s)).Distinct().ToList();
+            if (leftover.Count > 1)
+            {
+                // Unreachable against the three statuses upstream defines (Accept covers itself
+                // and Complete, so Fail is the only status that can ever be left over), and a
+                // fourth status would already have thrown in MapRequirementStatus. Here so that
+                // a widened vocabulary is refused rather than silently published half-recorded.
+                throw new InvalidOperationException(
+                    $"'{questTitle}' has a prerequisite satisfied by {string.Join(", ", statuses)}, which needs "
+                    + $"{leftover.Count} requirement types beside {primary} and a row carries one. "
+                    + "The published schema would have to grow another column before this can ship.");
+            }
+
+            return new MappedRequirement(
+                primary.ToString(),
+                leftover.Count == 1 ? leftover[0].ToString() : null);
         }
 
-        private static string MapRequirementStatus(string status, string questTitle) => status.ToLowerInvariant() switch
-        {
-            "complete" => "Complete",
-            "active" => "Accept",
-            "failed" => "Fail",
-            _ => throw new InvalidOperationException(
-                $"'{questTitle}' has a prerequisite with status '{status}', which the app has no reading for. "
-                + "It treats an unknown requirement type as never satisfied, which would lock the quest forever.")
-        };
+        /// <summary>
+        /// Whether a row carrying <paramref name="type"/> is already satisfied in every state
+        /// <paramref name="other"/> is. Mirrors <c>QuestProgressService.IsStatusSatisfied</c>:
+        /// Accept is satisfied by an active and by a completed prerequisite, so it subsumes
+        /// Complete; nothing else subsumes anything but itself.
+        /// </summary>
+        private static bool Satisfies(RequirementStatus type, RequirementStatus other) =>
+            type == other || (type == RequirementStatus.Accept && other == RequirementStatus.Complete);
+
+        private static RequirementStatus MapRequirementStatus(string status, string questTitle) =>
+            status.ToLowerInvariant() switch
+            {
+                "complete" => RequirementStatus.Complete,
+                "active" => RequirementStatus.Accept,
+                "failed" => RequirementStatus.Fail,
+                _ => throw new InvalidOperationException(
+                    $"'{questTitle}' has a prerequisite with status '{status}', which the app has no reading for. "
+                    + "It treats an unknown requirement type as never satisfied, which would lock the quest forever.")
+            };
 
         /// <summary>
         /// Keeps one row per (quest, prerequisite, group), preferring the most permissive
         /// requirement type among the duplicates for the same reason
         /// <see cref="MapRequirementStatuses"/> does: a quest shown slightly early is a smaller
-        /// harm than one locked forever.
+        /// harm than one locked forever. A row that also names an alternate type is more
+        /// permissive than the same type without one, which is what breaks a tie: otherwise the
+        /// row that happened to arrive first would win and could drop the alternate.
         /// </summary>
         private static List<DbQuestRequirement> DeduplicateRequirements(
             List<DbQuestRequirement> requirements,
@@ -1265,7 +2057,7 @@ namespace TarkovDBEditor.Services
                 }
 
                 collapsed++;
-                if (Permissiveness(requirement.RequirementType) > Permissiveness(existing.RequirementType))
+                if (Rank(requirement) > Rank(existing))
                     kept[key] = requirement;
             }
 
@@ -1274,21 +2066,95 @@ namespace TarkovDBEditor.Services
 
             return kept.Values.ToList();
 
+            // Permissiveness first, then whether a second type comes with it. Doubling leaves
+            // the primary order intact and gives the tie a winner, so the comparison above is a
+            // total order over the shapes a row can have rather than one that falls back to
+            // arrival order.
+            static int Rank(DbQuestRequirement requirement) =>
+                Permissiveness(requirement.RequirementType) * 2
+                + (string.IsNullOrEmpty(requirement.AltRequirementType) ? 0 : 1);
+
+            // The same order <see cref="RequirementStatus"/> declares, read through nameof so a
+            // renamed member breaks the build here instead of silently ranking everything equal.
+            // Not Enum.TryParse: it accepts the underlying number as well, so the string "2"
+            // would parse to Accept and rank a bogus type as the most permissive of all.
+            // An unrecognised type ranks below Fail rather than tying with it, because the
+            // comparison is strict and a tie would let whichever row arrived first win.
             static int Permissiveness(string requirementType) => requirementType switch
             {
-                "Accept" => 2,
-                "Complete" => 1,
-                _ => 0,
+                nameof(RequirementStatus.Accept) => (int)RequirementStatus.Accept,
+                nameof(RequirementStatus.Complete) => (int)RequirementStatus.Complete,
+                nameof(RequirementStatus.Fail) => (int)RequirementStatus.Fail,
+                _ => -1,
             };
         }
 
         /// <summary>
-        /// Collector by any of the names the pipeline may know it under. Its prerequisite list is
-        /// derived from the Kappa flags rather than parsed or fetched, so both the wiki parser
-        /// and the game data skip it.
+        /// Keeps one loyalty gate per (quest, trader), which is what the row key is, so a record
+        /// naming one trader twice collapses here instead of aborting the write on the primary
+        /// key. The lower level wins, for the same reason
+        /// <see cref="DeduplicateRequirements"/> prefers the most permissive type: a quest shown
+        /// slightly early is a smaller harm than one gated behind a level the game never asked
+        /// for.
         /// </summary>
-        private static bool IsCollector(string questTitle) =>
-            questTitle.Equals("Collector", StringComparison.OrdinalIgnoreCase);
+        private static List<DbQuestTraderRequirement> DeduplicateTraderRequirements(
+            List<DbQuestTraderRequirement> requirements,
+            Action<string>? progress)
+        {
+            var kept = new Dictionary<string, DbQuestTraderRequirement>(StringComparer.Ordinal);
+            var collapsed = 0;
+
+            foreach (var requirement in requirements)
+            {
+                var key = requirement.ComputeId();
+                if (!kept.TryGetValue(key, out var existing))
+                {
+                    kept[key] = requirement;
+                    continue;
+                }
+
+                collapsed++;
+                if (requirement.RequiredLevel < existing.RequiredLevel)
+                    kept[key] = requirement;
+            }
+
+            if (collapsed > 0)
+                progress?.Invoke($"Collapsed {collapsed} duplicate loyalty gates onto their lowest required level");
+
+            return kept.Values.ToList();
+        }
+
+        /// <summary>
+        /// The game's own id for Collector. Keyed on rather than the title because the title
+        /// gates two decisions that have to agree: whether the API's own prerequisite list is
+        /// skipped (<see cref="BuildRequirements"/>) and whether the Kappa set is synthesized
+        /// (<see cref="SynthesizeCollectorRequirements"/>). A patch that renames the quest, as
+        /// 1.1 renamed 91 others, would otherwise flip both at once and reduce a 200-row list to
+        /// the API's five with nothing to notice it.
+        /// </summary>
+        private const string CollectorTaskId = "5c51aac186f77432ea65c552";
+
+        /// <summary>
+        /// Collector, by its game id first and by any of the names the pipeline may know it
+        /// under after. Its prerequisite list is derived from the Kappa flags rather than parsed
+        /// or fetched, so both the wiki parser and the game data skip it.
+        /// <para>
+        /// The two overloads must agree exactly, or Collector's rows are both dropped or both
+        /// written twice: a matched quest's row carries the same id and names it was resolved
+        /// with, so they read the same three values.
+        /// </para>
+        /// </summary>
+        private static bool IsCollector(ResolvedQuest quest) =>
+            IsCollectorTaskId(quest.Task?.Id) || IsCollectorName(quest.Title) || IsCollectorName(quest.Task?.NameEN);
+
+        private static bool IsCollector(DbQuest quest) =>
+            IsCollectorTaskId(quest.BsgId) || IsCollectorName(quest.Name) || IsCollectorName(quest.NameEN);
+
+        private static bool IsCollectorTaskId(string? taskId) =>
+            string.Equals(taskId, CollectorTaskId, StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsCollectorName(string? questName) =>
+            string.Equals(questName, "Collector", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// Collector's prerequisite list is the Kappa set, computed rather than curated: the
@@ -1306,7 +2172,7 @@ namespace TarkovDBEditor.Services
             IReadOnlyList<DbQuest> quests,
             Action<string>? progress)
         {
-            var collector = quests.FirstOrDefault(q => IsCollector(q.Name) || IsCollector(q.NameEN ?? ""));
+            var collector = quests.FirstOrDefault(IsCollector);
 
             if (collector == null)
             {
@@ -1508,6 +2374,8 @@ namespace TarkovDBEditor.Services
                     objectives = result.Objectives.Count,
                     requiredItems = result.RequiredItems.Count,
                     prerequisiteConflicts = result.PrerequisiteDisagreements.Count(d => d.Verdict != "agree"),
+                    uncarriedPreviousRows = resolution.UncarriedPreviousRows.Count,
+                    strandedPrerequisites = result.StrandedPrerequisites.Count,
                 },
                 prerequisiteDisagreements = result.PrerequisiteDisagreements.Where(d => d.Verdict != "agree"),
                 renames = resolution.Renames,
@@ -1524,6 +2392,10 @@ namespace TarkovDBEditor.Services
                 }),
                 aliasesUsed = resolution.AliasesUsed,
                 unusedAliases = resolution.UnusedAliases.Select(a => new { a.PageTitle, a.TaskId, a.UpstreamIssue }),
+                // The rows this write deletes, and the progress every install has recorded
+                // against them. A count alone cannot be acted on; the names can.
+                uncarriedPreviousRows = resolution.UncarriedPreviousRows.Select(r => new { r.Id, r.Name, r.BsgId }),
+                strandedPrerequisites = result.StrandedPrerequisites,
             };
 
             var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
@@ -1572,6 +2444,33 @@ namespace TarkovDBEditor.Services
             }
 
             return rows;
+        }
+
+        /// <summary>
+        /// How many quests the database being refreshed flags as required for the Kappa
+        /// container. Read separately from <see cref="LoadPreviousQuestRowsAsync"/> because
+        /// identity carry-over has no use for it: it exists so a run can say what the number was
+        /// before it, beside what it is after (see
+        /// <see cref="RefreshGuards.AssertKappaSetDidNotVanish"/>).
+        /// </summary>
+        internal static async Task<int> LoadPreviousKappaQuestCountAsync(
+            string databasePath,
+            CancellationToken cancellationToken = default)
+        {
+            if (!File.Exists(databasePath))
+                return 0;
+
+            await using var connection = new SqliteConnection($"Data Source={databasePath}");
+            await connection.OpenAsync(cancellationToken);
+
+            if (!await TableExistsAsync(connection, "Quests", cancellationToken))
+                return 0;
+            if (!await ColumnExistsAsync(connection, "Quests", "KappaRequired", cancellationToken))
+                return 0;
+
+            await using var cmd = new SqliteCommand(
+                "SELECT COUNT(*) FROM Quests WHERE KappaRequired = 1", connection);
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken));
         }
 
         /// <summary>Item rows the refresh is starting from, for the item identity carry-over.</summary>
@@ -2004,6 +2903,23 @@ namespace TarkovDBEditor.Services
 
             using var transaction = connection.BeginTransaction();
 
+            // A child table whose new list came back empty is deliberately left alone: a parse
+            // or a fetch that produced nothing is a failure far more often than it is a game
+            // with no such rows left, and emptying the table publishes that failure to every
+            // build in the field. Silence is the other half of that bargain and the half this
+            // pipeline keeps getting wrong, so every skip says which table it kept and how many
+            // rows are now older than the revision they ship under.
+            async Task ReportSkippedTableAsync(string table)
+            {
+                var kept = await CountRowsAsync(connection, transaction, table, cancellationToken);
+                var message = kept == 0
+                    ? $"{table}: the refresh produced no rows and the table holds none. Check the parser before publishing."
+                    : $"{table}: the refresh produced no rows, so its {kept} existing rows are left as they are and are "
+                      + "now older than the data published beside them. Check the parser before publishing.";
+                progress?.Invoke(message);
+                logBuilder?.AppendLine(message);
+            }
+
             try
             {
                 // _schema_meta 테이블 확인/생성
@@ -2018,7 +2934,7 @@ namespace TarkovDBEditor.Services
 
                     await CreateItemsTableIfNotExistsAsync(connection, transaction);
                     await RegisterItemsSchemaAsync(connection, transaction);
-                    var itemStats = await UpsertItemsAsync(connection, transaction, items, logBuilder);
+                    var itemStats = await UpsertItemsAsync(connection, transaction, items, logBuilder, progress);
 
                     logBuilder?.AppendLine($"Inserted: {itemStats.Inserted}, Updated: {itemStats.Updated}, Deleted: {itemStats.Deleted}");
                 }
@@ -2032,13 +2948,13 @@ namespace TarkovDBEditor.Services
 
                     await CreateQuestsTableIfNotExistsAsync(connection, transaction);
                     await RegisterQuestsSchemaAsync(connection, transaction);
-                    var questStats = await UpsertQuestsAsync(connection, transaction, quests, logBuilder);
+                    var questStats = await UpsertQuestsAsync(connection, transaction, quests, logBuilder, progress);
 
                     logBuilder?.AppendLine($"Inserted: {questStats.Inserted}, Updated: {questStats.Updated}, Deleted: {questStats.Deleted}");
                 }
 
-                // QuestRequirements 테이블 업데이트
-                if (questRequirements != null && questRequirements.Count > 0)
+                // QuestRequirements 테이블 업데이트 (빈 리스트는 건너뜀, ReportSkippedTableAsync 참고)
+                if (questRequirements is { Count: > 0 })
                 {
                     progress?.Invoke($"Updating QuestRequirements table ({questRequirements.Count} requirements)...");
                     logBuilder?.AppendLine();
@@ -2046,13 +2962,17 @@ namespace TarkovDBEditor.Services
 
                     await CreateQuestRequirementsTableIfNotExistsAsync(connection, transaction);
                     await RegisterQuestRequirementsSchemaAsync(connection, transaction);
-                    var reqStats = await UpsertQuestRequirementsAsync(connection, transaction, questRequirements, logBuilder);
+                    var reqStats = await UpsertQuestRequirementsAsync(connection, transaction, questRequirements, logBuilder, progress);
 
                     logBuilder?.AppendLine($"Inserted: {reqStats.Inserted}, Updated: {reqStats.Updated}, Deleted: {reqStats.Deleted}");
                 }
+                else
+                {
+                    await ReportSkippedTableAsync("QuestRequirements");
+                }
 
                 // QuestTraderRequirements 테이블 업데이트.
-                // An empty list is skipped, like Quests, Requirements and Objectives: a parse
+                // An empty list is skipped and reported, like every other child table: a parse
                 // or fetch that produced nothing must not empty a table that describes 110
                 // quests. Rows that individually disappear are still deleted by the diff inside
                 // the upsert.
@@ -2064,13 +2984,17 @@ namespace TarkovDBEditor.Services
 
                     await CreateQuestTraderRequirementsTableIfNotExistsAsync(connection, transaction);
                     await RegisterQuestTraderRequirementsSchemaAsync(connection, transaction);
-                    var traderReqStats = await UpsertQuestTraderRequirementsAsync(connection, transaction, questTraderRequirements, logBuilder);
+                    var traderReqStats = await UpsertQuestTraderRequirementsAsync(connection, transaction, questTraderRequirements, logBuilder, progress);
 
                     logBuilder?.AppendLine($"Inserted: {traderReqStats.Inserted}, Updated: {traderReqStats.Updated}, Deleted: {traderReqStats.Deleted}");
                 }
+                else
+                {
+                    await ReportSkippedTableAsync("QuestTraderRequirements");
+                }
 
-                // QuestObjectives 테이블 업데이트
-                if (questObjectives != null && questObjectives.Count > 0)
+                // QuestObjectives 테이블 업데이트 (빈 리스트는 건너뜀, ReportSkippedTableAsync 참고)
+                if (questObjectives is { Count: > 0 })
                 {
                     progress?.Invoke($"Updating QuestObjectives table ({questObjectives.Count} objectives)...");
                     logBuilder?.AppendLine();
@@ -2078,15 +3002,19 @@ namespace TarkovDBEditor.Services
 
                     await CreateQuestObjectivesTableIfNotExistsAsync(connection, transaction);
                     await RegisterQuestObjectivesSchemaAsync(connection, transaction);
-                    var objStats = await UpsertQuestObjectivesAsync(connection, transaction, questObjectives, logBuilder);
+                    var objStats = await UpsertQuestObjectivesAsync(connection, transaction, questObjectives, logBuilder, progress);
 
                     logBuilder?.AppendLine($"Inserted: {objStats.Inserted}, Updated: {objStats.Updated}, Deleted: {objStats.Deleted}");
+                }
+                else
+                {
+                    await ReportSkippedTableAsync("QuestObjectives");
                 }
 
                 // OptionalQuests 테이블 업데이트.
                 // Skips an empty list for the same reason the other child tables do: a parse
                 // that returned nothing is a parse failure far more often than it is a game
-                // that has no alternative quests left.
+                // that has no alternative quests left. The skip is reported, not silent.
                 if (optionalQuests is { Count: > 0 })
                 {
                     progress?.Invoke($"Updating OptionalQuests table ({optionalQuests.Count} optional quests)...");
@@ -2095,9 +3023,13 @@ namespace TarkovDBEditor.Services
 
                     await CreateOptionalQuestsTableIfNotExistsAsync(connection, transaction);
                     await RegisterOptionalQuestsSchemaAsync(connection, transaction);
-                    var optStats = await UpsertOptionalQuestsAsync(connection, transaction, optionalQuests, logBuilder);
+                    var optStats = await UpsertOptionalQuestsAsync(connection, transaction, optionalQuests, logBuilder, progress);
 
                     logBuilder?.AppendLine($"Inserted: {optStats.Inserted}, Updated: {optStats.Updated}, Deleted: {optStats.Deleted}");
+                }
+                else
+                {
+                    await ReportSkippedTableAsync("OptionalQuests");
                 }
 
                 // QuestRequiredItems 테이블 업데이트 (빈 리스트는 건너뜀, OptionalQuests와 동일한 이유)
@@ -2109,9 +3041,13 @@ namespace TarkovDBEditor.Services
 
                     await CreateQuestRequiredItemsTableIfNotExistsAsync(connection, transaction);
                     await RegisterQuestRequiredItemsSchemaAsync(connection, transaction);
-                    var itemStats = await UpsertQuestRequiredItemsAsync(connection, transaction, requiredItems, logBuilder);
+                    var itemStats = await UpsertQuestRequiredItemsAsync(connection, transaction, requiredItems, logBuilder, progress);
 
                     logBuilder?.AppendLine($"Inserted: {itemStats.Inserted}, Updated: {itemStats.Updated}, Deleted: {itemStats.Deleted}");
+                }
+                else
+                {
+                    await ReportSkippedTableAsync("QuestRequiredItems");
                 }
 
                 transaction.Commit();
@@ -2122,6 +3058,28 @@ namespace TarkovDBEditor.Services
                 transaction.Rollback();
                 throw;
             }
+        }
+
+        /// <summary>
+        /// How many rows a table holds, or 0 when it does not exist yet. Only ever called with a
+        /// table name written in this file.
+        /// </summary>
+        private static async Task<long> CountRowsAsync(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string table,
+            CancellationToken cancellationToken)
+        {
+            using (var exists = new SqliteCommand(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = @name", connection, transaction))
+            {
+                exists.Parameters.AddWithValue("@name", table);
+                if (Convert.ToInt64(await exists.ExecuteScalarAsync(cancellationToken)) == 0)
+                    return 0;
+            }
+
+            using var count = new SqliteCommand($"SELECT COUNT(*) FROM \"{table}\"", connection, transaction);
+            return Convert.ToInt64(await count.ExecuteScalarAsync(cancellationToken));
         }
 
         private async Task EnsureSchemaMetaTableAsync(SqliteConnection connection, SqliteTransaction transaction)
@@ -2380,6 +3338,7 @@ namespace TarkovDBEditor.Services
                     QuestId TEXT NOT NULL,
                     RequiredQuestId TEXT NOT NULL,
                     RequirementType TEXT NOT NULL DEFAULT 'Complete',
+                    AltRequirementType TEXT,
                     DelayMinutes INTEGER,
                     GroupId INTEGER NOT NULL DEFAULT 0,
                     ContentHash TEXT,
@@ -2392,6 +3351,24 @@ namespace TarkovDBEditor.Services
 
             using var cmd = new SqliteCommand(sql, connection, transaction);
             await cmd.ExecuteNonQueryAsync();
+
+            // CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, and every
+            // database this pipeline touches already has one, so a new column arrives through a
+            // PRAGMA-guarded ALTER (the same pattern Quests.NormalizedName uses).
+            var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var checkCmd = new SqliteCommand("PRAGMA table_info(QuestRequirements)", connection, transaction))
+            using (var reader = await checkCmd.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                    existingColumns.Add(reader.GetString(1));
+            }
+
+            if (!existingColumns.Contains("AltRequirementType"))
+            {
+                using var alterCmd = new SqliteCommand(
+                    "ALTER TABLE QuestRequirements ADD COLUMN AltRequirementType TEXT", connection, transaction);
+                await alterCmd.ExecuteNonQueryAsync();
+            }
 
             // 인덱스 생성
             var indexSql = @"
@@ -2439,12 +3416,13 @@ namespace TarkovDBEditor.Services
                 new() { Name = "QuestId", DisplayName = "Quest ID", Type = ColumnType.Text, IsRequired = true, ForeignKeyTable = "Quests", ForeignKeyColumn = "Id", SortOrder = 1 },
                 new() { Name = "RequiredQuestId", DisplayName = "Required Quest ID", Type = ColumnType.Text, IsRequired = true, ForeignKeyTable = "Quests", ForeignKeyColumn = "Id", SortOrder = 2 },
                 new() { Name = "RequirementType", DisplayName = "Type", Type = ColumnType.Text, IsRequired = true, SortOrder = 3 },
-                new() { Name = "DelayMinutes", DisplayName = "Delay (min)", Type = ColumnType.Integer, SortOrder = 4 },
-                new() { Name = "GroupId", DisplayName = "Group ID", Type = ColumnType.Integer, IsRequired = true, SortOrder = 5 },
-                new() { Name = "ContentHash", DisplayName = "Content Hash", Type = ColumnType.Text, SortOrder = 6 },
-                new() { Name = "IsApproved", DisplayName = "Approved", Type = ColumnType.Boolean, IsRequired = true, SortOrder = 7 },
-                new() { Name = "ApprovedAt", DisplayName = "Approved At", Type = ColumnType.DateTime, SortOrder = 8 },
-                new() { Name = "UpdatedAt", DisplayName = "Updated At", Type = ColumnType.DateTime, SortOrder = 9 }
+                new() { Name = "AltRequirementType", DisplayName = "Alt Type", Type = ColumnType.Text, SortOrder = 4 },
+                new() { Name = "DelayMinutes", DisplayName = "Delay (min)", Type = ColumnType.Integer, SortOrder = 5 },
+                new() { Name = "GroupId", DisplayName = "Group ID", Type = ColumnType.Integer, IsRequired = true, SortOrder = 6 },
+                new() { Name = "ContentHash", DisplayName = "Content Hash", Type = ColumnType.Text, SortOrder = 7 },
+                new() { Name = "IsApproved", DisplayName = "Approved", Type = ColumnType.Boolean, IsRequired = true, SortOrder = 8 },
+                new() { Name = "ApprovedAt", DisplayName = "Approved At", Type = ColumnType.DateTime, SortOrder = 9 },
+                new() { Name = "UpdatedAt", DisplayName = "Updated At", Type = ColumnType.DateTime, SortOrder = 10 }
             };
 
             var schemaJson = JsonSerializer.Serialize(columns);
@@ -2733,7 +3711,7 @@ namespace TarkovDBEditor.Services
                 await CreateTradersTableIfNotExistsAsync(connection, transaction);
                 await RegisterTradersSchemaAsync(connection, transaction);
 
-                var stats = await UpsertTradersAsync(connection, transaction, dbTraders, wikiCacheService, null);
+                var stats = await UpsertTradersAsync(connection, transaction, dbTraders, wikiCacheService, null, progress);
 
                 transaction.Commit();
 
@@ -2792,7 +3770,8 @@ namespace TarkovDBEditor.Services
             SqliteTransaction transaction,
             List<DbTrader> traders,
             WikiCacheService? wikiCacheService,
-            StringBuilder? logBuilder)
+            StringBuilder? logBuilder,
+            Action<string>? progress)
         {
             var stats = new UpsertStats();
             var now = DateTime.UtcNow.ToString("o");
@@ -2814,6 +3793,9 @@ namespace TarkovDBEditor.Services
 
             // DB에 있지만 새 목록에 없는 Trader 삭제
             var idsToDelete = existingIds.Except(newTraderIds).ToList();
+            // Traders.Id is upstream's own trader id, so the row key already IS the natural
+            // identity: a trader that keeps its id is the same trader whatever it is called.
+            RefreshGuards.AssertDeleteBudgetHeld("Traders", existingIds, newTraderIds, idsToDelete.Count, progress);
             if (idsToDelete.Count > 0)
             {
                 foreach (var idToDelete in idsToDelete)
@@ -2878,62 +3860,143 @@ namespace TarkovDBEditor.Services
 
         #endregion
 
-        private async Task<UpsertStats> UpsertQuestRequiredItemsAsync(
+        #region The shared hash-keyed upsert
+
+        /// <summary>
+        /// The per-table half of <see cref="UpsertHashedRowsAsync"/>: everything that differs
+        /// between the four hash-keyed child tables, and nothing that does not.
+        /// </summary>
+        private sealed class HashedTable<TRow> where TRow : IHashedRow
+        {
+            /// <summary>
+            /// The SQL table name, which is also the name a delete-budget refusal reports.
+            /// </summary>
+            public required string Name { get; init; }
+
+            /// <summary>
+            /// What the run's log calls this table. Not always <see cref="Name"/>: the
+            /// prerequisite and required-item tables have always logged as "Requirements" and
+            /// "RequiredItems", and the log is read by hand against previous runs.
+            /// </summary>
+            public required string LogLabel { get; init; }
+
+            /// <summary>
+            /// The columns holding what each row is ABOUT, appended to the SELECT after
+            /// ContentHash so <see cref="NaturalIdOf"/> reads them from ordinal 4 on. They are
+            /// the columns the row's own <see cref="IHashedRow.NaturalId"/> projects, read back
+            /// off the table: the delete budget compares the two sides, so they have to be the
+            /// same projection or a re-key would read as a deletion.
+            /// </summary>
+            public required string IdentityColumns { get; init; }
+
+            /// <summary>
+            /// Reads <see cref="IdentityColumns"/> back as the same string the row's
+            /// <see cref="IHashedRow.NaturalId"/> builds.
+            /// </summary>
+            public required Func<DbDataReader, string> NaturalIdOf { get; init; }
+
+            /// <summary>The INSERT for a row the table does not hold yet.</summary>
+            public required string InsertSql { get; init; }
+
+            /// <summary>The UPDATE for a row it does, keyed by Id.</summary>
+            public required string UpdateSql { get; init; }
+
+            /// <summary>
+            /// Binds every parameter both statements name, in the order (command, row, content
+            /// hash, approval, approval time, write time).
+            /// </summary>
+            public required Action<SqliteCommand, TRow, string, bool, string?, string> Bind { get; init; }
+        }
+
+        /// <summary>
+        /// Reads one identity column, a NULL reading as the empty string exactly as every
+        /// hand-written copy of this read did.
+        /// </summary>
+        private static string IdentityText(DbDataReader reader, int ordinal) =>
+            reader.IsDBNull(ordinal) ? "" : reader.GetString(ordinal);
+
+        /// <summary>
+        /// The upsert every hash-keyed child table shares: give each row its key, delete the
+        /// rows the new list no longer produces (within the delete budget), then write the
+        /// rest, keeping a reviewer's approval on a row whose content hash did not move and
+        /// withdrawing it, out loud, on a row whose did.
+        /// <para>
+        /// One copy because four hand-written ones had already drifted: the loyalty-gate copy
+        /// had lost the <c>[CHANGED]</c> line, which is the difference between a reviewer who
+        /// knows which approvals a run took away and one who has to find out by reading the
+        /// whole table again.
+        /// </para>
+        /// <para>
+        /// <see cref="UpsertQuestObjectivesAsync"/> is deliberately not one of them: it also
+        /// carries LocationPoints across an update, the one column no refresh can regenerate
+        /// because no source it reads holds it. Bending this method around a fifth
+        /// hand-entered column would bury that rule rather than share it.
+        /// </para>
+        /// </summary>
+        private async Task<UpsertStats> UpsertHashedRowsAsync<TRow>(
             SqliteConnection connection,
             SqliteTransaction transaction,
-            List<DbQuestRequiredItem> requiredItems,
-            StringBuilder? logBuilder)
+            HashedTable<TRow> table,
+            List<TRow> rows,
+            StringBuilder? logBuilder,
+            Action<string>? progress)
+            where TRow : IHashedRow
         {
             var stats = new UpsertStats();
             var now = DateTime.UtcNow.ToString("o");
 
-            // 기존 데이터 로드 (Id 기준으로 승인 상태 유지)
-            var existingData = new Dictionary<string, (bool IsApproved, string? ApprovedAt, string? ContentHash)>();
-            var existingIds = new HashSet<string>();
-            var selectSql = "SELECT Id, IsApproved, ApprovedAt, ContentHash FROM QuestRequiredItems";
+            // 기존 데이터 로드 (Id 기준으로 승인 상태 유지).
+            // The identity columns come back beside the key because the delete budget is
+            // measured over the thing a row is about, not over the key computed from it.
+            var existingData =
+                new Dictionary<string, (bool IsApproved, string? ApprovedAt, string? ContentHash)>(StringComparer.Ordinal);
+            var existingIdentities = new List<string>();
+            var selectSql =
+                $"SELECT Id, IsApproved, ApprovedAt, ContentHash, {table.IdentityColumns} FROM {table.Name}";
             using (var selectCmd = new SqliteCommand(selectSql, connection, transaction))
             using (var reader = await selectCmd.ExecuteReaderAsync())
             {
                 while (await reader.ReadAsync())
                 {
-                    var id = reader.GetString(0);
-                    var isApproved = !reader.IsDBNull(1) && reader.GetInt64(1) != 0;
-                    var approvedAt = reader.IsDBNull(2) ? null : reader.GetString(2);
-                    var contentHash = reader.IsDBNull(3) ? null : reader.GetString(3);
-                    existingIds.Add(id);
-                    existingData[id] = (isApproved, approvedAt, contentHash);
+                    existingData[reader.GetString(0)] = (
+                        !reader.IsDBNull(1) && reader.GetInt64(1) != 0,
+                        reader.IsDBNull(2) ? null : reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetString(3));
+                    existingIdentities.Add(table.NaturalIdOf(reader));
                 }
             }
 
-            // 새로 가져온 required item ID 집합
-            var newIds = new HashSet<string>();
-            foreach (var item in requiredItems)
+            // 새로 가져온 행의 ID 집합
+            var newIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var row in rows)
             {
-                item.Id = item.ComputeId();
-                newIds.Add(item.Id);
+                row.Id = row.ComputeId();
+                newIds.Add(row.Id);
             }
 
             // DB에 있지만 새 목록에 없는 항목 삭제
-            var idsToDelete = existingIds.Except(newIds).ToList();
+            var idsToDelete = existingData.Keys.Where(id => !newIds.Contains(id)).ToList();
+            RefreshGuards.AssertDeleteBudgetHeld(
+                table.Name, existingIdentities, rows.Select(r => r.NaturalId()), idsToDelete.Count, progress);
             foreach (var idToDelete in idsToDelete)
             {
-                using var deleteCmd = new SqliteCommand("DELETE FROM QuestRequiredItems WHERE Id = @Id", connection, transaction);
+                using var deleteCmd = new SqliteCommand(
+                    $"DELETE FROM {table.Name} WHERE Id = @Id", connection, transaction);
                 deleteCmd.Parameters.AddWithValue("@Id", idToDelete);
                 await deleteCmd.ExecuteNonQueryAsync();
                 stats.Deleted++;
             }
 
             // Upsert (기존 승인 상태 유지, 변경 시 승인 해제)
-            foreach (var item in requiredItems)
+            foreach (var row in rows)
             {
-                var newHash = item.ComputeContentHash();
-                bool exists = existingIds.Contains(item.Id);
+                var newHash = row.ComputeContentHash();
+                var exists = existingData.TryGetValue(row.Id, out var existing);
 
-                bool isApproved = false;
+                var isApproved = false;
                 string? approvedAt = null;
 
-                // 기존 승인 상태 확인
-                if (exists && existingData.TryGetValue(item.Id, out var existing))
+                if (exists)
                 {
                     // 해시가 같으면 승인 상태 유지, 다르면 승인 해제
                     if (existing.ContentHash == newHash && existing.IsApproved)
@@ -2944,43 +4007,61 @@ namespace TarkovDBEditor.Services
                     }
                     else if (existing.IsApproved)
                     {
-                        logBuilder?.AppendLine($"  [CHANGED] {item.Id} - approval reset due to content change");
+                        // 승인되어 있었지만 내용이 변경됨. A reviewer reads this line to find what
+                        // they have to look at again.
+                        logBuilder?.AppendLine($"  [CHANGED] {row.Id} - approval reset due to content change");
                     }
                 }
 
-                if (!exists)
-                {
-                    // INSERT
-                    var insertSql = @"
-                        INSERT INTO QuestRequiredItems (Id, QuestId, ItemId, ItemName, Count, RequiresFIR, RequirementType, SortOrder, DogtagMinLevel, DogtagFaction, ContentHash, IsApproved, ApprovedAt, UpdatedAt)
-                        VALUES (@Id, @QuestId, @ItemId, @ItemName, @Count, @RequiresFIR, @RequirementType, @SortOrder, @DogtagMinLevel, @DogtagFaction, @ContentHash, @IsApproved, @ApprovedAt, @UpdatedAt)";
+                using var cmd = new SqliteCommand(
+                    exists ? table.UpdateSql : table.InsertSql, connection, transaction);
+                table.Bind(cmd, row, newHash, isApproved, approvedAt, now);
+                await cmd.ExecuteNonQueryAsync();
 
-                    using var insertCmd = new SqliteCommand(insertSql, connection, transaction);
-                    AddRequiredItemParameters(insertCmd, item, newHash, isApproved, approvedAt, now);
-                    await insertCmd.ExecuteNonQueryAsync();
-                    stats.Inserted++;
-                }
-                else
+                if (exists) stats.Updated++; else stats.Inserted++;
+            }
+
+            logBuilder?.AppendLine(
+                $"  {table.LogLabel}: {stats.Inserted} inserted, {stats.Updated} updated, "
+                + $"{stats.Deleted} deleted, {stats.Unchanged} approvals preserved");
+            return stats;
+        }
+
+        #endregion
+
+        private Task<UpsertStats> UpsertQuestRequiredItemsAsync(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            List<DbQuestRequiredItem> requiredItems,
+            StringBuilder? logBuilder,
+            Action<string>? progress) =>
+            UpsertHashedRowsAsync(
+                connection,
+                transaction,
+                new HashedTable<DbQuestRequiredItem>
                 {
-                    // UPDATE
-                    var updateSql = @"
+                    Name = "QuestRequiredItems",
+                    LogLabel = "RequiredItems",
+                    // A quest, an item and what the quest wants done with it. SortOrder and the
+                    // FIR flag are in the key but not here: see DbQuestRequiredItem.NaturalId.
+                    IdentityColumns = "QuestId, ItemName, RequirementType",
+                    NaturalIdOf = reader => RowHash.Natural(
+                        IdentityText(reader, 4), IdentityText(reader, 5), IdentityText(reader, 6)),
+                    InsertSql = @"
+                        INSERT INTO QuestRequiredItems (Id, QuestId, ItemId, ItemName, Count, RequiresFIR, RequirementType, SortOrder, DogtagMinLevel, DogtagFaction, ContentHash, IsApproved, ApprovedAt, UpdatedAt)
+                        VALUES (@Id, @QuestId, @ItemId, @ItemName, @Count, @RequiresFIR, @RequirementType, @SortOrder, @DogtagMinLevel, @DogtagFaction, @ContentHash, @IsApproved, @ApprovedAt, @UpdatedAt)",
+                    UpdateSql = @"
                         UPDATE QuestRequiredItems SET
                             QuestId = @QuestId, ItemId = @ItemId, ItemName = @ItemName, Count = @Count,
                             RequiresFIR = @RequiresFIR, RequirementType = @RequirementType, SortOrder = @SortOrder,
                             DogtagMinLevel = @DogtagMinLevel, DogtagFaction = @DogtagFaction, ContentHash = @ContentHash,
                             IsApproved = @IsApproved, ApprovedAt = @ApprovedAt, UpdatedAt = @UpdatedAt
-                        WHERE Id = @Id";
-
-                    using var updateCmd = new SqliteCommand(updateSql, connection, transaction);
-                    AddRequiredItemParameters(updateCmd, item, newHash, isApproved, approvedAt, now);
-                    await updateCmd.ExecuteNonQueryAsync();
-                    stats.Updated++;
-                }
-            }
-
-            logBuilder?.AppendLine($"  RequiredItems: {stats.Inserted} inserted, {stats.Updated} updated, {stats.Deleted} deleted, {stats.Unchanged} approvals preserved");
-            return stats;
-        }
+                        WHERE Id = @Id",
+                    Bind = AddRequiredItemParameters,
+                },
+                requiredItems,
+                logBuilder,
+                progress);
 
         private void AddRequiredItemParameters(SqliteCommand cmd, DbQuestRequiredItem item, string contentHash,
             bool isApproved, string? approvedAt, string now)
@@ -3001,125 +4082,57 @@ namespace TarkovDBEditor.Services
             cmd.Parameters.AddWithValue("@UpdatedAt", now);
         }
 
-        private async Task<UpsertStats> UpsertOptionalQuestsAsync(
+        private Task<UpsertStats> UpsertOptionalQuestsAsync(
             SqliteConnection connection,
             SqliteTransaction transaction,
             List<DbOptionalQuest> optionalQuests,
-            StringBuilder? logBuilder)
-        {
-            var stats = new UpsertStats();
-            var now = DateTime.UtcNow.ToString("o");
-
-            // 기존 데이터 로드 (Id 기준으로 승인 상태 유지)
-            var existingData = new Dictionary<string, (bool IsApproved, string? ApprovedAt, string? ContentHash)>();
-            var existingIds = new HashSet<string>();
-            var selectSql = "SELECT Id, IsApproved, ApprovedAt, ContentHash FROM OptionalQuests";
-            using (var selectCmd = new SqliteCommand(selectSql, connection, transaction))
-            using (var reader = await selectCmd.ExecuteReaderAsync())
-            {
-                while (await reader.ReadAsync())
+            StringBuilder? logBuilder,
+            Action<string>? progress) =>
+            UpsertHashedRowsAsync(
+                connection,
+                transaction,
+                new HashedTable<DbOptionalQuest>
                 {
-                    var id = reader.GetString(0);
-                    var isApproved = !reader.IsDBNull(1) && reader.GetInt64(1) != 0;
-                    var approvedAt = reader.IsDBNull(2) ? null : reader.GetString(2);
-                    var contentHash = reader.IsDBNull(3) ? null : reader.GetString(3);
-                    existingIds.Add(id);
-                    existingData[id] = (isApproved, approvedAt, contentHash);
-                }
-            }
-
-            // 새로 가져온 optional quest ID 집합
-            var newIds = new HashSet<string>();
-            foreach (var opt in optionalQuests)
-            {
-                opt.Id = opt.ComputeId();
-                newIds.Add(opt.Id);
-            }
-
-            // DB에 있지만 새 목록에 없는 항목 삭제
-            var idsToDelete = existingIds.Except(newIds).ToList();
-            foreach (var idToDelete in idsToDelete)
-            {
-                using var deleteCmd = new SqliteCommand("DELETE FROM OptionalQuests WHERE Id = @Id", connection, transaction);
-                deleteCmd.Parameters.AddWithValue("@Id", idToDelete);
-                await deleteCmd.ExecuteNonQueryAsync();
-                stats.Deleted++;
-            }
-
-            // Upsert (기존 승인 상태 유지, 변경 시 승인 해제)
-            foreach (var opt in optionalQuests)
-            {
-                var newHash = opt.ComputeContentHash();
-                bool exists = existingIds.Contains(opt.Id);
-
-                bool isApproved = false;
-                string? approvedAt = null;
-
-                // 기존 승인 상태 확인
-                if (exists && existingData.TryGetValue(opt.Id, out var existing))
-                {
-                    // 해시가 같으면 승인 상태 유지, 다르면 승인 해제
-                    if (existing.ContentHash == newHash && existing.IsApproved)
-                    {
-                        isApproved = true;
-                        approvedAt = existing.ApprovedAt;
-                        stats.Unchanged++;
-                    }
-                    else if (existing.IsApproved)
-                    {
-                        logBuilder?.AppendLine($"  [CHANGED] {opt.Id} - approval reset due to content change");
-                    }
-                }
-
-                if (!exists)
-                {
-                    // INSERT
-                    var insertSql = @"
+                    Name = "OptionalQuests",
+                    LogLabel = "OptionalQuests",
+                    // A quest and the quest that can be done instead. The key hashes the same
+                    // pair, so an alternative can never change without becoming a different
+                    // row: the [CHANGED] branch is unreachable on this table alone, and the
+                    // approval it preserves is the only half that runs.
+                    IdentityColumns = "QuestId, AlternativeQuestId",
+                    NaturalIdOf = reader => RowHash.Natural(IdentityText(reader, 4), IdentityText(reader, 5)),
+                    InsertSql = @"
                         INSERT INTO OptionalQuests (Id, QuestId, AlternativeQuestId, ContentHash, IsApproved, ApprovedAt, UpdatedAt)
-                        VALUES (@Id, @QuestId, @AlternativeQuestId, @ContentHash, @IsApproved, @ApprovedAt, @UpdatedAt)";
-
-                    using var insertCmd = new SqliteCommand(insertSql, connection, transaction);
-                    insertCmd.Parameters.AddWithValue("@Id", opt.Id);
-                    insertCmd.Parameters.AddWithValue("@QuestId", opt.QuestId);
-                    insertCmd.Parameters.AddWithValue("@AlternativeQuestId", opt.AlternativeQuestId);
-                    insertCmd.Parameters.AddWithValue("@ContentHash", newHash);
-                    insertCmd.Parameters.AddWithValue("@IsApproved", isApproved ? 1 : 0);
-                    insertCmd.Parameters.AddWithValue("@ApprovedAt", (object?)approvedAt ?? DBNull.Value);
-                    insertCmd.Parameters.AddWithValue("@UpdatedAt", now);
-                    await insertCmd.ExecuteNonQueryAsync();
-                    stats.Inserted++;
-                }
-                else
-                {
-                    // UPDATE
-                    var updateSql = @"
+                        VALUES (@Id, @QuestId, @AlternativeQuestId, @ContentHash, @IsApproved, @ApprovedAt, @UpdatedAt)",
+                    UpdateSql = @"
                         UPDATE OptionalQuests SET
                             QuestId = @QuestId, AlternativeQuestId = @AlternativeQuestId, ContentHash = @ContentHash,
                             IsApproved = @IsApproved, ApprovedAt = @ApprovedAt, UpdatedAt = @UpdatedAt
-                        WHERE Id = @Id";
+                        WHERE Id = @Id",
+                    Bind = AddOptionalQuestParameters,
+                },
+                optionalQuests,
+                logBuilder,
+                progress);
 
-                    using var updateCmd = new SqliteCommand(updateSql, connection, transaction);
-                    updateCmd.Parameters.AddWithValue("@Id", opt.Id);
-                    updateCmd.Parameters.AddWithValue("@QuestId", opt.QuestId);
-                    updateCmd.Parameters.AddWithValue("@AlternativeQuestId", opt.AlternativeQuestId);
-                    updateCmd.Parameters.AddWithValue("@ContentHash", newHash);
-                    updateCmd.Parameters.AddWithValue("@IsApproved", isApproved ? 1 : 0);
-                    updateCmd.Parameters.AddWithValue("@ApprovedAt", (object?)approvedAt ?? DBNull.Value);
-                    updateCmd.Parameters.AddWithValue("@UpdatedAt", now);
-                    await updateCmd.ExecuteNonQueryAsync();
-                    stats.Updated++;
-                }
-            }
-
-            logBuilder?.AppendLine($"  OptionalQuests: {stats.Inserted} inserted, {stats.Updated} updated, {stats.Deleted} deleted, {stats.Unchanged} approvals preserved");
-            return stats;
+        private void AddOptionalQuestParameters(SqliteCommand cmd, DbOptionalQuest opt, string contentHash,
+            bool isApproved, string? approvedAt, string now)
+        {
+            cmd.Parameters.AddWithValue("@Id", opt.Id);
+            cmd.Parameters.AddWithValue("@QuestId", opt.QuestId);
+            cmd.Parameters.AddWithValue("@AlternativeQuestId", opt.AlternativeQuestId);
+            cmd.Parameters.AddWithValue("@ContentHash", contentHash);
+            cmd.Parameters.AddWithValue("@IsApproved", isApproved ? 1 : 0);
+            cmd.Parameters.AddWithValue("@ApprovedAt", (object?)approvedAt ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@UpdatedAt", now);
         }
 
         private async Task<UpsertStats> UpsertQuestObjectivesAsync(
             SqliteConnection connection,
             SqliteTransaction transaction,
             List<DbQuestObjective> objectives,
-            StringBuilder? logBuilder)
+            StringBuilder? logBuilder,
+            Action<string>? progress)
         {
             var stats = new UpsertStats();
             var now = DateTime.UtcNow.ToString("o");
@@ -3127,7 +4140,9 @@ namespace TarkovDBEditor.Services
             // 기존 데이터 로드 (Id 기준으로 승인 상태 및 좌표 유지)
             var existingData = new Dictionary<string, (bool IsApproved, string? ApprovedAt, string? ContentHash, string? LocationPoints)>();
             var existingIds = new HashSet<string>();
-            var selectSql = "SELECT Id, IsApproved, ApprovedAt, ContentHash, LocationPoints FROM QuestObjectives";
+            var existingObjectives = new List<string>();
+            var selectSql =
+                "SELECT Id, IsApproved, ApprovedAt, ContentHash, LocationPoints, QuestId, SortOrder FROM QuestObjectives";
             using (var selectCmd = new SqliteCommand(selectSql, connection, transaction))
             using (var reader = await selectCmd.ExecuteReaderAsync())
             {
@@ -3140,6 +4155,9 @@ namespace TarkovDBEditor.Services
                     var locationPoints = reader.IsDBNull(4) ? null : reader.GetString(4);
                     existingIds.Add(id);
                     existingData[id] = (isApproved, approvedAt, contentHash, locationPoints);
+                    existingObjectives.Add(RowHash.Natural(
+                        reader.IsDBNull(5) ? "" : reader.GetString(5),
+                        reader.IsDBNull(6) ? 0 : reader.GetInt32(6)));
                 }
             }
 
@@ -3153,6 +4171,9 @@ namespace TarkovDBEditor.Services
 
             // DB에 있지만 새 목록에 없는 항목 삭제
             var idsToDelete = existingIds.Except(newIds).ToList();
+            RefreshGuards.AssertDeleteBudgetHeld(
+                "QuestObjectives", existingObjectives, objectives.Select(o => o.NaturalId()),
+                idsToDelete.Count, progress);
             foreach (var idToDelete in idsToDelete)
             {
                 using var deleteCmd = new SqliteCommand("DELETE FROM QuestObjectives WHERE Id = @Id", connection, transaction);
@@ -3262,7 +4283,8 @@ namespace TarkovDBEditor.Services
             SqliteConnection connection,
             SqliteTransaction transaction,
             List<DbItem> items,
-            StringBuilder? logBuilder)
+            StringBuilder? logBuilder,
+            Action<string>? progress)
         {
             var stats = new UpsertStats();
             var now = DateTime.UtcNow.ToString("o");
@@ -3284,6 +4306,10 @@ namespace TarkovDBEditor.Services
 
             // DB에 있지만 새 목록에 없는 아이템 삭제
             var idsToDelete = existingIds.Except(newItemIds).ToList();
+            // The row-id fallback. Items.Id is base64 of the item's wiki page URL and nothing
+            // is computed over it, so there is no key scheme here to migrate; the page an item
+            // lives on is the only identity this table has.
+            RefreshGuards.AssertDeleteBudgetHeld("Items", existingIds, newItemIds, idsToDelete.Count, progress);
             if (idsToDelete.Count > 0)
             {
                 foreach (var idToDelete in idsToDelete)
@@ -3358,7 +4384,8 @@ namespace TarkovDBEditor.Services
             SqliteConnection connection,
             SqliteTransaction transaction,
             List<DbQuest> quests,
-            StringBuilder? logBuilder)
+            StringBuilder? logBuilder,
+            Action<string>? progress)
         {
             var stats = new UpsertStats();
             var now = DateTime.UtcNow.ToString("o");
@@ -3380,6 +4407,13 @@ namespace TarkovDBEditor.Services
 
             // DB에 있지만 새 목록에 없는 퀘스트 삭제
             var idsToDelete = existingIds.Except(newQuestIds).ToList();
+            // The row-id fallback, and the deliberate one. A quest's natural identity is its
+            // external game id, but the published database carries none on any of its 488 rows
+            // (that is what BsgIdBackfillService repairs), so measuring on BsgId would read the
+            // whole table as deleted on exactly the run this budget must not refuse. The row key
+            // is what QuestIdentityResolver carries across a rename and is the identity in
+            // practice; AssertMatchRateHeld guards the same loss ten times tighter, at 5%.
+            RefreshGuards.AssertDeleteBudgetHeld("Quests", existingIds, newQuestIds, idsToDelete.Count, progress);
             if (idsToDelete.Count > 0)
             {
                 foreach (var idToDelete in idsToDelete)
@@ -3450,203 +4484,100 @@ namespace TarkovDBEditor.Services
             cmd.Parameters.AddWithValue("@NormalizedName", quest.NormalizedName);
             cmd.Parameters.AddWithValue("@UpdatedAt", now);
         }
-
         /// <summary>
         /// Table-global diff over the loyalty gates, the same shape as the other child tables:
         /// rows absent from the new set are deleted, and an approval survives an unchanged
         /// content hash.
         /// </summary>
-        private async Task<UpsertStats> UpsertQuestTraderRequirementsAsync(
+        private Task<UpsertStats> UpsertQuestTraderRequirementsAsync(
             SqliteConnection connection,
             SqliteTransaction transaction,
             List<DbQuestTraderRequirement> requirements,
-            StringBuilder? logBuilder)
-        {
-            var stats = new UpsertStats();
-            var now = DateTime.UtcNow.ToString("o");
-
-            var existingData = new Dictionary<string, (bool IsApproved, string? ApprovedAt, string? ContentHash)>();
-            using (var selectCmd = new SqliteCommand(
-                "SELECT Id, IsApproved, ApprovedAt, ContentHash FROM QuestTraderRequirements", connection, transaction))
-            using (var reader = await selectCmd.ExecuteReaderAsync())
-            {
-                while (await reader.ReadAsync())
+            StringBuilder? logBuilder,
+            Action<string>? progress) =>
+            UpsertHashedRowsAsync(
+                connection,
+                transaction,
+                new HashedTable<DbQuestTraderRequirement>
                 {
-                    existingData[reader.GetString(0)] = (
-                        !reader.IsDBNull(1) && reader.GetInt64(1) != 0,
-                        reader.IsDBNull(2) ? null : reader.GetString(2),
-                        reader.IsDBNull(3) ? null : reader.GetString(3));
-                }
-            }
-
-            var newIds = new HashSet<string>();
-            foreach (var req in requirements)
-            {
-                req.Id = req.ComputeId();
-                newIds.Add(req.Id);
-            }
-
-            foreach (var idToDelete in existingData.Keys.Where(id => !newIds.Contains(id)).ToList())
-            {
-                using var deleteCmd = new SqliteCommand(
-                    "DELETE FROM QuestTraderRequirements WHERE Id = @Id", connection, transaction);
-                deleteCmd.Parameters.AddWithValue("@Id", idToDelete);
-                await deleteCmd.ExecuteNonQueryAsync();
-                stats.Deleted++;
-            }
-
-            foreach (var req in requirements)
-            {
-                var newHash = req.ComputeContentHash();
-                var exists = existingData.TryGetValue(req.Id, out var existing);
-
-                var isApproved = false;
-                string? approvedAt = null;
-                if (exists && existing.ContentHash == newHash && existing.IsApproved)
-                {
-                    isApproved = true;
-                    approvedAt = existing.ApprovedAt;
-                    stats.Unchanged++;
-                }
-
-                var sql = exists
-                    ? @"UPDATE QuestTraderRequirements SET
+                    Name = "QuestTraderRequirements",
+                    LogLabel = "QuestTraderRequirements",
+                    // Which gate this is: a quest and a trader. See
+                    // DbQuestTraderRequirement.NaturalId.
+                    IdentityColumns = "QuestId, TraderId",
+                    NaturalIdOf = reader => RowHash.Natural(IdentityText(reader, 4), IdentityText(reader, 5)),
+                    InsertSql = @"
+                        INSERT INTO QuestTraderRequirements
+                            (Id, QuestId, TraderId, TraderName, RequiredLevel, ContentHash, IsApproved, ApprovedAt, UpdatedAt)
+                        VALUES (@Id, @QuestId, @TraderId, @TraderName, @RequiredLevel, @ContentHash, @IsApproved, @ApprovedAt, @UpdatedAt)",
+                    UpdateSql = @"
+                        UPDATE QuestTraderRequirements SET
                             QuestId = @QuestId, TraderId = @TraderId, TraderName = @TraderName,
                             RequiredLevel = @RequiredLevel, ContentHash = @ContentHash,
                             IsApproved = @IsApproved, ApprovedAt = @ApprovedAt, UpdatedAt = @UpdatedAt
-                        WHERE Id = @Id"
-                    : @"INSERT INTO QuestTraderRequirements
-                            (Id, QuestId, TraderId, TraderName, RequiredLevel, ContentHash, IsApproved, ApprovedAt, UpdatedAt)
-                        VALUES (@Id, @QuestId, @TraderId, @TraderName, @RequiredLevel, @ContentHash, @IsApproved, @ApprovedAt, @UpdatedAt)";
+                        WHERE Id = @Id",
+                    Bind = AddTraderRequirementParameters,
+                },
+                requirements,
+                logBuilder,
+                progress);
 
-                using var cmd = new SqliteCommand(sql, connection, transaction);
-                cmd.Parameters.AddWithValue("@Id", req.Id);
-                cmd.Parameters.AddWithValue("@QuestId", req.QuestId);
-                cmd.Parameters.AddWithValue("@TraderId", req.TraderId);
-                cmd.Parameters.AddWithValue("@TraderName", req.TraderName);
-                cmd.Parameters.AddWithValue("@RequiredLevel", req.RequiredLevel);
-                cmd.Parameters.AddWithValue("@ContentHash", newHash);
-                cmd.Parameters.AddWithValue("@IsApproved", isApproved ? 1 : 0);
-                cmd.Parameters.AddWithValue("@ApprovedAt", (object?)approvedAt ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("@UpdatedAt", now);
-                await cmd.ExecuteNonQueryAsync();
-
-                if (exists) stats.Updated++; else stats.Inserted++;
-            }
-
-            logBuilder?.AppendLine($"  QuestTraderRequirements: {stats.Inserted} inserted, {stats.Updated} updated, {stats.Deleted} deleted, {stats.Unchanged} approvals preserved");
-            return stats;
+        private void AddTraderRequirementParameters(SqliteCommand cmd, DbQuestTraderRequirement req, string contentHash,
+            bool isApproved, string? approvedAt, string now)
+        {
+            cmd.Parameters.AddWithValue("@Id", req.Id);
+            cmd.Parameters.AddWithValue("@QuestId", req.QuestId);
+            cmd.Parameters.AddWithValue("@TraderId", req.TraderId);
+            cmd.Parameters.AddWithValue("@TraderName", req.TraderName);
+            cmd.Parameters.AddWithValue("@RequiredLevel", req.RequiredLevel);
+            cmd.Parameters.AddWithValue("@ContentHash", contentHash);
+            cmd.Parameters.AddWithValue("@IsApproved", isApproved ? 1 : 0);
+            cmd.Parameters.AddWithValue("@ApprovedAt", (object?)approvedAt ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@UpdatedAt", now);
         }
 
-        private async Task<UpsertStats> UpsertQuestRequirementsAsync(
+        private Task<UpsertStats> UpsertQuestRequirementsAsync(
             SqliteConnection connection,
             SqliteTransaction transaction,
             List<DbQuestRequirement> requirements,
-            StringBuilder? logBuilder)
-        {
-            var stats = new UpsertStats();
-            var now = DateTime.UtcNow.ToString("o");
-
-            // 기존 데이터 로드 (Id 기준으로 승인 상태 유지)
-            var existingData = new Dictionary<string, (bool IsApproved, string? ApprovedAt, string? ContentHash)>();
-            var existingIds = new HashSet<string>();
-            var selectSql = "SELECT Id, IsApproved, ApprovedAt, ContentHash FROM QuestRequirements";
-            using (var selectCmd = new SqliteCommand(selectSql, connection, transaction))
-            using (var reader = await selectCmd.ExecuteReaderAsync())
-            {
-                while (await reader.ReadAsync())
+            StringBuilder? logBuilder,
+            Action<string>? progress) =>
+            UpsertHashedRowsAsync(
+                connection,
+                transaction,
+                new HashedTable<DbQuestRequirement>
                 {
-                    var id = reader.GetString(0);
-                    var isApproved = !reader.IsDBNull(1) && reader.GetInt64(1) != 0;
-                    var approvedAt = reader.IsDBNull(2) ? null : reader.GetString(2);
-                    var contentHash = reader.IsDBNull(3) ? null : reader.GetString(3);
-                    existingIds.Add(id);
-                    existingData[id] = (isApproved, approvedAt, contentHash);
-                }
-            }
-
-            // 새로 가져온 requirement ID 집합
-            var newIds = new HashSet<string>();
-            foreach (var req in requirements)
-            {
-                req.Id = req.ComputeId();
-                newIds.Add(req.Id);
-            }
-
-            // DB에 있지만 새 목록에 없는 항목 삭제.
-            // Collector's rows used to be exempt here so that AddCollectorKappaRequirementsAsync
-            // could own them, but that function only ever inserted, so a quest that lost its
-            // Kappa flag kept its Collector row forever: Collector shipped 248 prerequisites
-            // for 247 flagged quests, the extra being Grenadier. The synthesis now rebuilds the
-            // set itself (deleting what is no longer flagged), so the exemption is gone and
-            // this delete loop is what removes rows the wiki parse no longer produces.
-            var idsToDelete = existingIds.Except(newIds).ToList();
-            foreach (var idToDelete in idsToDelete)
-            {
-                using var deleteCmd = new SqliteCommand("DELETE FROM QuestRequirements WHERE Id = @Id", connection, transaction);
-                deleteCmd.Parameters.AddWithValue("@Id", idToDelete);
-                await deleteCmd.ExecuteNonQueryAsync();
-                stats.Deleted++;
-            }
-
-            // Upsert (기존 승인 상태 유지, 변경 시 승인 해제)
-            foreach (var req in requirements)
-            {
-                var newHash = req.ComputeContentHash();
-                bool exists = existingIds.Contains(req.Id);
-
-                bool isApproved = false;
-                string? approvedAt = null;
-
-                // 기존 승인 상태 확인
-                if (exists && existingData.TryGetValue(req.Id, out var existing))
-                {
-                    // 해시가 같으면 승인 상태 유지, 다르면 승인 해제
-                    if (existing.ContentHash == newHash && existing.IsApproved)
-                    {
-                        isApproved = true;
-                        approvedAt = existing.ApprovedAt;
-                        stats.Unchanged++;
-                    }
-                    else if (existing.IsApproved)
-                    {
-                        // 승인되어 있었지만 내용이 변경됨
-                        logBuilder?.AppendLine($"  [CHANGED] {req.Id} - approval reset due to content change");
-                    }
-                }
-
-                if (!exists)
-                {
-                    // INSERT
-                    var insertSql = @"
-                        INSERT INTO QuestRequirements (Id, QuestId, RequiredQuestId, RequirementType, DelayMinutes, GroupId, ContentHash, IsApproved, ApprovedAt, UpdatedAt)
-                        VALUES (@Id, @QuestId, @RequiredQuestId, @RequirementType, @DelayMinutes, @GroupId, @ContentHash, @IsApproved, @ApprovedAt, @UpdatedAt)";
-
-                    using var insertCmd = new SqliteCommand(insertSql, connection, transaction);
-                    AddRequirementParameters(insertCmd, req, newHash, isApproved, approvedAt, now);
-                    await insertCmd.ExecuteNonQueryAsync();
-                    stats.Inserted++;
-                }
-                else
-                {
-                    // UPDATE
-                    var updateSql = @"
+                    Name = "QuestRequirements",
+                    LogLabel = "Requirements",
+                    // The prerequisite edge a row is about, without the GroupId the key adds.
+                    // Every one of the 794 published rows changes key on the first 1.1 run
+                    // while its edge stands, and the delete budget has to tell that re-key
+                    // apart from a deletion. See DbQuestRequirement.NaturalId.
+                    //
+                    // Collector's rows used to be exempt from the delete pass so that
+                    // AddCollectorKappaRequirementsAsync could own them, but that function only
+                    // ever inserted, so a quest that lost its Kappa flag kept its Collector row
+                    // forever: Collector shipped 248 prerequisites for 247 flagged quests, the
+                    // extra being Grenadier. The synthesis now rebuilds the set itself, so the
+                    // exemption is gone and the shared delete pass removes what the wiki parse
+                    // no longer produces.
+                    IdentityColumns = "QuestId, RequiredQuestId",
+                    NaturalIdOf = reader => RowHash.Natural(IdentityText(reader, 4), IdentityText(reader, 5)),
+                    InsertSql = @"
+                        INSERT INTO QuestRequirements (Id, QuestId, RequiredQuestId, RequirementType, AltRequirementType, DelayMinutes, GroupId, ContentHash, IsApproved, ApprovedAt, UpdatedAt)
+                        VALUES (@Id, @QuestId, @RequiredQuestId, @RequirementType, @AltRequirementType, @DelayMinutes, @GroupId, @ContentHash, @IsApproved, @ApprovedAt, @UpdatedAt)",
+                    UpdateSql = @"
                         UPDATE QuestRequirements SET
                             QuestId = @QuestId, RequiredQuestId = @RequiredQuestId, RequirementType = @RequirementType,
+                            AltRequirementType = @AltRequirementType,
                             DelayMinutes = @DelayMinutes, GroupId = @GroupId, ContentHash = @ContentHash,
                             IsApproved = @IsApproved, ApprovedAt = @ApprovedAt, UpdatedAt = @UpdatedAt
-                        WHERE Id = @Id";
-
-                    using var updateCmd = new SqliteCommand(updateSql, connection, transaction);
-                    AddRequirementParameters(updateCmd, req, newHash, isApproved, approvedAt, now);
-                    await updateCmd.ExecuteNonQueryAsync();
-                    stats.Updated++;
-                }
-            }
-
-            logBuilder?.AppendLine($"  Requirements: {stats.Inserted} inserted, {stats.Updated} updated, {stats.Deleted} deleted, {stats.Unchanged} approvals preserved");
-            return stats;
-        }
+                        WHERE Id = @Id",
+                    Bind = AddRequirementParameters,
+                },
+                requirements,
+                logBuilder,
+                progress);
 
         private void AddRequirementParameters(SqliteCommand cmd, DbQuestRequirement req, string contentHash,
             bool isApproved, string? approvedAt, string now)
@@ -3655,6 +4586,11 @@ namespace TarkovDBEditor.Services
             cmd.Parameters.AddWithValue("@QuestId", req.QuestId);
             cmd.Parameters.AddWithValue("@RequiredQuestId", req.RequiredQuestId);
             cmd.Parameters.AddWithValue("@RequirementType", req.RequirementType);
+            // Empty is not a second type: it would reach the app as the status "", which
+            // IsStatusSatisfied has no arm for, so it is stored as NULL like an absent one.
+            cmd.Parameters.AddWithValue(
+                "@AltRequirementType",
+                string.IsNullOrEmpty(req.AltRequirementType) ? DBNull.Value : req.AltRequirementType);
             cmd.Parameters.AddWithValue("@DelayMinutes", (object?)req.DelayMinutes ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@GroupId", req.GroupId);
             cmd.Parameters.AddWithValue("@ContentHash", contentHash);
@@ -3666,36 +4602,6 @@ namespace TarkovDBEditor.Services
         #endregion
 
         #region Helper Methods
-
-        private static string NormalizeWikiLink(string wikiLink)
-        {
-            if (string.IsNullOrEmpty(wikiLink))
-                return wikiLink;
-
-            try
-            {
-                return Uri.UnescapeDataString(wikiLink);
-            }
-            catch
-            {
-                return wikiLink;
-            }
-        }
-
-        private static string NormalizeQuestName(string questName)
-        {
-            var normalized = questName.ToLowerInvariant();
-
-            if (normalized.EndsWith(" (quest)"))
-                normalized = normalized.Substring(0, normalized.Length - 8);
-
-            normalized = normalized.Replace(" ", "-");
-            normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"[^a-z0-9\-]", "");
-            normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"-+", "-");
-            normalized = normalized.Trim('-');
-
-            return normalized;
-        }
 
         /// <summary>
         /// PageContent에서 Trader (given by) 파싱 - 캐시 데이터에서 항상 실행
@@ -3784,47 +4690,6 @@ namespace TarkovDBEditor.Services
             return null;
         }
 
-        /// <summary>
-        /// PageContent에서 Icon 파일명 파싱 - 캐시 데이터에서 항상 실행
-        /// </summary>
-        private static string? ExtractIconFromContent(string content)
-        {
-            if (string.IsNullOrEmpty(content))
-                return null;
-
-            var match = System.Text.RegularExpressions.Regex.Match(
-                content, @"\|icon\s*=\s*([^\|\}\n]+)",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            if (match.Success)
-            {
-                var iconValue = match.Groups[1].Value.Trim();
-
-                // 파일명만 추출 (File: 접두사 제거, [[]] 제거)
-                iconValue = System.Text.RegularExpressions.Regex.Replace(iconValue, @"^\[\[(?:File:|Image:)?", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                iconValue = System.Text.RegularExpressions.Regex.Replace(iconValue, @"\]\]$", "");
-                iconValue = System.Text.RegularExpressions.Regex.Replace(iconValue, @"^(?:File:|Image:)", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
-                // 파이프 이후 제거
-                var pipeIndex = iconValue.IndexOf('|');
-                if (pipeIndex > 0)
-                    iconValue = iconValue.Substring(0, pipeIndex);
-
-                iconValue = iconValue.Trim();
-
-                if (!string.IsNullOrEmpty(iconValue) &&
-                    (iconValue.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
-                     iconValue.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
-                     iconValue.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ||
-                     iconValue.EndsWith(".gif", StringComparison.OrdinalIgnoreCase) ||
-                     iconValue.EndsWith(".webp", StringComparison.OrdinalIgnoreCase)))
-                {
-                    return iconValue;
-                }
-            }
-
-            return null;
-        }
-
         #endregion
 
         public void Dispose()
@@ -3834,6 +4699,106 @@ namespace TarkovDBEditor.Services
     }
 
     #region Models
+
+    /// <summary>
+    /// What the shared child-table upsert needs of a row: the key it is filed under, the hash
+    /// an approval covers, and the identity the delete budget is measured over.
+    /// <para>
+    /// Four tables carry all three and nothing else (QuestRequirements,
+    /// QuestTraderRequirements, OptionalQuests, QuestRequiredItems), so
+    /// <see cref="RefreshDataService.UpsertHashedRowsAsync"/> writes all four.
+    /// QuestObjectives deliberately does not implement this: it carries a fifth thing across an
+    /// update, the hand-entered LocationPoints, and keeps its own upsert saying so.
+    /// </para>
+    /// </summary>
+    internal interface IHashedRow
+    {
+        /// <summary>
+        /// The row key. The upsert assigns it from <see cref="ComputeId"/> before it writes,
+        /// so a caller never has to.
+        /// </summary>
+        string Id { get; set; }
+
+        /// <summary>What the row is FILED UNDER. See <see cref="RowHash.Key"/>.</summary>
+        string ComputeId();
+
+        /// <summary>
+        /// Every field an approval covers, so a reviewer's approval survives a run that changed
+        /// nothing about the row. See <see cref="RowHash.Content"/>.
+        /// </summary>
+        string ComputeContentHash();
+
+        /// <summary>What the row is ABOUT, which is not what it is filed under. See <see cref="RowHash.Natural"/>.</summary>
+        string NaturalId();
+    }
+
+    /// <summary>
+    /// The row key and content hash every child table's identity rests on: SHA-256 over the
+    /// fields joined with <c>|</c>, base64, truncated.
+    /// <para>
+    /// One copy, because these values are a contract with the published database rather than an
+    /// implementation detail. A key that changes deletes and reinserts every row of its table on
+    /// the next publish, and a content hash that changes drops every approval a reviewer made,
+    /// neither of which surfaces as a failure. Five hand-written copies of the same six lines
+    /// were five chances to drift; the exact strings are pinned in RefreshGuardTests.
+    /// </para>
+    /// <para>
+    /// The 1.1 regeneration is exactly that reinsert, on purpose: all 794 published
+    /// QuestRequirements rows change key and come back with <c>IsApproved</c> at 0, where every
+    /// one of them is 1 today. That is the editor's own review state and nothing else. No code
+    /// under <c>TarkovHelper/</c> reads the column, so no install can see it; the reviewer reads
+    /// the whole table again for this regeneration in any case.
+    /// </para>
+    /// </summary>
+    internal static class RowHash
+    {
+        /// <summary>
+        /// What a row is ABOUT, as opposed to <see cref="Key"/>, which is what a row is FILED
+        /// UNDER: the fields naming the thing in the game, with every field the key scheme adds
+        /// for uniqueness or ordering left out.
+        /// <para>
+        /// The two are not the same and must not be confused. A key is recomputed whenever the
+        /// scheme changes, and the 1.1 regeneration changes it twice over: prerequisite rows move
+        /// from a wiki-assigned GroupId to 0, and Collector's rows move from a hand-built
+        /// concatenation onto <see cref="Key"/>. Every row of the published table gets a new key
+        /// while the prerequisite edge underneath it is unchanged, which is a re-key and not a
+        /// deletion. <see cref="RefreshDataService.RefreshGuards.AssertDeleteBudgetHeld"/>
+        /// measures on this so it cannot mistake one for the other.
+        /// </para>
+        /// <para>
+        /// Joined with U+001F (unit separator), a character no wiki title, item name or id
+        /// contains, so no two identities can collide by concatenation.
+        /// </para>
+        /// </summary>
+        public static string Natural(params object?[] fields) =>
+            string.Join(NaturalSeparator, fields.Select(f => f?.ToString() ?? ""));
+
+        /// <summary>
+        /// The unit separator, U+001F. Written as a code point rather than as a literal so it
+        /// stays visible to a reader of this file.
+        /// </summary>
+        private const char NaturalSeparator = (char)0x1f;
+
+        /// <summary>
+        /// A row key: 22 url-safe base64 characters over a per-table tag and the fields that
+        /// identify the row. A null field joins as the empty string, a bool as True/False.
+        /// </summary>
+        public static string Key(string tag, params object?[] fields) =>
+            Truncate(string.Join("|", fields.Prepend<object?>(tag)), 22).Replace("/", "_").Replace("+", "-");
+
+        /// <summary>
+        /// A change marker over every field an approval covers. Not url-safe: it is compared,
+        /// never put in a URL or a key.
+        /// </summary>
+        public static string Content(params object?[] fields) =>
+            Truncate(string.Join("|", fields), 16);
+
+        private static string Truncate(string raw, int length)
+        {
+            var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(raw));
+            return Convert.ToBase64String(hash).Substring(0, length);
+        }
+    }
 
     public class RevisionInfo
     {
@@ -3889,6 +4854,34 @@ namespace TarkovDBEditor.Services
         /// material only: the game's list is what ships.
         /// </summary>
         public List<PrerequisiteDisagreement> PrerequisiteDisagreements { get; set; } = new();
+
+        /// <summary>
+        /// The game prerequisites no row could be written for, because the quest they point at
+        /// was not imported. See <see cref="RefreshDataService.BuildRequirements"/> for why
+        /// these are named rather than counted against a threshold.
+        /// </summary>
+        public List<StrandedPrerequisite> StrandedPrerequisites { get; set; } = new();
+    }
+
+    /// <summary>
+    /// One game prerequisite that could not become a row, and why. The quest ships with a
+    /// shorter chain than the game describes, so each one is named in the run log and the
+    /// refresh report.
+    /// </summary>
+    public class StrandedPrerequisite
+    {
+        /// <summary>The quest whose prerequisite list lost the entry.</summary>
+        public string Quest { get; set; } = "";
+
+        /// <summary>The external game id of the prerequisite that was dropped.</summary>
+        public string TaskId { get; set; } = "";
+
+        /// <summary>
+        /// Expected when the target record has no wiki page (a quest the patch removed that the
+        /// API still lists); a pipeline problem when the record exists and was still not
+        /// imported.
+        /// </summary>
+        public string Reason { get; set; } = "";
     }
 
     /// <summary>One quest's prerequisite list as each source reports it, and how they compare.</summary>
@@ -3955,7 +4948,7 @@ namespace TarkovDBEditor.Services
     /// Quests because 1.1 gates five quests on a trader other than the one giving them, one of
     /// them on five traders at once, which a single column would silently drop.
     /// </summary>
-    public class DbQuestTraderRequirement
+    public class DbQuestTraderRequirement : IHashedRow
     {
         public string Id { get; set; } = "";
         public string QuestId { get; set; } = "";
@@ -3963,21 +4956,16 @@ namespace TarkovDBEditor.Services
         public string TraderName { get; set; } = "";
         public int RequiredLevel { get; set; }
 
-        public string ComputeId()
-        {
-            var raw = $"QTR|{QuestId}|{TraderId}";
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
-            return Convert.ToBase64String(hash).Substring(0, 22).Replace('+', '-').Replace('/', '_');
-        }
+        public string ComputeId() => RowHash.Key("QTR", QuestId, TraderId);
 
-        public string ComputeContentHash()
-        {
-            var raw = $"{QuestId}|{TraderId}|{TraderName}|{RequiredLevel}";
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
-            return Convert.ToBase64String(hash).Substring(0, 16);
-        }
+        /// <summary>
+        /// Which gate this is: a quest and a trader. The key hashes the same two fields today,
+        /// so this is the projection stated rather than derived, and it stays correct if the key
+        /// ever gains a third. See <see cref="RowHash.Natural"/>.
+        /// </summary>
+        public string NaturalId() => RowHash.Natural(QuestId, TraderId);
+
+        public string ComputeContentHash() => RowHash.Content(QuestId, TraderId, TraderName, RequiredLevel);
     }
 
     public class DbTrader
@@ -4001,12 +4989,22 @@ namespace TarkovDBEditor.Services
     /// <summary>
     /// 퀘스트 선행 조건 데이터 모델
     /// </summary>
-    public class DbQuestRequirement
+    public class DbQuestRequirement : IHashedRow
     {
         public string Id { get; set; } = ""; // Hash-based ID (QuestId + RequiredQuestId + GroupId)
         public string QuestId { get; set; } = "";
         public string RequiredQuestId { get; set; } = "";
         public string RequirementType { get; set; } = "Complete"; // Complete, Accept, Fail
+
+        /// <summary>
+        /// A second requirement type the same row is also satisfied by, or NULL (the usual case).
+        /// Same vocabulary as <see cref="RequirementType"/>, and never a repeat of it: it exists
+        /// for the prerequisites the game reports as satisfied by two states no single type
+        /// covers, "complete or failed" above all. Additive, so a build that predates the column
+        /// simply never reads it (see MapRequirementStatuses).
+        /// </summary>
+        public string? AltRequirementType { get; set; }
+
         public int? DelayMinutes { get; set; } // 시간 지연 (분 단위)
         public int GroupId { get; set; } // OR 그룹 ID (같은 그룹 내에서는 OR 조건)
         public string? ContentHash { get; set; } // 변경 감지용 해시
@@ -4015,32 +5013,41 @@ namespace TarkovDBEditor.Services
 
         /// <summary>
         /// 고유 ID 생성 (QuestId + RequiredQuestId + GroupId 기반 해시)
+        /// <para>
+        /// Deliberately blind to both type columns, as it always has been: the key names which
+        /// pair a row is about, not what satisfies it. A prerequisite whose type changes is the
+        /// same row updated in place, so no approval, no child row and no user-visible identity
+        /// moves when AltRequirementType arrives.
+        /// </para>
         /// </summary>
-        public string ComputeId()
-        {
-            var data = $"REQ|{QuestId}|{RequiredQuestId}|{GroupId}";
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(data));
-            return Convert.ToBase64String(hash).Substring(0, 22).Replace("/", "_").Replace("+", "-");
-        }
+        public string ComputeId() => RowHash.Key("REQ", QuestId, RequiredQuestId, GroupId);
+
+        /// <summary>
+        /// Which prerequisite edge this row is: the quest and the quest it waits on. GroupId is
+        /// deliberately left out, unlike in the key: the group number says how this edge is
+        /// combined with the quest's other edges, not which edge it is, and it is assigned by
+        /// whichever source produced the row. The wiki numbered its terms from 1; the game has
+        /// no groups at all, so every row starts at 0 and only
+        /// <see cref="RefreshDataService.ExpandExclusiveAlternatives"/> moves a pair off it.
+        /// Every one of the 794 rows in the published table therefore changes key on the first
+        /// 1.1 run while its edge survives, which is what
+        /// <see cref="RefreshDataService.RefreshGuards.AssertDeleteBudgetHeld"/> has to be able
+        /// to tell apart from a deletion. See <see cref="RowHash.Natural"/>.
+        /// </summary>
+        public string NaturalId() => RowHash.Natural(QuestId, RequiredQuestId);
 
         /// <summary>
         /// 현재 데이터의 해시 생성 (변경 감지용)
         /// </summary>
-        public string ComputeContentHash()
-        {
-            var data = $"{QuestId}|{RequiredQuestId}|{RequirementType}|{DelayMinutes}|{GroupId}";
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(data));
-            return Convert.ToBase64String(hash).Substring(0, 16);
-        }
+        public string ComputeContentHash() =>
+            RowHash.Content(QuestId, RequiredQuestId, RequirementType, AltRequirementType, DelayMinutes, GroupId);
     }
 
     /// <summary>
     /// 선택적 퀘스트 (Other Choices) 데이터 모델
     /// 같은 아이템을 제출해 완료할 수 있는 대체 퀘스트들
     /// </summary>
-    public class DbOptionalQuest
+    public class DbOptionalQuest : IHashedRow
     {
         public string Id { get; set; } = ""; // Hash-based ID (QuestId + AlternativeQuestId)
         public string QuestId { get; set; } = "";           // 현재 퀘스트 ID
@@ -4052,24 +5059,18 @@ namespace TarkovDBEditor.Services
         /// <summary>
         /// 고유 ID 생성 (QuestId + AlternativeQuestId 기반 해시)
         /// </summary>
-        public string ComputeId()
-        {
-            var data = $"OPT|{QuestId}|{AlternativeQuestId}";
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(data));
-            return Convert.ToBase64String(hash).Substring(0, 22).Replace("/", "_").Replace("+", "-");
-        }
+        public string ComputeId() => RowHash.Key("OPT", QuestId, AlternativeQuestId);
+
+        /// <summary>
+        /// Which alternative this is: a quest and the quest that can be done instead. The key
+        /// hashes the same pair today. See <see cref="RowHash.Natural"/>.
+        /// </summary>
+        public string NaturalId() => RowHash.Natural(QuestId, AlternativeQuestId);
 
         /// <summary>
         /// 현재 데이터의 해시 생성 (변경 감지용)
         /// </summary>
-        public string ComputeContentHash()
-        {
-            var data = $"{QuestId}|{AlternativeQuestId}";
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(data));
-            return Convert.ToBase64String(hash).Substring(0, 16);
-        }
+        public string ComputeContentHash() => RowHash.Content(QuestId, AlternativeQuestId);
     }
 
     /// <summary>
@@ -4115,30 +5116,29 @@ namespace TarkovDBEditor.Services
         /// <summary>
         /// 고유 ID 생성 (QuestId + SortOrder 기반 해시)
         /// </summary>
-        public string ComputeId()
-        {
-            var data = $"OBJ|{QuestId}|{SortOrder}";
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(data));
-            return Convert.ToBase64String(hash).Substring(0, 22).Replace("/", "_").Replace("+", "-");
-        }
+        public string ComputeId() => RowHash.Key("OBJ", QuestId, SortOrder);
+
+        /// <summary>
+        /// Which objective this is: a quest and the objective's position in that quest's list.
+        /// The row-id fallback, in effect. Nothing else on an objective identifies it - the
+        /// description is free wiki text that a copy edit rewrites without the objective
+        /// changing - so the position is what there is, and it is what the key already uses.
+        /// See <see cref="RowHash.Natural"/>.
+        /// </summary>
+        public string NaturalId() => RowHash.Natural(QuestId, SortOrder);
 
         /// <summary>
         /// 현재 데이터의 해시 생성 (변경 감지용)
         /// </summary>
-        public string ComputeContentHash()
-        {
-            var data = $"{QuestId}|{SortOrder}|{ObjectiveType}|{Description}|{TargetType}|{TargetCount}|{ItemName}|{RequiresFIR}|{MapName}|{LocationName}|{Conditions}|{DogtagMinLevel}|{DogtagFaction}";
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(data));
-            return Convert.ToBase64String(hash).Substring(0, 16);
-        }
+        public string ComputeContentHash() => RowHash.Content(
+            QuestId, SortOrder, ObjectiveType, Description, TargetType, TargetCount, ItemName,
+            RequiresFIR, MapName, LocationName, Conditions, DogtagMinLevel, DogtagFaction);
     }
 
     /// <summary>
     /// 퀘스트 필요 아이템 데이터 모델 (Related Quest Items 테이블에서 파싱)
     /// </summary>
-    public class DbQuestRequiredItem
+    public class DbQuestRequiredItem : IHashedRow
     {
         public string Id { get; set; } = ""; // Hash-based ID
         public string QuestId { get; set; } = "";
@@ -4158,24 +5158,26 @@ namespace TarkovDBEditor.Services
         /// 고유 ID 생성 (QuestId + ItemName + RequirementType + RequiresFIR + SortOrder 기반 해시)
         /// SortOrder를 포함하여 같은 퀘스트에서 같은 아이템이 여러 번 나와도 고유 ID 보장
         /// </summary>
-        public string ComputeId()
-        {
-            var data = $"ITEM|{QuestId}|{ItemName}|{RequirementType}|{RequiresFIR}|{SortOrder}";
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(data));
-            return Convert.ToBase64String(hash).Substring(0, 22).Replace("/", "_").Replace("+", "-");
-        }
+        public string ComputeId() =>
+            RowHash.Key("ITEM", QuestId, ItemName, RequirementType, RequiresFIR, SortOrder);
+
+        /// <summary>
+        /// Which item requirement this is: a quest, an item and what the quest wants done with
+        /// it. SortOrder is left out, unlike in the key, where it is there only to keep two rows
+        /// for one item apart; it is the position the wiki table happened to list the item in,
+        /// so a row inserted above re-keys every row below it without any of them changing. The
+        /// FIR flag is left out for the same reason it is in the content hash instead: a
+        /// requirement that starts or stops demanding Found in Raid is the same requirement,
+        /// changed. On the published table the projection is 632 identities over 638 rows.
+        /// See <see cref="RowHash.Natural"/>.
+        /// </summary>
+        public string NaturalId() => RowHash.Natural(QuestId, ItemName, RequirementType);
 
         /// <summary>
         /// 현재 데이터의 해시 생성 (변경 감지용)
         /// </summary>
-        public string ComputeContentHash()
-        {
-            var data = $"{QuestId}|{ItemName}|{Count}|{RequiresFIR}|{RequirementType}|{DogtagMinLevel}|{DogtagFaction}";
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(data));
-            return Convert.ToBase64String(hash).Substring(0, 16);
-        }
+        public string ComputeContentHash() => RowHash.Content(
+            QuestId, ItemName, Count, RequiresFIR, RequirementType, DogtagMinLevel, DogtagFaction);
     }
 
     #endregion

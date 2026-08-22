@@ -133,6 +133,83 @@ public sealed class DataDiffTests : IDisposable
     }
 
     [Fact]
+    public void A_dropped_quest_column_is_reported_instead_of_aborting_the_whole_report()
+    {
+        // The reader used to name all seventeen quest columns in its SELECT, so a candidate that
+        // dropped one failed with "no such column" before a single line was written: the report
+        // that exists to announce the removal was the thing the removal destroyed.
+        var previous = Database("previous.db",
+            quests: new[] { Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8") });
+        var candidate = Database("candidate.db",
+            quests: new[] { Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8") },
+            omitQuestColumns: new[] { "RequiredPrestigeLevel" });
+
+        var report = Render(previous, candidate);
+
+        Assert.Contains("**Removed column** `Quests.RequiredPrestigeLevel`", report);
+        // And the rest of the report still rendered, with the quest rows read.
+        Assert.Contains("Matched: 1 (of which 1 by external ID)", report);
+        Assert.Contains("## NULL rates", report);
+    }
+
+    [Fact]
+    public void A_dropped_quest_column_reads_as_absent_on_the_side_that_lost_it()
+    {
+        var previous = Database("previous.db",
+            quests: new[] { Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8", kappaRequired: true, minLevel: 15) });
+        var candidate = Database("candidate.db",
+            quests: new[] { Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8", kappaRequired: true, minLevel: 15) },
+            omitQuestColumns: new[] { "MinLevel", "KappaRequired" });
+
+        var quest = Assert.Single(DataSnapshot.Read(candidate).Quests);
+        Assert.Null(quest.MinLevel);
+        Assert.False(quest.KappaRequired);
+
+        // The loss shows as a field change too, so it cannot be read as "nothing happened". Each
+        // row is pinned to the field that owns it, because the two tables share a row shape.
+        var report = Render(previous, candidate);
+        Assert.Contains("| Stirrup | 15 | _(none)_ |", Section(report, "### MinLevel"));
+        Assert.Contains("| Stirrup | 1 | 0 |", Section(report, "### KappaRequired"));
+    }
+
+    [Fact]
+    public void A_dropped_item_column_is_reported_instead_of_aborting_the_whole_report()
+    {
+        var previous = Database("previous.db",
+            items: new[] { ("item-1", "Roubles", (string?)"5449016a4bdc2d6f028b456f") });
+        var candidate = Database("candidate.db",
+            items: new[] { ("item-1", "Roubles", (string?)null) },
+            omitItemColumns: new[] { "BsgId" });
+
+        var report = Render(previous, candidate);
+
+        Assert.Contains("**Removed column** `Items.BsgId`", report);
+        Assert.Contains("| Items.BsgId | 0/1 (0%) | 1/1 (100%) |", report);
+    }
+
+    [Fact]
+    public void Objectives_are_read_in_quest_and_sort_order()
+    {
+        // Ordering moved out of the SQL when the reader stopped naming columns it might not have,
+        // so the order the report reads objectives in is worth pinning.
+        var database = Database("objectives.db",
+            quests: new[] { Quest("key-1", "Stirrup"), Quest("key-0", "Debut") },
+            objectives: new[]
+            {
+                ("key-1", 2, "Third"),
+                ("key-0", 0, "Debut objective"),
+                ("key-1", 0, "First"),
+                ("key-1", 1, "Second"),
+            });
+
+        var objectives = DataSnapshot.Read(database).Objectives;
+
+        Assert.Equal(
+            new[] { "Debut objective", "First", "Second", "Third" },
+            objectives.Select(o => o.Description));
+    }
+
+    [Fact]
     public void Lists_every_kappa_and_level_change_in_full()
     {
         var previous = Database("previous.db", quests: new[]
@@ -147,9 +224,9 @@ public sealed class DataDiffTests : IDisposable
         var report = Render(previous, candidate);
 
         Assert.Contains("### KappaRequired", report);
-        Assert.Contains("| Stirrup | 1 | 0 |", report);
+        Assert.Contains("| Stirrup | 1 | 0 |", Section(report, "### KappaRequired"));
         Assert.Contains("### MinLevel", report);
-        Assert.Contains("| Stirrup | 15 | _(none)_ |", report);
+        Assert.Contains("| Stirrup | 15 | _(none)_ |", Section(report, "### MinLevel"));
     }
 
     [Fact]
@@ -171,10 +248,10 @@ public sealed class DataDiffTests : IDisposable
                 Quest("key-2", "Collector", bsgId: "5c51aac186f77432ea65c552"),
             });
 
-        var report = Render(previous, candidate);
+        var section = Section(Render(previous, candidate), "## Prerequisite edges");
 
-        Assert.Contains("Edges removed: 1", report);
-        Assert.Contains("| Stirrup | - | Collector (Complete) |", report);
+        Assert.Contains("Edges removed: 1", section);
+        Assert.Contains("| Stirrup | - | Collector (Complete) |", section);
     }
 
     [Fact]
@@ -191,10 +268,12 @@ public sealed class DataDiffTests : IDisposable
                 ("key-1", 1, "Hand over the items"),
             });
 
-        var report = Render(previous, candidate);
+        var section = Section(Render(previous, candidate), "## Objective lists whose shape changed");
 
-        Assert.Contains("Quests affected: 1", report);
-        Assert.Contains("| Stirrup | 1 | 2 |", report);
+        // Scoped to the section: "| Stirrup | 1 | 2 |" is also what a MinLevel change from 1 to 2
+        // writes, so a Contains over the whole report would pass on the wrong table.
+        Assert.Contains("Quests affected: 1", section);
+        Assert.Contains("| Stirrup | 1 | 2 |", section);
     }
 
     [Fact]
@@ -274,6 +353,7 @@ public sealed class DataDiffTests : IDisposable
 
         var coverage = IconCoverage.Measure(items, iconDirectory);
 
+        Assert.True(coverage.DirectoryExists);
         Assert.Equal(1, coverage.ItemsWithIcon);
         Assert.Equal(new[] { "Downloaded As WebP" }, coverage.ItemsWithoutIcon);
         Assert.Equal(new[] { "orphan.png" }, coverage.OrphanFiles);
@@ -281,14 +361,35 @@ public sealed class DataDiffTests : IDisposable
     }
 
     [Fact]
-    public void A_missing_icon_folder_reports_every_item_as_uncovered()
+    public void A_missing_icon_folder_measures_nothing_rather_than_claiming_a_total_icon_loss()
     {
+        // A mistyped --icons used to render as every item in the release having lost its picture,
+        // which is a real and alarming outcome. The reviewer then either blocks a good publish or
+        // learns to skip the section.
         var coverage = IconCoverage.Measure(
             new[] { new ItemRow("item-1", null, "Widget") },
             Path.Combine(_directory, "no-such-folder"));
 
+        Assert.False(coverage.DirectoryExists);
         Assert.Equal(0, coverage.ItemsWithIcon);
-        Assert.Single(coverage.ItemsWithoutIcon);
+        Assert.Empty(coverage.ItemsWithoutIcon);
+    }
+
+    [Fact]
+    public void The_report_says_a_missing_icon_folder_was_not_measured()
+    {
+        var previous = Database("previous.db", items: new[] { ("item-1", "Widget", (string?)null) });
+        var candidate = Database("candidate.db", items: new[] { ("item-1", "Widget", (string?)null) });
+
+        var report = DiffReport.Render(
+            DataSnapshot.Read(previous),
+            DataSnapshot.Read(candidate),
+            new DiffOptions { IconDirectory = Path.Combine(_directory, "no-such-folder") });
+
+        Assert.Contains("**Not measured**", report);
+        Assert.DoesNotContain("Items without a PNG", report);
+        // The per item list is what made the false reading look authoritative.
+        Assert.DoesNotContain("- Widget", report);
     }
 
     [Fact]
@@ -337,6 +438,44 @@ public sealed class DataDiffTests : IDisposable
     }
 
     [Fact]
+    public void The_refresh_log_reports_title_reuses_the_database_comparison_cannot_see()
+    {
+        // The comparison infers a title reuse from two external IDs, so against a previous
+        // database written before the backfill it finds none - which is exactly the run where a
+        // reuse is most likely. The resolver saw them, and the log is where they survive.
+        var log = RefreshLog.Parse("""
+            {
+              "writtenAt": "2026-08-22T00:00:00Z",
+              "renames": [
+                {"PreviousName":"Sew it Good - Part 3","Title":"Sew it Good - Part 4","BsgId":"5ae4496986f774459e77beb6","Id":"key-3","TitleReused":true},
+                {"PreviousName":"A Shooter Born in Heaven","Title":"Shooter Born in Heaven","BsgId":"5c0bde0986f77479cf22c2f8","Id":"key-9","TitleReused":false}
+              ],
+              "titleReuses": [
+                {"PreviousName":"Sew it Good - Part 3","Title":"Sew it Good - Part 4","BsgId":"5ae4496986f774459e77beb6","Id":"key-3","TitleReused":true}
+              ],
+              "aliasesUsed": ["New Beginning (Prestige 2)"]
+            }
+            """, "refresh.json");
+
+        // No external ID on either side, as in every database written before the backfill.
+        var previous = Database("previous.db", quests: new[] { Quest("key-3", "Sew it Good - Part 3") });
+        var candidate = Database("candidate.db", quests: new[] { Quest("key-3", "Sew it Good - Part 4") });
+
+        var report = DiffReport.Render(
+            DataSnapshot.Read(previous),
+            DataSnapshot.Read(candidate),
+            new DiffOptions { RefreshLog = log });
+
+        Assert.Contains("Titles now belonging to a different quest: 0", report);
+        Assert.Contains("### Titles the resolver saw change owner", report);
+        Assert.Contains("| Sew it Good - Part 3 | Sew it Good - Part 4 | `5ae4496986f774459e77beb6` | `key-3` |", report);
+        Assert.Contains("### Renames the resolver carried", report);
+        Assert.Contains("A Shooter Born in Heaven -> Shooter Born in Heaven", report);
+        Assert.Contains("### Pages matched only by a hand written alias", report);
+        Assert.Contains("- New Beginning (Prestige 2)", report);
+    }
+
+    [Fact]
     public void A_refresh_log_that_is_not_json_fails_with_its_name()
     {
         var ex = Assert.Throws<InvalidOperationException>(() => RefreshLog.Parse("<html>", "refresh_1.json"));
@@ -345,10 +484,260 @@ public sealed class DataDiffTests : IDisposable
 
     #endregion
 
+    #region Computed section results
+
+    // The three sections below decide what they have to say before they write anything, so the
+    // decision is assertable on its own. The markdown assertions elsewhere in this file stay as
+    // the guard on the wording; these pin the finding.
+
+    [Fact]
+    public void Schema_changes_are_reported_as_findings_not_as_report_length()
+    {
+        var previous = Database("previous.db",
+            quests: new[] { Quest("key-1", "Stirrup", normalizedName: "stirrup") },
+            withNormalizedName: true);
+        var candidate = Database("candidate.db",
+            quests: new[] { Quest("key-1", "Stirrup") },
+            withTraderRequirements: true,
+            questColumnTypes: new[] { ("MinLevel", "TEXT") });
+
+        var changes = DiffReport.ComputeSchemaChanges(DataSnapshot.Read(previous), DataSnapshot.Read(candidate));
+
+        Assert.Equal(
+            new[]
+            {
+                new SchemaChange(SchemaChangeKind.AddedTable, "QuestTraderRequirements", ColumnCount: 5),
+                new SchemaChange(SchemaChangeKind.RemovedColumn, "Quests", "NormalizedName"),
+                new SchemaChange(SchemaChangeKind.RetypedColumn, "Quests", "MinLevel", "INTEGER", "TEXT"),
+            },
+            changes);
+    }
+
+    [Fact]
+    public void A_retyped_column_is_named_with_the_type_on_each_side()
+    {
+        // Additive schema growth is the whole contract with the builds in the field, and a retype
+        // breaks it exactly as a removal does. No other test in this file writes one.
+        var previous = Database("previous.db", quests: new[] { Quest("key-1", "Stirrup") });
+        var candidate = Database("candidate.db",
+            quests: new[] { Quest("key-1", "Stirrup") },
+            questColumnTypes: new[] { ("MinLevel", "TEXT") });
+
+        var report = Render(previous, candidate);
+
+        Assert.Contains(
+            "- **Retyped column** `Quests.MinLevel`: INTEGER -> TEXT",
+            Section(report, "## Schema delta"));
+    }
+
+    [Fact]
+    public void Two_identical_schemas_produce_no_findings_and_say_so()
+    {
+        var previous = Database("previous.db", quests: new[] { Quest("key-1", "Stirrup") });
+        var candidate = Database("candidate.db", quests: new[] { Quest("key-1", "Stirrup") });
+
+        Assert.Empty(DiffReport.ComputeSchemaChanges(DataSnapshot.Read(previous), DataSnapshot.Read(candidate)));
+        Assert.Equal("\nNo schema change.\n", Section(Render(previous, candidate), "## Schema delta"));
+    }
+
+    [Fact]
+    public void A_schema_that_did_change_never_also_claims_it_did_not()
+    {
+        // The two halves of the section are decided by one list, so they cannot contradict.
+        var previous = Database("previous.db", quests: new[] { Quest("key-1", "Stirrup") });
+        var candidate = Database("candidate.db",
+            quests: new[] { Quest("key-1", "Stirrup", normalizedName: "stirrup") },
+            withNormalizedName: true);
+
+        Assert.DoesNotContain("No schema change.", Section(Render(previous, candidate), "## Schema delta"));
+    }
+
+    [Fact]
+    public void Prerequisite_changes_carry_the_edges_gained_and_lost_per_quest()
+    {
+        var previous = Database("previous.db",
+            quests: new[]
+            {
+                Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8"),
+                Quest("key-2", "Collector", bsgId: "5c51aac186f77432ea65c552"),
+                Quest("key-3", "Debut", bsgId: "5936d90786f7742b1420ba5b"),
+            },
+            requirements: new[] { ("key-1", "key-2", "Complete"), ("key-3", "key-2", "Complete") });
+        var candidate = Database("candidate.db",
+            quests: new[]
+            {
+                Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8"),
+                Quest("key-2", "Collector", bsgId: "5c51aac186f77432ea65c552"),
+                Quest("key-3", "Debut", bsgId: "5936d90786f7742b1420ba5b"),
+            },
+            // Stirrup's edge is retyped, which reads as one gained and one lost. Debut is
+            // untouched and must not appear at all.
+            requirements: new[] { ("key-1", "key-2", "Accept"), ("key-3", "key-2", "Complete") });
+
+        var changes = DiffReport.ComputePrerequisiteChanges(DataSnapshot.Read(previous), DataSnapshot.Read(candidate));
+
+        var change = Assert.Single(changes);
+        Assert.Equal("Stirrup", change.Quest);
+        Assert.Equal(new[] { "Collector (Accept)" }, change.Added);
+        Assert.Equal(new[] { "Collector (Complete)" }, change.Removed);
+    }
+
+    [Fact]
+    public void The_prerequisite_totals_are_the_sums_over_the_changed_quests()
+    {
+        var previous = Database("previous.db",
+            quests: new[]
+            {
+                Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8"),
+                Quest("key-2", "Collector", bsgId: "5c51aac186f77432ea65c552"),
+                Quest("key-3", "Debut", bsgId: "5936d90786f7742b1420ba5b"),
+            },
+            requirements: new[] { ("key-1", "key-2", "Complete"), ("key-1", "key-3", "Complete") });
+        var candidate = Database("candidate.db",
+            quests: new[]
+            {
+                Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8"),
+                Quest("key-2", "Collector", bsgId: "5c51aac186f77432ea65c552"),
+                Quest("key-3", "Debut", bsgId: "5936d90786f7742b1420ba5b"),
+            },
+            requirements: new[] { ("key-2", "key-3", "Complete") });
+
+        var changes = DiffReport.ComputePrerequisiteChanges(DataSnapshot.Read(previous), DataSnapshot.Read(candidate));
+        var section = Section(Render(previous, candidate), "## Prerequisite edges");
+
+        Assert.Equal(1, changes.Sum(c => c.Added.Count));
+        Assert.Equal(2, changes.Sum(c => c.Removed.Count));
+        Assert.Contains("- Edges added: 1", section);
+        Assert.Contains("- Edges removed: 2", section);
+        Assert.Contains("- Quests whose prerequisite list changed: 2", section);
+    }
+
+    [Fact]
+    public void Two_databases_with_no_prerequisites_at_all_report_zero_and_no_table()
+    {
+        var previous = Database("previous.db", quests: new[] { Quest("key-1", "Stirrup") });
+        var candidate = Database("candidate.db", quests: new[] { Quest("key-1", "Stirrup") });
+
+        Assert.Empty(DiffReport.ComputePrerequisiteChanges(DataSnapshot.Read(previous), DataSnapshot.Read(candidate)));
+
+        var section = Section(Render(previous, candidate), "## Prerequisite edges");
+        Assert.Contains("- Edges added: 0", section);
+        Assert.Contains("- Quests whose prerequisite list changed: 0", section);
+        Assert.DoesNotContain("| Quest | Added | Removed |", section);
+    }
+
+    [Fact]
+    public void An_objective_list_that_only_changed_wording_is_still_a_shape_change()
+    {
+        // Equal counts, different text: the tick marks are stored by position, so the row belongs
+        // in the section even though neither number moved.
+        var previous = Database("previous.db",
+            quests: new[] { Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8") },
+            objectives: new[] { ("key-1", 0, "Eliminate 3 PMCs") });
+        var candidate = Database("candidate.db",
+            quests: new[] { Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8") },
+            objectives: new[] { ("key-1", 0, "Eliminate 10 PMCs") });
+
+        var previousSnapshot = DataSnapshot.Read(previous);
+        var candidateSnapshot = DataSnapshot.Read(candidate);
+        var changes = DiffReport.ComputeObjectiveShapeChanges(
+            previousSnapshot, candidateSnapshot, QuestJoin.Build(previousSnapshot, candidateSnapshot));
+
+        Assert.Equal(new ObjectiveShapeChange("Stirrup", 1, 1), Assert.Single(changes));
+    }
+
+    [Fact]
+    public void An_unchanged_objective_list_is_left_out()
+    {
+        var previous = Database("previous.db",
+            quests: new[] { Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8") },
+            objectives: new[] { ("key-1", 0, "Eliminate 3 PMCs"), ("key-1", 1, "Hand over the items") });
+        var candidate = Database("candidate.db",
+            quests: new[] { Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8") },
+            objectives: new[] { ("key-1", 0, "Eliminate 3 PMCs"), ("key-1", 1, "Hand over the items") });
+
+        var previousSnapshot = DataSnapshot.Read(previous);
+        var candidateSnapshot = DataSnapshot.Read(candidate);
+
+        Assert.Empty(DiffReport.ComputeObjectiveShapeChanges(
+            previousSnapshot, candidateSnapshot, QuestJoin.Build(previousSnapshot, candidateSnapshot)));
+    }
+
+    [Fact]
+    public void An_objective_row_is_not_satisfied_by_an_identically_shaped_field_change_row()
+    {
+        // Stirrup goes from one objective to two AND from MinLevel 1 to MinLevel 2, so the exact
+        // text "| Stirrup | 1 | 2 |" is written twice, once by each section. A bare Contains over
+        // the whole report cannot tell which section wrote it, and would pass on the wrong one.
+        var previous = Database("previous.db",
+            quests: new[] { Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8", minLevel: 1) },
+            objectives: new[] { ("key-1", 0, "Eliminate 3 PMCs with a pistol") });
+        var candidate = Database("candidate.db",
+            quests: new[] { Quest("key-1", "Stirrup", bsgId: "5c0be13186f7746309d759c8", minLevel: 2) },
+            objectives: new[]
+            {
+                ("key-1", 0, "Eliminate 10 targets with a pistol on Factory"),
+                ("key-1", 1, "Hand over the items"),
+            });
+
+        var previousSnapshot = DataSnapshot.Read(previous);
+        var candidateSnapshot = DataSnapshot.Read(candidate);
+        var changes = DiffReport.ComputeObjectiveShapeChanges(
+            previousSnapshot, candidateSnapshot, QuestJoin.Build(previousSnapshot, candidateSnapshot));
+
+        Assert.Equal(new ObjectiveShapeChange("Stirrup", 1, 2), Assert.Single(changes));
+
+        var report = Render(previous, candidate);
+        var objectives = Section(report, "## Objective lists whose shape changed");
+        var minLevel = Section(report, "### MinLevel");
+
+        Assert.Contains("| Stirrup | 1 | 2 |", objectives);
+        Assert.Contains("| Stirrup | 1 | 2 |", minLevel);
+
+        // And the two really are separated, so the assertions above are not both reading the
+        // same table twice.
+        Assert.Contains("| Quest | Previous objectives | Candidate objectives |", objectives);
+        Assert.DoesNotContain("| Quest | Previous | Candidate |", objectives);
+        Assert.Contains("| Quest | Previous | Candidate |", minLevel);
+        Assert.DoesNotContain("| Quest | Previous objectives | Candidate objectives |", minLevel);
+    }
+
+    #endregion
+
     #region Fixtures
 
     private static string Render(string previousPath, string candidatePath) =>
         DiffReport.Render(DataSnapshot.Read(previousPath), DataSnapshot.Read(candidatePath));
+
+    /// <summary>
+    /// The body of one markdown section, from its heading down to the next heading at the same
+    /// level or shallower.
+    /// <para>
+    /// Several sections write a three column row of the form <c>| Quest | a | b |</c>, so a
+    /// Contains over the whole report cannot tell an objective count row from a field change row
+    /// that happens to hold the same two numbers. An assertion that means "this section says
+    /// this" has to be scoped to the section.
+    /// </para>
+    /// </summary>
+    private static string Section(string report, string heading)
+    {
+        var lines = report.Replace("\r\n", "\n").Split('\n');
+        var level = heading.TakeWhile(c => c == '#').Count();
+        var start = Array.IndexOf(lines, heading);
+        Assert.True(start >= 0, $"The report has no section headed \"{heading}\".");
+
+        var body = new List<string>();
+        for (var i = start + 1; i < lines.Length; i++)
+        {
+            var lineLevel = lines[i].TakeWhile(c => c == '#').Count();
+            if (lineLevel > 0 && lineLevel <= level)
+                break;
+
+            body.Add(lines[i]);
+        }
+
+        return string.Join("\n", body);
+    }
 
     private static (string Id, string Name, string? BsgId, bool Kappa, int? MinLevel, string? NormalizedName) Quest(
         string id,
@@ -359,6 +748,20 @@ public sealed class DataDiffTests : IDisposable
         string? normalizedName = null) =>
         (id, name, bsgId, kappaRequired, minLevel, normalizedName);
 
+    /// <summary>
+    /// Writes a database in the published shape.
+    /// <para>
+    /// <paramref name="omitQuestColumns"/> and <paramref name="omitItemColumns"/> leave a column
+    /// out of the CREATE TABLE, which is the only way to stand in for a regeneration that dropped
+    /// one. A fixture that always creates every column cannot see the failure that matters most
+    /// here, because the report is the thing that has to survive a removal in order to name it.
+    /// </para>
+    /// <para>
+    /// <paramref name="questColumnTypes"/> declares a quest column with a different SQLite type,
+    /// for the retype the report has to name. A retype breaks a build in the field just as a
+    /// removal does, and nothing else in this fixture can write one.
+    /// </para>
+    /// </summary>
     private string Database(
         string fileName,
         (string Id, string Name, string? BsgId, bool Kappa, int? MinLevel, string? NormalizedName)[]? quests = null,
@@ -368,23 +771,64 @@ public sealed class DataDiffTests : IDisposable
         (string QuestId, string TraderName, int Level)[]? traderGates = null,
         (string StationId, int Level, string ItemId, int Count)[]? hideoutRequirements = null,
         bool withNormalizedName = false,
-        bool withTraderRequirements = false)
+        bool withTraderRequirements = false,
+        string[]? omitQuestColumns = null,
+        string[]? omitItemColumns = null,
+        (string Column, string Type)[]? questColumnTypes = null)
     {
         var path = Path.Combine(_directory, fileName);
         withNormalizedName |= quests?.Any(q => q.NormalizedName != null) == true;
         withTraderRequirements |= traderGates != null;
 
+        var questColumns = new List<(string Name, string Definition)>
+        {
+            ("Id", "Id TEXT PRIMARY KEY"),
+            ("BsgId", "BsgId TEXT"),
+            ("Name", "Name TEXT NOT NULL"),
+            ("NameEN", "NameEN TEXT"),
+            ("NameKO", "NameKO TEXT"),
+            ("NameJA", "NameJA TEXT"),
+            ("Trader", "Trader TEXT"),
+            ("Location", "Location TEXT"),
+            ("MinLevel", "MinLevel INTEGER"),
+            ("MinScavKarma", "MinScavKarma INTEGER"),
+            ("KappaRequired", "KappaRequired INTEGER NOT NULL DEFAULT 0"),
+            ("Faction", "Faction TEXT"),
+            ("RequiredEdition", "RequiredEdition TEXT"),
+            ("ExcludedEdition", "ExcludedEdition TEXT"),
+            ("RequiredPrestigeLevel", "RequiredPrestigeLevel INTEGER"),
+            ("RequiredDecodeCount", "RequiredDecodeCount INTEGER"),
+        };
+        if (withNormalizedName)
+            questColumns.Add(("NormalizedName", "NormalizedName TEXT"));
+
+        var itemColumns = new List<(string Name, string Definition)>
+        {
+            ("Id", "Id TEXT PRIMARY KEY"),
+            ("BsgId", "BsgId TEXT"),
+            ("Name", "Name TEXT NOT NULL"),
+        };
+
+        foreach (var (column, type) in questColumnTypes ?? Array.Empty<(string, string)>())
+        {
+            var index = questColumns.FindIndex(c => c.Name == column);
+            if (index < 0)
+                throw new ArgumentException($"Quests has no column named {column}.", nameof(questColumnTypes));
+
+            questColumns[index] = (column, $"{column} {type}");
+        }
+
+        var omittedQuestColumns = new HashSet<string>(omitQuestColumns ?? Array.Empty<string>(), StringComparer.Ordinal);
+        var omittedItemColumns = new HashSet<string>(omitItemColumns ?? Array.Empty<string>(), StringComparer.Ordinal);
+        questColumns.RemoveAll(c => omittedQuestColumns.Contains(c.Name));
+        itemColumns.RemoveAll(c => omittedItemColumns.Contains(c.Name));
+
         using (var connection = new SqliteConnection($"Data Source={path}"))
         {
             connection.Open();
 
-            Execute(connection,
-                "CREATE TABLE Quests (Id TEXT PRIMARY KEY, BsgId TEXT, Name TEXT NOT NULL, NameEN TEXT, NameKO TEXT, "
-                + "NameJA TEXT, Trader TEXT, Location TEXT, MinLevel INTEGER, MinScavKarma INTEGER, "
-                + "KappaRequired INTEGER NOT NULL DEFAULT 0, Faction TEXT, RequiredEdition TEXT, ExcludedEdition TEXT, "
-                + "RequiredPrestigeLevel INTEGER, RequiredDecodeCount INTEGER"
-                + (withNormalizedName ? ", NormalizedName TEXT)" : ")"));
-            Execute(connection, "CREATE TABLE Items (Id TEXT PRIMARY KEY, BsgId TEXT, Name TEXT NOT NULL)");
+            Execute(connection, $"CREATE TABLE Quests ({string.Join(", ", questColumns.Select(c => c.Definition))})");
+            Execute(connection, $"CREATE TABLE Items ({string.Join(", ", itemColumns.Select(c => c.Definition))})");
             Execute(connection,
                 "CREATE TABLE QuestRequirements (Id TEXT PRIMARY KEY, QuestId TEXT NOT NULL, RequiredQuestId TEXT NOT NULL, "
                 + "RequirementType TEXT NOT NULL, GroupId INTEGER NOT NULL DEFAULT 0)");
@@ -404,26 +848,30 @@ public sealed class DataDiffTests : IDisposable
 
             foreach (var quest in quests ?? Array.Empty<(string, string, string?, bool, int?, string?)>())
             {
-                var columns = "Id, BsgId, Name, KappaRequired, MinLevel" + (withNormalizedName ? ", NormalizedName" : "");
-                var values = "@Id, @BsgId, @Name, @Kappa, @MinLevel" + (withNormalizedName ? ", @NormalizedName" : "");
-                using var cmd = new SqliteCommand($"INSERT INTO Quests ({columns}) VALUES ({values})", connection);
-                cmd.Parameters.AddWithValue("@Id", quest.Id);
-                cmd.Parameters.AddWithValue("@BsgId", (object?)quest.BsgId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("@Name", quest.Name);
-                cmd.Parameters.AddWithValue("@Kappa", quest.Kappa ? 1 : 0);
-                cmd.Parameters.AddWithValue("@MinLevel", (object?)quest.MinLevel ?? DBNull.Value);
+                var values = new List<(string Column, object Value)>
+                {
+                    ("Id", quest.Id),
+                    ("BsgId", (object?)quest.BsgId ?? DBNull.Value),
+                    ("Name", quest.Name),
+                    ("KappaRequired", quest.Kappa ? 1 : 0),
+                    ("MinLevel", (object?)quest.MinLevel ?? DBNull.Value),
+                };
                 if (withNormalizedName)
-                    cmd.Parameters.AddWithValue("@NormalizedName", (object?)quest.NormalizedName ?? DBNull.Value);
-                cmd.ExecuteNonQuery();
+                    values.Add(("NormalizedName", (object?)quest.NormalizedName ?? DBNull.Value));
+
+                Insert(connection, "Quests", values.Where(v => !omittedQuestColumns.Contains(v.Column)));
             }
 
             foreach (var (id, name, bsgId) in items ?? Array.Empty<(string, string, string?)>())
             {
-                using var cmd = new SqliteCommand("INSERT INTO Items (Id, BsgId, Name) VALUES (@Id, @BsgId, @Name)", connection);
-                cmd.Parameters.AddWithValue("@Id", id);
-                cmd.Parameters.AddWithValue("@BsgId", (object?)bsgId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("@Name", name);
-                cmd.ExecuteNonQuery();
+                var values = new (string Column, object Value)[]
+                {
+                    ("Id", id),
+                    ("BsgId", (object?)bsgId ?? DBNull.Value),
+                    ("Name", name),
+                };
+
+                Insert(connection, "Items", values.Where(v => !omittedItemColumns.Contains(v.Column)));
             }
 
             var requirementIndex = 0;
@@ -488,6 +936,19 @@ public sealed class DataDiffTests : IDisposable
     private static void Execute(SqliteConnection connection, string sql)
     {
         using var cmd = new SqliteCommand(sql, connection);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void Insert(
+        SqliteConnection connection, string table, IEnumerable<(string Column, object Value)> values)
+    {
+        var pairs = values.ToList();
+        var columns = string.Join(", ", pairs.Select(p => p.Column));
+        var parameters = string.Join(", ", pairs.Select(p => "@" + p.Column));
+
+        using var cmd = new SqliteCommand($"INSERT INTO {table} ({columns}) VALUES ({parameters})", connection);
+        foreach (var (column, value) in pairs)
+            cmd.Parameters.AddWithValue("@" + column, value);
         cmd.ExecuteNonQuery();
     }
 

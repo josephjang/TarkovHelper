@@ -130,19 +130,19 @@ public sealed class DataSnapshot
         if (!schema.ContainsKey("Quests"))
             return rows;
 
-        var hasNormalizedName = HasColumn(schema, "Quests", "NormalizedName");
-        var sql = "SELECT Id, BsgId, Name, NameEN, NameKO, NameJA, Trader, Location, MinLevel, MinScavKarma, "
-            + "KappaRequired, Faction, RequiredEdition, ExcludedEdition, RequiredPrestigeLevel, RequiredDecodeCount, "
-            + (hasNormalizedName ? "NormalizedName" : "NULL") + " FROM Quests";
-
-        using var cmd = new SqliteCommand(sql, connection);
+        using var cmd = new SqliteCommand(
+            Select(schema, "Quests",
+                "Id", "BsgId", "Name", "NameEN", "NameKO", "NameJA", "Trader", "Location", "MinLevel", "MinScavKarma",
+                "KappaRequired", "Faction", "RequiredEdition", "ExcludedEdition", "RequiredPrestigeLevel",
+                "RequiredDecodeCount", "NormalizedName"),
+            connection);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
             rows.Add(new QuestRow(
-                reader.GetString(0),
+                Text(reader, 0),
                 Str(reader, 1),
-                reader.IsDBNull(2) ? "" : reader.GetString(2),
+                Text(reader, 2),
                 Str(reader, 3),
                 Str(reader, 4),
                 Str(reader, 5),
@@ -150,7 +150,7 @@ public sealed class DataSnapshot
                 Str(reader, 7),
                 Int(reader, 8),
                 Int(reader, 9),
-                !reader.IsDBNull(10) && reader.GetInt64(10) != 0,
+                Int(reader, 10) is int kappa && kappa != 0,
                 Str(reader, 11),
                 Str(reader, 12),
                 Str(reader, 13),
@@ -168,10 +168,10 @@ public sealed class DataSnapshot
         if (!schema.ContainsKey("Items"))
             return rows;
 
-        using var cmd = new SqliteCommand("SELECT Id, BsgId, Name FROM Items", connection);
+        using var cmd = new SqliteCommand(Select(schema, "Items", "Id", "BsgId", "Name"), connection);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
-            rows.Add(new ItemRow(reader.GetString(0), Str(reader, 1), reader.IsDBNull(2) ? "" : reader.GetString(2)));
+            rows.Add(new ItemRow(Text(reader, 0), Str(reader, 1), Text(reader, 2)));
 
         return rows;
     }
@@ -183,15 +183,15 @@ public sealed class DataSnapshot
             return rows;
 
         using var cmd = new SqliteCommand(
-            "SELECT QuestId, RequiredQuestId, RequirementType, GroupId FROM QuestRequirements", connection);
+            Select(schema, "QuestRequirements", "QuestId", "RequiredQuestId", "RequirementType", "GroupId"), connection);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
             rows.Add(new RequirementEdge(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.IsDBNull(2) ? "" : reader.GetString(2),
-                reader.IsDBNull(3) ? 0 : (int)reader.GetInt64(3)));
+                Text(reader, 0),
+                Text(reader, 1),
+                Text(reader, 2),
+                Int(reader, 3) ?? 0));
         }
 
         return rows;
@@ -204,14 +204,14 @@ public sealed class DataSnapshot
             return rows;
 
         using var cmd = new SqliteCommand(
-            "SELECT QuestId, TraderName, RequiredLevel FROM QuestTraderRequirements", connection);
+            Select(schema, "QuestTraderRequirements", "QuestId", "TraderName", "RequiredLevel"), connection);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
             rows.Add(new TraderGate(
-                reader.GetString(0),
-                reader.IsDBNull(1) ? "" : reader.GetString(1),
-                reader.IsDBNull(2) ? 0 : (int)reader.GetInt64(2)));
+                Text(reader, 0),
+                Text(reader, 1),
+                Int(reader, 2) ?? 0));
         }
 
         return rows;
@@ -224,16 +224,25 @@ public sealed class DataSnapshot
             return rows;
 
         using var cmd = new SqliteCommand(
-            "SELECT QuestId, SortOrder, Description FROM QuestObjectives ORDER BY QuestId, SortOrder", connection);
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+            Select(schema, "QuestObjectives", "QuestId", "SortOrder", "Description"), connection);
+        using (var reader = cmd.ExecuteReader())
         {
-            rows.Add(new ObjectiveRow(
-                reader.GetString(0),
-                reader.IsDBNull(1) ? 0 : (int)reader.GetInt64(1),
-                reader.IsDBNull(2) ? "" : reader.GetString(2)));
+            while (reader.Read())
+            {
+                rows.Add(new ObjectiveRow(
+                    Text(reader, 0),
+                    Int(reader, 1) ?? 0,
+                    Text(reader, 2)));
+            }
         }
 
+        // Sorted here rather than in SQL: an ORDER BY names its columns, and a database that
+        // dropped one of them has to still read (see Select).
+        rows.Sort((left, right) =>
+        {
+            var byQuest = string.CompareOrdinal(left.QuestId, right.QuestId);
+            return byQuest != 0 ? byQuest : left.SortOrder.CompareTo(right.SortOrder);
+        });
         return rows;
     }
 
@@ -245,22 +254,43 @@ public sealed class DataSnapshot
             return rows;
 
         using var cmd = new SqliteCommand(
-            "SELECT StationId, Level, ItemId, Count FROM HideoutItemRequirements", connection);
+            Select(schema, "HideoutItemRequirements", "StationId", "Level", "ItemId", "Count"), connection);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
             rows.Add(new HideoutItemRequirement(
-                reader.IsDBNull(0) ? "" : reader.GetString(0),
-                reader.IsDBNull(1) ? 0 : (int)reader.GetInt64(1),
-                reader.IsDBNull(2) ? "" : reader.GetString(2),
-                reader.IsDBNull(3) ? 0 : (int)reader.GetInt64(3)));
+                Text(reader, 0),
+                Int(reader, 1) ?? 0,
+                Text(reader, 2),
+                Int(reader, 3) ?? 0));
         }
 
         return rows;
     }
 
+    /// <summary>
+    /// Builds a SELECT over the columns a table is expected to carry, substituting a literal
+    /// NULL for every one this database does not have.
+    /// <para>
+    /// Naming a dropped column in the SQL would abort the read with
+    /// <c>no such column</c>, and the report would never render - including the "Removed column"
+    /// line of the schema delta, which is the single most important thing it can say. A schema
+    /// removal has to be reported, not fatal, so every column this tool reads is optional and
+    /// every reader below tolerates a NULL in its place.
+    /// </para>
+    /// </summary>
+    private static string Select(
+        SortedDictionary<string, TableSchema> schema, string table, params string[] columns)
+    {
+        var projection = columns.Select(column => HasColumn(schema, table, column) ? $"\"{column}\"" : "NULL");
+        return $"SELECT {string.Join(", ", projection)} FROM \"{table}\"";
+    }
+
     private static bool HasColumn(SortedDictionary<string, TableSchema> schema, string table, string column) =>
         schema.TryGetValue(table, out var t) && t.Columns.ContainsKey(column);
+
+    /// <summary>A non-null string for the columns the records model as non-nullable.</summary>
+    private static string Text(IDataRecord reader, int ordinal) => Str(reader, ordinal) ?? "";
 
     private static string? Str(IDataRecord reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);

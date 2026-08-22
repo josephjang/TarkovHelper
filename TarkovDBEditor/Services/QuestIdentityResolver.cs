@@ -90,7 +90,7 @@ namespace TarkovDBEditor.Services
                 if (available.Count == 0)
                     return;
 
-                var (chosen, rule) = ChooseAmong(page.Title, available, index, previous);
+                var (chosen, rule) = ChooseAmong(available, index, previous);
                 matches[page.Title] = chosen;
                 claimed.Add(chosen.Id);
 
@@ -110,6 +110,8 @@ namespace TarkovDBEditor.Services
             }
 
             // Liveness, then identity.
+            var carriedRows = CarryIdentities(ordered, matches, index, previous);
+
             foreach (var page in ordered)
             {
                 matches.TryGetValue(page.Title, out var task);
@@ -124,7 +126,7 @@ namespace TarkovDBEditor.Services
                     continue;
                 }
 
-                var carried = task == null ? null : previous.ByBsgId(task.Id);
+                carriedRows.TryGetValue(page.Title, out var carried);
                 var factionPairShared = task != null && resolution.Collisions
                     .Any(c => c.ChosenTaskId == task.Id && c.Rule == CollisionRule.FactionPair);
 
@@ -143,10 +145,18 @@ namespace TarkovDBEditor.Services
                     FactionPairShared = factionPairShared,
                     PreviousName = carried?.Name,
                 });
-
-                if (task == null)
-                    resolution.WikiOnlyPages.Add(page.Title);
             }
+
+            AssertRowKeysAreUnique(resolution.Quests);
+
+            // Every previous row no imported quest kept the key of: exactly the rows the write
+            // deletes, and the rows whose recorded progress is orphaned in every install. A row
+            // with no external ID is here because nothing in a run can tie its new title to it -
+            // the eighteen seasonal quests are the live example - so the run names them rather
+            // than leaving the loss to a count nobody reads.
+            var keptRowKeys = new HashSet<string>(resolution.Quests.Select(q => q.Id), StringComparer.Ordinal);
+            foreach (var row in previousRows.Where(r => !keptRowKeys.Contains(r.Id)))
+                resolution.UncarriedPreviousRows.Add(row);
 
             var importedTitles = new HashSet<string>(resolution.Quests.Select(q => q.Title), StringComparer.Ordinal);
             foreach (var quest in resolution.Quests.Where(q => q.PreviousName != null && q.PreviousName != q.Title))
@@ -155,7 +165,7 @@ namespace TarkovDBEditor.Services
                 {
                     PreviousName = quest.PreviousName!,
                     Title = quest.Title,
-                    BsgId = quest.Task!.Id,
+                    BsgId = quest.Task?.Id,
                     Id = quest.Id,
                     // The dangerous kind: the old title is now another quest's page, so keying
                     // by page would have moved this quest's progress onto that other quest.
@@ -190,13 +200,116 @@ namespace TarkovDBEditor.Services
         }
 
         /// <summary>
+        /// Decides which previous row, if any, each imported page keeps the key and normalized
+        /// name of, in two passes so that no row is carried onto two pages.
+        /// <para>
+        /// Pass one is the external game id, the strong evidence, and it claims first. Pass two
+        /// is for a page the task set has no record for at all: a seasonal quest, which the API
+        /// carries in no game mode while its season is off. Such a page has no id to match on,
+        /// but the previous database does hold the row published under exactly its title, and
+        /// that row is the one the player's progress is filed against. Without pass two the
+        /// seasonal quests mint a fresh key from the current title on every run - the pre-1.1
+        /// behaviour this whole resolver exists to remove - and their rows are deleted and
+        /// re-inserted, taking the recorded progress with them.
+        /// </para>
+        /// <para>
+        /// Two guards keep pass two from guessing. A row already carried by its game id is not
+        /// available, or two quests would land on one primary key. And a row whose game record
+        /// still exists somewhere in this task set is left alone even when nothing claimed it:
+        /// its quest is still in the game, so a seasonal page wearing the same title is more
+        /// likely one of the eight titles patch 1.1 handed to a different quest than the same
+        /// quest, and attaching the row would move a completion onto the wrong quest.
+        /// </para>
+        /// <para>
+        /// A page whose title changed while it had no game record cannot be carried at all:
+        /// nothing in the run ties the new title to the old row. It mints a fresh key, and the
+        /// abandoned row shows up in the diff report as a removed quest.
+        /// </para>
+        /// </summary>
+        private static Dictionary<string, PreviousQuestRow> CarryIdentities(
+            IReadOnlyList<WikiQuestPage> ordered,
+            IReadOnlyDictionary<string, TarkovDevQuestCacheItem> matches,
+            TaskIndex index,
+            PreviousRowIndex previous)
+        {
+            var carried = new Dictionary<string, PreviousQuestRow>(StringComparer.Ordinal);
+            var claimedRowIds = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var page in ordered)
+            {
+                if (!matches.TryGetValue(page.Title, out var task))
+                    continue;
+
+                var row = previous.ByBsgId(task.Id);
+                if (row != null && claimedRowIds.Add(row.Id))
+                    carried[page.Title] = row;
+            }
+
+            foreach (var page in ordered)
+            {
+                // Only pages that are imported without a game record, which is only the pages
+                // the wiki marks seasonal; everything else with no record is held back.
+                if (matches.ContainsKey(page.Title) || !page.IsSeasonal)
+                    continue;
+
+                var row = previous.ByExactName(page.Title);
+                if (row == null)
+                    continue;
+
+                if (!string.IsNullOrEmpty(row.BsgId) && index.ById(row.BsgId!) != null)
+                    continue;
+
+                if (claimedRowIds.Add(row.Id))
+                    carried[page.Title] = row;
+            }
+
+            return carried;
+        }
+
+        /// <summary>
+        /// Refuses a resolve in which two quests would be published under one row key.
+        /// <para>
+        /// The shape that produces one is a title changing owner: the quest that used to hold
+        /// the title keeps the key minted from it, while the quest that took the title has no
+        /// previous row to carry and mints that very key for itself. Patch 1.1 handed eight
+        /// titles to a different quest, so this is a live shape, not a hypothetical. Downstream
+        /// it is <c>Quests.Id</c>, a primary key: the second row either overwrites the first or
+        /// fails the insert with a constraint error halfway through the write.
+        /// </para>
+        /// <para>
+        /// There is no second key to hand out. The key has to decode back to the title the
+        /// normalized name was computed from, or the publish guard rejects the row and the
+        /// fielded builds cannot find the recorded progress. So the refresh stops here, with
+        /// both quests named, rather than publishing one of them over the other.
+        /// </para>
+        /// </summary>
+        private static void AssertRowKeysAreUnique(IReadOnlyList<ResolvedQuest> quests)
+        {
+            var byRowKey = new Dictionary<string, ResolvedQuest>(StringComparer.Ordinal);
+            foreach (var quest in quests)
+            {
+                if (byRowKey.TryGetValue(quest.Id, out var other))
+                {
+                    throw new InvalidOperationException(
+                        $"'{other.Title}' and '{quest.Title}' would both be published under the row key minted from "
+                        + $"'{WikiQuestIdentity.TitleOf(quest.Id)}', so one would overwrite the other and leave every "
+                        + "install. There is no second key to hand out, so this needs a decision before the refresh "
+                        + "can run: either the two pages matched the wrong game records (the report's collisions and "
+                        + "aliases say which), or the title genuinely changed hands and the quest that took it has to "
+                        + "be given a row key of its own in the database the refresh starts from.");
+                }
+
+                byRowKey[quest.Id] = quest;
+            }
+        }
+
+        /// <summary>
         /// A page claims one of several tasks by a fixed order of evidence, so the choice is
         /// reproducible and reviewable rather than incidental. A plain "lowest id" rule, the
         /// first draft, would have given The Tarkov Shooter - Part 5 the dead record and
         /// dropped the prerequisite Part 6 actually has.
         /// </summary>
         private static (TarkovDevQuestCacheItem Task, CollisionRule Rule) ChooseAmong(
-            string title,
             IReadOnlyList<TarkovDevQuestCacheItem> candidates,
             TaskIndex index,
             PreviousRowIndex previous)
@@ -205,31 +318,75 @@ namespace TarkovDBEditor.Services
                 return (candidates[0], CollisionRule.Single);
 
             // 1. A BEAR/USEC pair behind one page: the page serves both factions, as the four
-            //    published rows for Drip-Out and Textile do today.
-            if (candidates.Count == 2 && IsFactionPair(candidates[0], candidates[1]))
-                return (LowestId(candidates), CollisionRule.FactionPair);
+            //    published rows for Drip-Out and Textile do today. Recognised whenever the
+            //    candidates hold both sides, not only when they are the entire set: a stale
+            //    third record must not turn a shared page into a one-faction quest, because the
+            //    row would then publish a Faction the other faction's players are filtered by
+            //    and the quest would silently leave half the installs.
+            var factionSide = FactionPairChoice(candidates, index);
+            if (factionSide != null)
+                return (factionSide, CollisionRule.FactionPair);
 
             // 2. The record the rest of the game data believes in: some other task requires it.
             var requiredByAnother = candidates.Where(c => index.IsRequiredByAnotherTask(c.Id)).ToList();
             if (requiredByAnother.Count > 0)
                 return (LowestId(requiredByAnother), CollisionRule.RequiredByAnotherTask);
 
-            // 3. The record the user's own log events have already been matching.
-            var previousId = previous.ByPageTitle(title)?.BsgId;
-            var previouslyHeld = candidates.FirstOrDefault(c =>
-                string.Equals(c.Id, previousId, StringComparison.OrdinalIgnoreCase));
-            if (previouslyHeld != null)
-                return (previouslyHeld, CollisionRule.PreviousRow);
+            // 3. The record a previous row already holds: the one the user's recorded
+            //    progress and log events have been matching. Found by the game id, never by
+            //    the page title, because the title is what a patch rotates - a title lookup
+            //    misses every renamed page, and answers with the old owner's row wherever 1.1
+            //    handed a title to a different quest. Several held candidates are still better
+            //    evidence than none, so the newest of them wins, the tie-break step 4 uses.
+            var previouslyHeld = candidates.Where(c => previous.ByBsgId(c.Id) != null).ToList();
+            if (previouslyHeld.Count > 0)
+                return (NewestId(previouslyHeld), CollisionRule.PreviousRow);
 
             // 4. Nothing to go on: the record the game created most recently.
             return (NewestId(candidates), CollisionRule.NewestId);
         }
 
-        private static bool IsFactionPair(TarkovDevQuestCacheItem a, TarkovDevQuestCacheItem b)
+        /// <summary>
+        /// The record to take when one page stands for a BEAR record and a USEC record, or null
+        /// when the candidates are not such a pair.
+        /// <para>
+        /// The side is always BEAR, and that is the point. Each page of a chain is decided on its
+        /// own, so a rule that picked whichever id sorted first could take BEAR for Part 1 and
+        /// USEC for Part 2 - and Part 2's prerequisite would then name the BEAR Part 1 record
+        /// this refresh never imported. <c>BuildRequirements</c> drops a prerequisite it cannot
+        /// resolve without a word, so the app would offer Part 2 to a player who has not started
+        /// Part 1. Pinning the side keeps both halves on the same faction's records. BEAR is what
+        /// all four published faction pages (Drip-Out and Textile, Parts 1 and 2) resolve to
+        /// today, so pinning it moves nothing that ships.
+        /// </para>
+        /// </summary>
+        private static TarkovDevQuestCacheItem? FactionPairChoice(
+            IReadOnlyList<TarkovDevQuestCacheItem> candidates,
+            TaskIndex index)
         {
-            var factions = new[] { a.FactionName, b.FactionName };
-            return factions.Any(f => string.Equals(f, "BEAR", StringComparison.OrdinalIgnoreCase))
-                && factions.Any(f => string.Equals(f, "USEC", StringComparison.OrdinalIgnoreCase));
+            var bear = candidates.Where(c => IsFaction(c, "BEAR")).ToList();
+            var usec = candidates.Where(c => IsFaction(c, "USEC")).ToList();
+            if (bear.Count == 0 || usec.Count == 0)
+                return null;
+
+            return PreferLive(bear, index);
+        }
+
+        private static bool IsFaction(TarkovDevQuestCacheItem task, string faction) =>
+            string.Equals(task.FactionName, faction, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Among records of one faction, the one the rest of the game data believes in: a record
+        /// another task requires beats one nothing requires, so a dead duplicate of the pinned
+        /// side never takes the page. Lowest id decides what is left, so the result does not
+        /// depend on the order upstream served the records in.
+        /// </summary>
+        private static TarkovDevQuestCacheItem PreferLive(
+            IReadOnlyList<TarkovDevQuestCacheItem> candidates,
+            TaskIndex index)
+        {
+            var required = candidates.Where(c => index.IsRequiredByAnotherTask(c.Id)).ToList();
+            return LowestId(required.Count > 0 ? required : candidates);
         }
 
         private static TarkovDevQuestCacheItem LowestId(IReadOnlyList<TarkovDevQuestCacheItem> candidates) =>
@@ -345,7 +502,9 @@ namespace TarkovDBEditor.Services
         private sealed class PreviousRowIndex
         {
             private readonly Dictionary<string, PreviousQuestRow> _byBsgId = new(StringComparer.OrdinalIgnoreCase);
-            private readonly Dictionary<string, PreviousQuestRow> _byName = new(StringComparer.Ordinal);
+
+            /// <summary>Row names only, without the titles keys were minted from; see <see cref="ByExactName"/>.</summary>
+            private readonly Dictionary<string, PreviousQuestRow> _byRowName = new(StringComparer.Ordinal);
 
             public PreviousRowIndex(IReadOnlyList<PreviousQuestRow> rows)
             {
@@ -354,21 +513,23 @@ namespace TarkovDBEditor.Services
                     if (!string.IsNullOrEmpty(row.BsgId))
                         _byBsgId.TryAdd(row.BsgId!, row);
 
-                    _byName.TryAdd(row.Name, row);
-
-                    // Also reachable by the title the row key was minted from, which is what a
-                    // row renamed by an earlier refresh still answers to.
-                    var mintedTitle = WikiQuestIdentity.TitleOf(row.Id);
-                    if (mintedTitle != null)
-                        _byName.TryAdd(mintedTitle, row);
+                    _byRowName.TryAdd(row.Name, row);
                 }
             }
 
             public PreviousQuestRow? ByBsgId(string bsgId) =>
                 _byBsgId.TryGetValue(bsgId, out var row) ? row : null;
 
-            public PreviousQuestRow? ByPageTitle(string title) =>
-                _byName.TryGetValue(title, out var row) ? row : null;
+            /// <summary>
+            /// The row published under exactly this name, for the seasonal pages that have no
+            /// game id to match on. It is the only name lookup the resolver has, and it answers
+            /// for the row's own name only, never for the title a row's key was minted under: a
+            /// page bearing the old title of a row that has since been renamed is the
+            /// title-reuse case, where carrying would move one quest's recorded progress onto
+            /// another.
+            /// </summary>
+            public PreviousQuestRow? ByExactName(string name) =>
+                _byRowName.TryGetValue(name, out var row) ? row : null;
         }
     }
 
@@ -534,7 +695,13 @@ namespace TarkovDBEditor.Services
     {
         public required string PreviousName { get; init; }
         public required string Title { get; init; }
-        public required string BsgId { get; init; }
+
+        /// <summary>
+        /// The external game id the rename was recognised by, or null for a quest that carried
+        /// its row without one (a seasonal page, matched to its previous row by title).
+        /// </summary>
+        public required string? BsgId { get; init; }
+
         public required string Id { get; init; }
 
         /// <summary>True when another imported quest now carries the old title.</summary>
@@ -557,9 +724,22 @@ namespace TarkovDBEditor.Services
         public List<TaskWithoutPage> TasksWithoutPage { get; } = new();
         public List<PageCollision> Collisions { get; } = new();
         public List<QuestRename> Renames { get; } = new();
-        public List<string> WikiOnlyPages { get; } = new();
+
+        /// <summary>
+        /// The previous rows no imported quest kept the key of. These rows are deleted by the
+        /// write, and the progress recorded against them in every install is orphaned.
+        /// </summary>
+        public List<PreviousQuestRow> UncarriedPreviousRows { get; } = new();
+
         public List<string> AliasesUsed { get; } = new();
         public List<QuestMatchOverride> UnusedAliases { get; } = new();
+
+        /// <summary>
+        /// The pages imported on the wiki's seasonal marker alone. Derived from
+        /// <see cref="Quests"/> rather than maintained beside it, so the two cannot disagree.
+        /// </summary>
+        public IReadOnlyList<string> WikiOnlyPages =>
+            Quests.Where(q => q.IsWikiOnly).Select(q => q.Title).ToList();
 
         public IEnumerable<QuestRename> TitleReuses => Renames.Where(r => r.TitleReused);
     }
@@ -597,9 +777,9 @@ namespace TarkovDBEditor.Services
     }
 
     /// <summary>
-    /// Loads <c>Resources/Data/quest-match-overrides.json</c>. Every entry is validated on
-    /// load, so a malformed list fails immediately and visibly instead of silently matching
-    /// nothing halfway through a regeneration.
+    /// Loads <c>Resources/Data/quest-match-overrides.json</c>. The file has to be there and
+    /// every entry is validated on load, so a missing or malformed list fails immediately and
+    /// visibly instead of silently matching nothing halfway through a regeneration.
     /// </summary>
     public static class QuestMatchOverrides
     {
@@ -610,12 +790,28 @@ namespace TarkovDBEditor.Services
         public static string DefaultPath => Path.Combine(
             AppDomain.CurrentDomain.BaseDirectory, "Resources", "Data", FileName);
 
-        /// <summary>Reads the list from <paramref name="path"/>; a missing file means no aliases.</summary>
+        /// <summary>
+        /// Reads the list from <paramref name="path"/>, or from <see cref="DefaultPath"/>.
+        /// <para>
+        /// A missing file is a failure, not an empty list. The file is deployed beside the
+        /// editor by the <c>Resources\Data\*.json</c> copy rule; if it stops arriving, every
+        /// entry silently matches nothing, the pages it bridges are held back, and the handful
+        /// of quests involved are too few to trip the lost-match guard. They would simply
+        /// disappear from every install. An intentionally empty list is a different thing and
+        /// still loads: it is a file with no entries, which is a curator's decision on record.
+        /// </para>
+        /// </summary>
         public static List<QuestMatchOverride> Load(string? path = null)
         {
             path ??= DefaultPath;
             if (!File.Exists(path))
-                return new List<QuestMatchOverride>();
+            {
+                throw new InvalidOperationException(
+                    $"{path} is missing. The alias list bridges the pages whose game record links to a title that is "
+                    + "not a wiki page; without it those quests match nothing and leave the published database "
+                    + "without anything else looking wrong. Restore the file (it ships from "
+                    + $"TarkovDBEditor\\Resources\\Data\\{FileName}) before refreshing.");
+            }
 
             return Parse(File.ReadAllText(path), path);
         }

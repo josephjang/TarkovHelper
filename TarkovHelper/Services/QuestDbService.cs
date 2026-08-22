@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Models;
@@ -193,7 +194,10 @@ public sealed class QuestDbService
         var hasWikiPageLink = await ColumnExistsAsync(connection, "Quests", "WikiPageLink");
         _log.Debug($"BsgId column exists: {hasBsgId}");
 
-        // NormalizedName이 없으면 Name에서 생성
+        // NormalizedName이 없으면 Name에서 생성.
+        // This expression is the normalized-name rule. GenerateNormalizedName below is its C#
+        // twin, applied when the column exists but a row's value is NULL; change one and you
+        // must change the other, or two builds will key the same quest's progress differently.
         var normalizedNameExpr = hasNormalizedName
             ? "NormalizedName"
             : "LOWER(REPLACE(REPLACE(REPLACE(Name, ' ', '-'), '''', ''), '.', ''))";
@@ -221,11 +225,29 @@ public sealed class QuestDbService
         {
             var id = reader.GetString(0);
             var bsgId = reader.IsDBNull(1) ? null : reader.GetString(1);
+            var name = reader.IsDBNull(2) ? "" : reader.GetString(2);
+
+            // NormalizedName이 NULL이면 Name에서 생성 (있으면 안 되는 상황이므로 경고 로그)
+            // The stored column is what recorded progress is keyed by, so a row that has none is
+            // an anomaly worth seeing in the log: the value derived here is only as good as the
+            // name, and a name the publisher changed derives a key the user's progress is not
+            // filed under. GenerateNormalizedName reproduces normalizedNameExpr exactly, so the
+            // derived value at least agrees with what every other build computes.
+            string normalizedName;
+            if (reader.IsDBNull(11))
+            {
+                normalizedName = GenerateNormalizedName(name);
+                _log.Warning($"Quest '{name}' ({id}) has no NormalizedName; derived '{normalizedName}' from its name");
+            }
+            else
+            {
+                normalizedName = reader.GetString(11);
+            }
 
             var quest = new TarkovTask
             {
                 Ids = new List<string> { id },
-                Name = reader.IsDBNull(2) ? "" : reader.GetString(2),
+                Name = name,
                 NameKo = reader.IsDBNull(3) ? null : reader.GetString(3),
                 NameJa = reader.IsDBNull(4) ? null : reader.GetString(4),
                 Trader = reader.IsDBNull(5) ? "" : reader.GetString(5),
@@ -234,7 +256,7 @@ public sealed class QuestDbService
                 RequiredScavKarma = reader.IsDBNull(8) ? null : reader.GetDouble(8),
                 ReqKappa = !reader.IsDBNull(9) && reader.GetInt32(9) == 1,
                 Faction = reader.IsDBNull(10) ? null : reader.GetString(10),
-                NormalizedName = reader.IsDBNull(11) ? GenerateNormalizedName(reader.GetString(2)) : reader.GetString(11),
+                NormalizedName = normalizedName,
                 RequiredEdition = reader.IsDBNull(12) ? null : reader.GetString(12),
                 ExcludedEdition = reader.IsDBNull(13) ? null : reader.GetString(13),
                 RequiredPrestigeLevel = reader.IsDBNull(14) ? null : reader.GetInt32(14),
@@ -286,23 +308,53 @@ public sealed class QuestDbService
     }
 
     /// <summary>
-    /// Name에서 NormalizedName 생성
+    /// Name에서 NormalizedName 생성.
+    /// <para>
+    /// The C# twin of <c>normalizedNameExpr</c> in <see cref="LoadBaseQuestsAsync"/>:
+    /// <c>LOWER(REPLACE(REPLACE(REPLACE(Name, ' ', '-'), '''', ''), '.', ''))</c>. There is one
+    /// normalized-name rule and this must be it, because recorded progress
+    /// (<c>QuestProgress.NormalizedName</c>) is keyed by whatever the rule produces: a spelling
+    /// only this method computes would file a quest's progress under a name no other component
+    /// looks it up by, and nothing would report an error.
+    /// </para>
+    /// <para>
+    /// So: spaces become dashes, the ASCII apostrophe (U+0027) and the period are dropped, and
+    /// A-Z is lowered. Only A-Z, because that is all SQLite's <c>LOWER</c> does here (the
+    /// bundled e_sqlite3 is built without ICU, so it leaves every non-ASCII letter alone), and
+    /// nothing else is dropped, because SQLite's <c>REPLACE</c> chain drops nothing else. The
+    /// typographic apostrophe U+2019 in "What's on the Flash Drive?" survives for that reason,
+    /// as do the comma, question mark, colon and quote this used to strip.
+    /// </para>
+    /// <para>
+    /// TarkovDBEditor writes the stored column from its own copy of this rule
+    /// (<c>QuestNormalizedName.SqlForm</c>); the two cannot share code because the editor
+    /// depends on nothing in this project. TarkovHelper.Tests pins all three spellings - this
+    /// one, the editor's, and the SQL itself evaluated by SQLite - against each other.
+    /// </para>
     /// </summary>
-    private string GenerateNormalizedName(string name)
+    public static string GenerateNormalizedName(string? name)
     {
-        if (string.IsNullOrWhiteSpace(name))
+        if (string.IsNullOrEmpty(name))
             return "";
 
-        return name.ToLowerInvariant()
-            .Replace(" ", "-")
-            .Replace("'", "")
-            .Replace("'", "")
-            .Replace(".", "")
-            .Replace(",", "")
-            .Replace("?", "")
-            .Replace("!", "")
-            .Replace(":", "")
-            .Replace("\"", "");
+        var result = new StringBuilder(name.Length);
+        foreach (var c in name)
+        {
+            switch (c)
+            {
+                case ' ':
+                    result.Append('-');
+                    break;
+                case '\'':
+                case '.':
+                    break;
+                default:
+                    result.Append(c is >= 'A' and <= 'Z' ? (char)(c + ('a' - 'A')) : c);
+                    break;
+            }
+        }
+
+        return result.ToString();
     }
 
     /// <summary>
@@ -313,8 +365,14 @@ public sealed class QuestDbService
         if (!await TableExistsAsync(connection, "QuestRequirements"))
             return false;
 
-        var sql = @"
-            SELECT QuestId, RequiredQuestId, RequirementType, GroupId
+        // A second requirement type the same row is also satisfied by ("complete or failed" is
+        // the case it exists for). Feature-detected: a database published before the column
+        // exists reads exactly as it always did.
+        var hasAltRequirementType =
+            await ColumnExistsAsync(connection, "QuestRequirements", "AltRequirementType");
+
+        var sql = $@"
+            SELECT QuestId, RequiredQuestId, RequirementType, GroupId{(hasAltRequirementType ? ", AltRequirementType" : "")}
             FROM QuestRequirements
             ORDER BY QuestId, GroupId";
 
@@ -327,6 +385,7 @@ public sealed class QuestDbService
             var requiredQuestId = reader.GetString(1);
             var requirementType = reader.IsDBNull(2) ? "Complete" : reader.GetString(2);
             var groupId = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
+            var altRequirementType = hasAltRequirementType && !reader.IsDBNull(4) ? reader.GetString(4) : null;
 
             if (!questLookup.TryGetValue(questId, out var quest))
                 continue;
@@ -346,7 +405,18 @@ public sealed class QuestDbService
                 quest.Previous.Add(requiredNormalizedName);
             }
 
+            // Both type columns become entries in one Status list: QuestProgressService's
+            // IsStatusSatisfied is satisfied when ANY entry matches, which is exactly what a row
+            // naming two types means.
+            var statuses = new List<string> { requirementType.ToLowerInvariant() };
+            if (!string.IsNullOrEmpty(altRequirementType))
+                statuses.Add(altRequirementType.ToLowerInvariant());
+
             // TaskRequirements에 상세 정보 추가 (GroupId 포함)
+            // One row per prerequisite: a second row naming the same one is dropped, GroupId and
+            // all. The publisher enforces the same rule (RefreshGuards.AssertPublishConstraints
+            // refuses a quest with two rows for one prerequisite), because a row this drops would
+            // be a row every installed build silently ignores.
             quest.TaskRequirements ??= new List<TaskRequirement>();
             var existing = quest.TaskRequirements.FirstOrDefault(r =>
                 r.TaskId.Equals(requiredQuestId, StringComparison.OrdinalIgnoreCase));
@@ -357,7 +427,7 @@ public sealed class QuestDbService
                 {
                     TaskId = requiredQuestId,
                     TaskNormalizedName = requiredNormalizedName ?? "",
-                    Status = new List<string> { requirementType.ToLowerInvariant() },
+                    Status = statuses,
                     GroupId = groupId
                 });
             }
