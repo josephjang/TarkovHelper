@@ -191,6 +191,14 @@ namespace TarkovDBEditor.Services
 
         /// <summary>
         /// 제외할 퀘스트 목록 가져오기 (이벤트, 시즌, 레거시)
+        /// <para>
+        /// A failure here is fatal to the crawl, exactly as the Category:Quests fetch is. This
+        /// used to swallow every exception and move on, which turned one timed-out request into
+        /// a crawl that published the whole missing category as live quests: Historical content
+        /// alone holds 320 pages inside Category:Quests, 35 of which still have a live
+        /// tarkov.dev record and would therefore ship. A missing category is not an error to
+        /// begin with, because MediaWiki answers it with an empty member list and a 200.
+        /// </para>
         /// </summary>
         private async Task<HashSet<string>> GetExcludedQuestsAsync(
             Action<string>? progress = null,
@@ -211,14 +219,26 @@ namespace TarkovDBEditor.Services
                         url += $"&cmcontinue={Uri.EscapeDataString(continueToken)}";
                     }
 
+                    JsonDocument doc;
                     try
                     {
                         var response = await _httpClient.GetAsync(url, cancellationToken);
                         response.EnsureSuccessStatusCode();
 
                         var json = await response.Content.ReadAsStringAsync(cancellationToken);
-                        using var doc = JsonDocument.Parse(json);
+                        doc = JsonDocument.Parse(json);
+                    }
+                    catch (Exception ex) when (ex is HttpRequestException or JsonException
+                        || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested))
+                    {
+                        throw new InvalidOperationException(
+                            $"Could not read Category:{category}, which lists the pages the crawl excludes. "
+                            + "Continuing would publish every page of that category as a live quest. "
+                            + $"Run the crawl again when the wiki answers: {ex.Message}", ex);
+                    }
 
+                    using (doc)
+                    {
                         if (doc.RootElement.TryGetProperty("query", out var query) &&
                             query.TryGetProperty("categorymembers", out var members))
                         {
@@ -239,13 +259,10 @@ namespace TarkovDBEditor.Services
                             continueToken = cmcontinue.GetString();
                         }
                     }
-                    catch
-                    {
-                        break; // 카테고리가 없을 수 있음
-                    }
                 } while (!string.IsNullOrEmpty(continueToken));
             }
 
+            WriteLog($"Excluded categories read in full: {excluded.Count} pages across {ExcludeCategories.Length} categories");
             return excluded;
         }
 
@@ -340,6 +357,34 @@ namespace TarkovDBEditor.Services
         }
 
         /// <summary>
+        /// Drops the cached pages the crawl no longer lists, so the cache says what the category
+        /// says. Without this a page that once entered the cache stays there for good, and the
+        /// from-cache refresh keeps publishing it as a live quest long after the category (or an
+        /// exclusion category) stopped naming it. Returns how many entries were dropped.
+        /// </summary>
+        public int PruneCacheTo(IReadOnlyCollection<string> crawledPages)
+        {
+            // A crawl that listed nothing is a failed crawl, and pruning to it would empty the
+            // cache, which is the failure every guard downstream exists to prevent.
+            if (crawledPages.Count == 0)
+                return 0;
+
+            var live = new HashSet<string>(crawledPages, StringComparer.Ordinal);
+            var stale = _questCache.Keys.Where(title => !live.Contains(title)).ToList();
+            foreach (var title in stale)
+                _questCache.Remove(title);
+
+            if (stale.Count > 0)
+            {
+                WriteLog(
+                    $"Pruned {stale.Count} cached pages the quest list no longer names: "
+                    + string.Join(", ", stale.Take(10)));
+            }
+
+            return stale.Count;
+        }
+
+        /// <summary>
         /// 퀘스트 캐시 업데이트 (리비전 비교)
         /// </summary>
         public async Task<QuestCacheUpdateResult> UpdateQuestCacheAsync(
@@ -350,6 +395,10 @@ namespace TarkovDBEditor.Services
             var result = new QuestCacheUpdateResult();
             var questList = questNames.ToList();
             result.TotalQuests = questList.Count;
+
+            var pruned = PruneCacheTo(questList);
+            if (pruned > 0)
+                progress?.Invoke($"Dropped {pruned} cached pages the quest list no longer names");
 
             progress?.Invoke($"Checking {questList.Count} quests for updates...");
 
@@ -445,7 +494,6 @@ namespace TarkovDBEditor.Services
                             cached.RequiredEdition = ExtractRequiredEdition(content);
                             cached.ExcludedEdition = ExtractExcludedEdition(content);
                             cached.RequiredDecodeCount = ExtractRequiredDecodeCount(content);
-                            cached.IsSeasonal = ExtractIsSeasonal(content);
                         }
 
                         completed++;
@@ -1856,8 +1904,10 @@ namespace TarkovDBEditor.Services
                     Id = WikiQuestIdentity.IdFor(questName),
                     Name = questName,
                     NameEN = questName,
+                    // Read from the page text, the same way the refresh reads it. Anything
+                    // stored beside the text can be older than the text.
+                    IsSeasonal = ExtractIsSeasonal(cached.PageContent ?? ""),
                     WikiPageLink = WikiQuestIdentity.PageLinkFor(questName),
-                    IsSeasonal = cached.IsSeasonal,
                 });
             }
 
@@ -1932,13 +1982,12 @@ namespace TarkovDBEditor.Services
         [JsonPropertyName("requiredDecodeCount")]
         public int? RequiredDecodeCount { get; set; }
 
-        /// <summary>
-        /// True when the page's Requirements section marks the quest as playable only in the
-        /// current season. Such a page is imported without a game record; see
-        /// <see cref="WikiQuestService.ExtractIsSeasonal"/>.
-        /// </summary>
-        [JsonPropertyName("isSeasonal")]
-        public bool IsSeasonal { get; set; }
+        // There is deliberately no IsSeasonal field here. It used to be stored beside the page
+        // text and assigned only where the content is fetched, which the crawl skips for every
+        // page whose revision is unchanged, so a cache written before the marker existed
+        // answered false forever while the refresh, reading the page text, imported the quest.
+        // Both readers now derive it from PageContent through ExtractIsSeasonal, which is the
+        // only way the two cannot disagree.
 
         [JsonPropertyName("cachedAt")]
         public DateTime CachedAt { get; set; }

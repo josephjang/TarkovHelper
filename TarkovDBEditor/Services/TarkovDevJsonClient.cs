@@ -24,10 +24,18 @@ namespace TarkovDBEditor.Services
     /// </para>
     /// <para>
     /// The client is deliberately strict where the old transport was lenient: an empty task
-    /// set, a task without an id or a <c>wikiLink</c>, and an HTTP failure all throw. The
-    /// path this closes is the one that produced the January regeneration: a 200 carrying an
-    /// error body parsed to an empty set, which then overwrote the cache with <c>{}</c> and
-    /// left every published quest without an external ID for seven months.
+    /// set, a record without an id, and an HTTP failure all throw. The path this closes is the
+    /// one that produced the January regeneration: a 200 carrying an error body parsed to an
+    /// empty set, which then overwrote the cache with <c>{}</c> and left every published quest
+    /// without an external ID for seven months. The strictness is aimed at the whole set: a
+    /// single odd record (a task with no <c>wikiLink</c>, an item whose wiki page another item
+    /// already claimed) is carried or reported, never made to block a regeneration.
+    /// </para>
+    /// <para>
+    /// Conditional requests are the caller's to complete: every fetch hands back a result whose
+    /// <see cref="TarkovDevFetch{T}.CommitETags"/> the caller invokes once the value is on disk.
+    /// Until then the client keeps asking unconditionally, so a cache file that never got
+    /// written is never mistaken for one upstream has confirmed current.
     /// </para>
     /// See docs/decisions/feature-quest-data-1-1-refresh.spec.md, "json.tarkov.dev client".
     /// </summary>
@@ -105,6 +113,10 @@ namespace TarkovDBEditor.Services
         /// per-trader loyalty and the prerequisite list, plus Korean and Japanese names.
         /// Returns null when every file in the group answered 304, meaning the caller's
         /// existing cache is still current.
+        /// <para>
+        /// The caller must call <see cref="TarkovDevFetch{T}.CommitETags"/> once it has the
+        /// result on disk; see that method for why the fetch cannot do it itself.
+        /// </para>
         /// </summary>
         public async Task<TarkovDevFetch<List<TarkovDevQuestCacheItem>>?> FetchTasksAsync(
             bool conditional = true,
@@ -120,24 +132,21 @@ namespace TarkovDBEditor.Services
                 return null;
             }
 
-            var payload = Deserialize<JsonEnvelope<JsonTasksData>>(group.Bodies[0], TasksPath);
-            var rawTasks = payload?.Data?.Tasks;
-            if (rawTasks == null || rawTasks.Count == 0)
-            {
-                // Never write an empty cache: see the class remarks.
-                throw new InvalidOperationException(
-                    $"{_baseUrl}{TasksPath} returned no tasks. Refusing to overwrite the cache with an empty set.");
-            }
+            var rawTasks = ReadCollection<JsonTasksData, JsonTask>(group, TasksPath, "tasks", d => d.Tasks);
 
             var locales = ReadLocales(group, TasksPath);
             var quests = new List<TarkovDevQuestCacheItem>(rawTasks.Count);
+            var droppedGates = new DroppedTraderGates(TasksPath);
 
+            // A task with no wikiLink is carried, not refused. It cannot be matched to a wiki
+            // page by link, but QuestIdentityResolver still matches it by normalized name and
+            // reports it as a game record with no page when nothing claims it. Refusing would
+            // fail the whole part, and once the task cache went stale enough the refresh guard
+            // would block every regeneration, on a data condition upstream can create at will.
             foreach (var (id, task) in rawTasks)
             {
                 if (string.IsNullOrEmpty(task?.Id))
                     throw new InvalidOperationException($"{TasksPath}: task '{id}' has no id.");
-                if (string.IsNullOrEmpty(task.WikiLink))
-                    throw new InvalidOperationException($"{TasksPath}: task '{task.Id}' has no wikiLink.");
 
                 var nameEn = locales.Resolve(EnglishLanguage, task.Name) ?? "";
 
@@ -154,14 +163,15 @@ namespace TarkovDBEditor.Services
                     KappaRequired = task.KappaRequired,
                     FactionName = task.FactionName,
                     AvailableDelaySecondsMin = task.AvailableDelaySecondsMin,
-                    TraderLevelRequirements = BuildTraderLevelRequirements(task.TraderRequirements),
+                    TraderLevelRequirements = BuildTraderLevelRequirements(task.TraderRequirements, droppedGates),
                     TaskRequirements = BuildTaskRequirements(task.TaskRequirements),
+                    FailConditions = BuildFailConditions(task.FailConditions),
                 });
             }
 
             progress?.Invoke($"Fetched {quests.Count} tasks from json.tarkov.dev");
-            CommitETags(group);
-            return new TarkovDevFetch<List<TarkovDevQuestCacheItem>>(quests, group.SourceLastModified);
+            droppedGates.Report(progress);
+            return Fetched(quests, group);
         }
 
         /// <summary>
@@ -182,16 +192,11 @@ namespace TarkovDBEditor.Services
                 return null;
             }
 
-            var payload = Deserialize<JsonEnvelope<JsonItemsData>>(group.Bodies[0], ItemsPath);
-            var rawItems = payload?.Data?.Items;
-            if (rawItems == null || rawItems.Count == 0)
-            {
-                throw new InvalidOperationException(
-                    $"{_baseUrl}{ItemsPath} returned no items. Refusing to overwrite the cache with an empty set.");
-            }
+            var rawItems = ReadCollection<JsonItemsData, JsonItem>(group, ItemsPath, "items", d => d.Items);
 
             var locales = ReadLocales(group, ItemsPath);
             var result = new Dictionary<string, TarkovDevMultiLangItem>(StringComparer.OrdinalIgnoreCase);
+            var sharedPages = new List<string>();
 
             foreach (var (id, item) in rawItems)
             {
@@ -200,12 +205,21 @@ namespace TarkovDBEditor.Services
                 if (string.IsNullOrEmpty(item.WikiLink))
                     continue;
 
+                var pageKey = NormalizeWikiLink(item.WikiLink);
+                if (result.TryGetValue(pageKey, out var alreadyOnThePage))
+                {
+                    // Two items on one wiki page are a wiki defect the page-keyed item pipeline
+                    // cannot resolve. The first entry keeps the page, so which item wins does
+                    // not depend on how far down a 16 MB file the collision happens to sit, and
+                    // the pair is reported rather than one silently overwriting the other.
+                    sharedPages.Add($"{pageKey} (kept {alreadyOnThePage.BsgId}, dropped {item.Id})");
+                    continue;
+                }
+
                 var nameEn = locales.Resolve(EnglishLanguage, item.Name) ?? "";
                 var shortEn = locales.Resolve(EnglishLanguage, item.ShortName) ?? "";
 
-                // Later duplicates lose, as they did under the GraphQL transport; two items
-                // sharing a wiki page are a wiki defect the item pipeline cannot resolve.
-                result[NormalizeWikiLink(item.WikiLink)] = new TarkovDevMultiLangItem
+                result[pageKey] = new TarkovDevMultiLangItem
                 {
                     BsgId = item.Id,
                     WikiLink = item.WikiLink,
@@ -221,8 +235,13 @@ namespace TarkovDBEditor.Services
             }
 
             progress?.Invoke($"Fetched {result.Count} items from json.tarkov.dev");
-            CommitETags(group);
-            return new TarkovDevFetch<Dictionary<string, TarkovDevMultiLangItem>>(result, group.SourceLastModified);
+            if (sharedPages.Count > 0)
+            {
+                progress?.Invoke(
+                    $"{ItemsPath}: {sharedPages.Count} wiki page(s) claimed by more than one item: {Summarize(sharedPages)}");
+            }
+
+            return Fetched(result, group);
         }
 
         /// <summary>The trader list, including the sixteenth trader 1.1 added (Survivor).</summary>
@@ -240,13 +259,8 @@ namespace TarkovDBEditor.Services
                 return null;
             }
 
-            var payload = Deserialize<JsonEnvelope<Dictionary<string, JsonTrader>>>(group.Bodies[0], TradersPath);
-            var rawTraders = payload?.Data;
-            if (rawTraders == null || rawTraders.Count == 0)
-            {
-                throw new InvalidOperationException(
-                    $"{_baseUrl}{TradersPath} returned no traders. Refusing to overwrite the cache with an empty set.");
-            }
+            var rawTraders = ReadCollection<Dictionary<string, JsonTrader>, JsonTrader>(
+                group, TradersPath, "traders", d => d);
 
             var locales = ReadLocales(group, TradersPath);
             var traders = new List<TarkovDevTraderCacheItem>(rawTraders.Count);
@@ -269,8 +283,7 @@ namespace TarkovDBEditor.Services
             }
 
             progress?.Invoke($"Fetched {traders.Count} traders from json.tarkov.dev");
-            CommitETags(group);
-            return new TarkovDevFetch<List<TarkovDevTraderCacheItem>>(traders, group.SourceLastModified);
+            return Fetched(traders, group);
         }
 
         /// <summary>
@@ -298,13 +311,8 @@ namespace TarkovDBEditor.Services
                 return null;
             }
 
-            var payload = Deserialize<JsonEnvelope<Dictionary<string, JsonHideoutStation>>>(group.Bodies[0], HideoutPath);
-            var rawStations = payload?.Data;
-            if (rawStations == null || rawStations.Count == 0)
-            {
-                throw new InvalidOperationException(
-                    $"{_baseUrl}{HideoutPath} returned no stations. Refusing to overwrite the cache with an empty set.");
-            }
+            var rawStations = ReadCollection<Dictionary<string, JsonHideoutStation>, JsonHideoutStation>(
+                group, HideoutPath, "stations", d => d);
 
             var locales = ReadLocales(group, HideoutPath);
             var itemsById = new Dictionary<string, TarkovDevMultiLangItem>(StringComparer.OrdinalIgnoreCase);
@@ -321,22 +329,38 @@ namespace TarkovDBEditor.Services
                     tradersById[trader.Id] = trader;
             }
 
-            // Station names live under the station's own key, so a station referenced only as
-            // another station's prerequisite still resolves to a display name.
-            var stationNames = rawStations.Values
-                .Where(s => !string.IsNullOrEmpty(s?.Id))
-                .ToDictionary(s => s!.Id!, s => s!.Name, StringComparer.OrdinalIgnoreCase);
-
-            var stations = new List<TarkovDevHideoutStation>(rawStations.Count);
+            // Identity first, before anything reads a station: the outer key is not required to
+            // equal the record's own id, and a station served twice under one id would collapse
+            // into a single row with whichever levels happened to be read last. Station names
+            // are collected in the same pass and live under the station's own id, so a station
+            // referenced only as another station's prerequisite still resolves to a name.
+            var stationNames = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            var stationKeysById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var rawStationList = new List<(string Id, JsonHideoutStation Station)>(rawStations.Count);
             foreach (var (key, station) in rawStations)
             {
                 if (string.IsNullOrEmpty(station?.Id))
                     throw new InvalidOperationException($"{HideoutPath}: station '{key}' has no id.");
 
+                if (!stationKeysById.TryAdd(station.Id, key))
+                {
+                    throw new InvalidOperationException(
+                        $"{HideoutPath}: station id '{station.Id}' is served twice, under keys "
+                        + $"'{stationKeysById[station.Id]}' and '{key}'.");
+                }
+
+                stationNames[station.Id] = station.Name;
+                rawStationList.Add((station.Id, station));
+            }
+
+            var droppedGates = new DroppedTraderGates(HideoutPath);
+            var stations = new List<TarkovDevHideoutStation>(rawStationList.Count);
+            foreach (var (stationId, station) in rawStationList)
+            {
                 var stationNameEn = locales.Resolve(EnglishLanguage, station.Name) ?? "";
                 var dbStation = new TarkovDevHideoutStation
                 {
-                    Id = station.Id,
+                    Id = stationId,
                     Name = stationNameEn,
                     NameKo = TarkovDevDataService.ResolveLocalizedQuestName(locales.Resolve("ko", station.Name), stationNameEn),
                     NameJa = TarkovDevDataService.ResolveLocalizedQuestName(locales.Resolve("ja", station.Name), stationNameEn),
@@ -396,9 +420,15 @@ namespace TarkovDBEditor.Services
                     foreach (var req in level.TraderRequirements ?? new List<JsonTraderRequirement>())
                     {
                         // The endpoint mixes loyalty and reputation gates in one list; the
-                        // hideout schema only models loyalty levels.
-                        if (!IsLoyaltyLevelRequirement(req) || string.IsNullOrEmpty(req.Trader))
+                        // hideout schema only models loyalty levels. A gate it cannot hold is
+                        // counted and reported: a dropped gate shows a station as buildable
+                        // that the game refuses to build.
+                        var loyaltyLevel = ReadLoyaltyLevel(req);
+                        if (loyaltyLevel == null || string.IsNullOrEmpty(req.Trader))
+                        {
+                            droppedGates.Note(req);
                             continue;
+                        }
 
                         tradersById.TryGetValue(req.Trader, out var trader);
                         dbLevel.TraderRequirements.Add(new TarkovDevHideoutTraderReq
@@ -407,7 +437,7 @@ namespace TarkovDBEditor.Services
                             TraderName = trader?.Name ?? "",
                             TraderNameKo = trader?.NameKO,
                             TraderNameJa = trader?.NameJA,
-                            Level = (int)Math.Round(req.Value),
+                            Level = loyaltyLevel.Value,
                         });
                     }
 
@@ -434,8 +464,8 @@ namespace TarkovDBEditor.Services
             }
 
             progress?.Invoke($"Fetched {stations.Count} hideout stations from json.tarkov.dev");
-            CommitETags(group);
-            return new TarkovDevFetch<List<TarkovDevHideoutStation>>(stations, group.SourceLastModified);
+            droppedGates.Report(progress);
+            return Fetched(stations, group);
         }
 
         #endregion
@@ -443,16 +473,35 @@ namespace TarkovDBEditor.Services
         #region Mapping helpers
 
         /// <summary>
+        /// The loyalty level a trader requirement names, or null when the app's schema has no
+        /// reading for it.
+        /// <para>
         /// Only <c>level</c> entries are loyalty gates. The endpoint also carries
-        /// <c>reputation</c> entries (12 tasks, Collector among them), which the app's schema
-        /// cannot express, and <c>&gt;=</c> is the only comparison the app's "at least level N"
-        /// reading is true for.
+        /// <c>reputation</c> entries (12 tasks, Collector among them), which the schema has no
+        /// column for. The app reads a stored level as "at least N", so <c>&gt;=</c> and
+        /// <c>=</c> both map to N and <c>&gt;</c> maps to N + 1; a <c>&lt;</c> or <c>&lt;=</c>
+        /// upper bound has no "at least" reading and is the one shape genuinely dropped.
+        /// Dropping a gate the schema could have held would show a quest as available, or a
+        /// station as buildable, that the game refuses.
+        /// </para>
         /// </summary>
-        private static bool IsLoyaltyLevelRequirement(JsonTraderRequirement req) =>
-            string.Equals(req.RequirementType, "level", StringComparison.OrdinalIgnoreCase)
-            && (string.IsNullOrEmpty(req.CompareMethod) || req.CompareMethod == ">=");
+        private static int? ReadLoyaltyLevel(JsonTraderRequirement req)
+        {
+            if (!string.Equals(req.RequirementType, "level", StringComparison.OrdinalIgnoreCase))
+                return null;
 
-        private static List<TarkovDevTaskTraderLevel> BuildTraderLevelRequirements(List<JsonTraderRequirement>? source)
+            var level = (int)Math.Round(req.Value);
+            return (req.CompareMethod ?? "").Trim() switch
+            {
+                "" or ">=" or "=" => level,
+                ">" => level + 1,
+                _ => null,
+            };
+        }
+
+        private static List<TarkovDevTaskTraderLevel> BuildTraderLevelRequirements(
+            List<JsonTraderRequirement>? source,
+            DroppedTraderGates dropped)
         {
             var result = new List<TarkovDevTaskTraderLevel>();
             if (source == null)
@@ -460,18 +509,72 @@ namespace TarkovDBEditor.Services
 
             foreach (var req in source)
             {
-                if (!IsLoyaltyLevelRequirement(req) || string.IsNullOrEmpty(req.Trader))
+                var level = ReadLoyaltyLevel(req);
+                if (level == null || string.IsNullOrEmpty(req.Trader))
+                {
+                    dropped.Note(req);
                     continue;
+                }
 
                 result.Add(new TarkovDevTaskTraderLevel
                 {
                     TraderId = req.Trader,
-                    Level = (int)Math.Round(req.Value),
+                    Level = level.Value,
                 });
             }
 
             return result;
         }
+
+        /// <summary>
+        /// The trader requirements one fetch could not carry into the app's schema, kept so the
+        /// fetch can report them instead of dropping them silently. Reputation gates are the
+        /// known case the schema has no column for and are only counted; anything else is named,
+        /// because an unreadable gate is either a schema shape nobody has modelled yet or an
+        /// upstream change, and both want a human to look.
+        /// </summary>
+        private sealed class DroppedTraderGates
+        {
+            private readonly string _path;
+            private readonly List<string> _unreadable = new();
+            private int _reputation;
+
+            public DroppedTraderGates(string path) => _path = path;
+
+            public void Note(JsonTraderRequirement req)
+            {
+                if (string.Equals(req.RequirementType, "reputation", StringComparison.OrdinalIgnoreCase))
+                {
+                    _reputation++;
+                    return;
+                }
+
+                _unreadable.Add(
+                    $"{req.RequirementType ?? "(no type)"} {req.CompareMethod ?? "(no comparison)"} "
+                    + $"{req.Value} with trader {(string.IsNullOrEmpty(req.Trader) ? "(none)" : req.Trader)}");
+            }
+
+            public void Report(Action<string>? progress)
+            {
+                if (progress == null)
+                    return;
+
+                if (_reputation > 0)
+                    progress($"{_path}: dropped {_reputation} reputation gate(s); the schema holds loyalty levels only.");
+
+                if (_unreadable.Count > 0)
+                {
+                    progress($"{_path}: dropped {_unreadable.Count} trader requirement(s) with no loyalty level "
+                             + $"reading: {Summarize(_unreadable)}");
+                }
+            }
+        }
+
+        /// <summary>The first few entries of a report line, with a count when more were left out.</summary>
+        private static string Summarize(IReadOnlyList<string> entries, int max = 5) =>
+            entries.Count <= max
+                ? string.Join("; ", entries)
+                : string.Join("; ", entries.Take(max)) + $"; and {entries.Count - max} more";
 
         private static List<TarkovDevTaskPrerequisite> BuildTaskRequirements(List<JsonTaskRequirement>? source)
         {
@@ -494,6 +597,32 @@ namespace TarkovDBEditor.Services
             return result;
         }
 
+        /// <summary>
+        /// What the game records as failing a task. Every kind is carried, not only the
+        /// <c>taskStatus</c> one the pipeline acts on: a prerequisite that could not be turned
+        /// into an OR group is reported with what does fail it, and "a Lightkeeper standing"
+        /// says more to the reader than "not a quest". Only <c>taskStatus</c> carries a task id,
+        /// so the others keep it null.
+        /// </summary>
+        private static List<TarkovDevTaskFailCondition> BuildFailConditions(List<JsonTaskFailCondition>? source)
+        {
+            var result = new List<TarkovDevTaskFailCondition>();
+            if (source == null)
+                return result;
+
+            foreach (var condition in source)
+            {
+                result.Add(new TarkovDevTaskFailCondition
+                {
+                    Type = condition.Type ?? "",
+                    TaskId = string.IsNullOrEmpty(condition.Task) ? null : condition.Task,
+                    Status = condition.Status ?? new List<string>(),
+                });
+            }
+
+            return result;
+        }
+
         /// <summary>URL-decodes a wiki link so <c>%28</c> and <c>(</c> compare equal.</summary>
         internal static string NormalizeWikiLink(string wikiLink)
         {
@@ -508,6 +637,32 @@ namespace TarkovDBEditor.Services
             {
                 return wikiLink;
             }
+        }
+
+        /// <summary>
+        /// The collection one endpoint's data file carries, or a refusal. Never an empty set: a
+        /// 200 carrying an error body parsed to <c>{}</c> is what emptied the cache in January,
+        /// so the check lives here once rather than in each fetch, where a fifth endpoint could
+        /// omit it.
+        /// </summary>
+        /// <param name="noun">What the endpoint serves, as the refusal names it ("tasks").</param>
+        /// <param name="select">
+        /// The collection inside the envelope's <c>data</c>. Some endpoints nest it under a
+        /// field, some serve the records as <c>data</c> itself.
+        /// </param>
+        private Dictionary<string, TRecord> ReadCollection<TData, TRecord>(
+            EndpointGroup group, string path, string noun, Func<TData, Dictionary<string, TRecord>?> select)
+            where TData : class
+        {
+            var payload = Deserialize<JsonEnvelope<TData>>(group.Bodies[0], path);
+            var records = payload?.Data is { } data ? select(data) : null;
+            if (records == null || records.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"{_baseUrl}{path} returned no {noun}. Refusing to overwrite the cache with an empty set.");
+            }
+
+            return records;
         }
 
         private static T? Deserialize<T>(string body, string path)
@@ -664,9 +819,19 @@ namespace TarkovDBEditor.Services
         #region ETag store
 
         /// <summary>
-        /// Records the group's ETags once its models parsed, never before: an advanced ETag
-        /// after a failed parse would make the next run answer 304 and keep the cache the
-        /// failure was meant to replace.
+        /// Hands the caller a fetch result whose ETags are recorded only when it says the cache
+        /// file built from the value reached the disk. Parsing is not the last step that can
+        /// fail, so the fetch cannot commit them itself; see
+        /// <see cref="TarkovDevFetch{T}.CommitETags"/>.
+        /// </summary>
+        private TarkovDevFetch<T> Fetched<T>(T value, EndpointGroup group) =>
+            new(value, group.SourceLastModified) { ETagCommit = () => CommitETags(group) };
+
+        /// <summary>
+        /// Records the group's ETags. Called from <see cref="TarkovDevFetch{T}.CommitETags"/>
+        /// once the caller has the parsed models on disk, never before: an ETag that names an
+        /// upstream revision no cache file holds makes the next run answer 304 and keep the very
+        /// copy the failure was meant to replace, while every freshness check reads as green.
         /// </summary>
         private void CommitETags(EndpointGroup group)
         {
@@ -754,10 +919,25 @@ namespace TarkovDBEditor.Services
             [JsonPropertyName("availableDelaySecondsMin")] public int AvailableDelaySecondsMin { get; set; }
             [JsonPropertyName("taskRequirements")] public List<JsonTaskRequirement>? TaskRequirements { get; set; }
             [JsonPropertyName("traderRequirements")] public List<JsonTraderRequirement>? TraderRequirements { get; set; }
+            [JsonPropertyName("failConditions")] public List<JsonTaskFailCondition>? FailConditions { get; set; }
         }
 
         private sealed class JsonTaskRequirement
         {
+            [JsonPropertyName("task")] public string? Task { get; set; }
+            [JsonPropertyName("status")] public List<string>? Status { get; set; }
+        }
+
+        /// <summary>
+        /// A <c>failConditions</c> entry. Shares its <c>task</c>/<c>status</c> shape with
+        /// <see cref="JsonTaskRequirement"/> but is a different relation: a task requirement
+        /// says what has to be true to start, a fail condition what makes the game give up on it.
+        /// The entries also carry zones, maps, counts and a description, none of which the
+        /// schema has anywhere to put.
+        /// </summary>
+        private sealed class JsonTaskFailCondition
+        {
+            [JsonPropertyName("type")] public string? Type { get; set; }
             [JsonPropertyName("task")] public string? Task { get; set; }
             [JsonPropertyName("status")] public List<string>? Status { get; set; }
         }
@@ -847,5 +1027,23 @@ namespace TarkovDBEditor.Services
     /// What one endpoint fetch produced, with the upstream <c>Last-Modified</c> so the refresh
     /// log can state the data's age rather than the cache file's.
     /// </summary>
-    public sealed record TarkovDevFetch<T>(T Value, DateTime? SourceLastModified);
+    public sealed record TarkovDevFetch<T>(T Value, DateTime? SourceLastModified)
+    {
+        /// <summary>Supplied by the client that produced the fetch. See <see cref="CommitETags"/>.</summary>
+        internal Action? ETagCommit { get; init; }
+
+        /// <summary>
+        /// Records this fetch's ETags, so the next run may be told 304 and keep what it has.
+        /// <para>
+        /// Call it only once <see cref="Value"/> is on disk. The ETag store and the cache file
+        /// are one claim in two places ("the copy we hold is upstream revision X"), and the
+        /// store must never be the fresher of the two: if it names a revision the cache file
+        /// does not hold, the next run answers 304, re-stamps the stale file as verified, and
+        /// every downstream freshness guard passes on data from before the patch. Not calling
+        /// it costs one unconditional fetch, never correctness, so this is the safe direction
+        /// for a caller to get wrong.
+        /// </para>
+        /// </summary>
+        public void CommitETags() => ETagCommit?.Invoke();
+    }
 }
