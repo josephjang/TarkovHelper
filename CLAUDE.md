@@ -31,7 +31,7 @@ dotnet run --project TarkovHelper/TarkovHelper.csproj
 |---------|-------------|
 | **TarkovHelper** | Main WPF application for tracking quests, hideouts, items |
 | **TarkovDBEditor** | Database editor tool for managing tarkov_data.db (see `TarkovDBEditor/CLAUDE.md` for details) |
-| **CheckDb** | Utility project (.NET 10) |
+| **tools/DataDiff** | Console tool that compares two published databases into the markdown report a regeneration is reviewed against |
 
 ## Documentation & Decision Docs
 
