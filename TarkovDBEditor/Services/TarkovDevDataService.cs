@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -12,13 +11,26 @@ using System.Threading.Tasks;
 namespace TarkovDBEditor.Services
 {
     /// <summary>
-    /// tarkov.dev GraphQL API를 사용하여 아이템 데이터를 가져오는 서비스
-    /// wikiPageLink 기준으로 매칭하여 bsgId, nameEN, nameKO, nameJA를 채움
+    /// Owns the tarkov.dev cache files under <c>wiki_data/cache/</c>: what is in them, how old
+    /// they are, and how they are refilled. The refresh pipeline reads only these files, never
+    /// the network, so a regeneration is repeatable and a network outage cannot half-fill a
+    /// database.
+    /// <para>
+    /// The transport is <see cref="TarkovDevJsonClient"/> (json.tarkov.dev). The GraphQL
+    /// endpoint this service used to POST to has answered "GraphQL server unavailable" since
+    /// about 2026-07-22 and its queries never requested the fields the 1.1 refresh needs
+    /// (minimum level, Kappa flag, per-trader loyalty, prerequisites, faction), so it was
+    /// replaced rather than kept as a fallback: a second transport that cannot be exercised
+    /// is untested code on the critical path.
+    /// </para>
+    /// <para>
+    /// Every part is refilled in isolation: a part that fails, or that upstream reports
+    /// unchanged, keeps the file it already had, and the result says which.
+    /// </para>
     /// </summary>
     public class TarkovDevDataService : IDisposable
     {
-        private readonly HttpClient _httpClient;
-        private const string GraphQLEndpoint = "https://api.tarkov.dev/graphql";
+        private readonly TarkovDevJsonClient _jsonClient;
 
         private readonly string _cacheDir;
         private readonly string _itemsCachePath;
@@ -26,12 +38,10 @@ namespace TarkovDBEditor.Services
         private readonly string _hideoutCachePath;
         private readonly string _tradersCachePath;
 
-        public TarkovDevDataService(string? basePath = null)
-        {
-            _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "TarkovDBEditor/1.0");
-            _httpClient.Timeout = TimeSpan.FromMinutes(5);
+        private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
 
+        public TarkovDevDataService(string? basePath = null, TarkovDevJsonClient? jsonClient = null)
+        {
             basePath ??= Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "wiki_data");
             _cacheDir = Path.Combine(basePath, "cache");
             _itemsCachePath = Path.Combine(_cacheDir, "tarkov_dev_items.json");
@@ -40,266 +50,222 @@ namespace TarkovDBEditor.Services
             _tradersCachePath = Path.Combine(_cacheDir, "tarkov_dev_traders.json");
 
             Directory.CreateDirectory(_cacheDir);
+
+            _jsonClient = jsonClient ?? new TarkovDevJsonClient(_cacheDir);
         }
 
         #region Cache Management
 
-        /// <summary>
-        /// 캐시된 아이템 데이터가 있는지 확인
-        /// </summary>
-        public bool HasCachedItems()
-        {
-            return File.Exists(_itemsCachePath);
-        }
+        public bool HasCachedItems() => File.Exists(_itemsCachePath);
+
+        public bool HasCachedQuests() => File.Exists(_questsCachePath);
+
+        public bool HasCachedHideout() => File.Exists(_hideoutCachePath);
+
+        public bool HasCachedTraders() => File.Exists(_tradersCachePath);
 
         /// <summary>
-        /// 캐시된 퀘스트 데이터가 있는지 확인
-        /// </summary>
-        public bool HasCachedQuests()
-        {
-            return File.Exists(_questsCachePath);
-        }
-
-        /// <summary>
-        /// 캐시된 Hideout 데이터가 있는지 확인
-        /// </summary>
-        public bool HasCachedHideout()
-        {
-            return File.Exists(_hideoutCachePath);
-        }
-
-        /// <summary>
-        /// 캐시된 Traders 데이터가 있는지 확인
-        /// </summary>
-        public bool HasCachedTraders()
-        {
-            return File.Exists(_tradersCachePath);
-        }
-
-        /// <summary>
-        /// 캐시 정보 가져오기 (캐시 날짜, 아이템 수, 퀘스트 수, Hideout 수, Traders 수)
+        /// A tolerant status read for the UI: counts and ages, with an unreadable file
+        /// reported as absent rather than thrown. The pipeline uses the Load methods below,
+        /// which are not tolerant.
+        /// <para>
+        /// "Cached at" is the file's last write time, not the <c>cachedAt</c> field inside it,
+        /// because a part upstream reports unchanged is re-stamped rather than rewritten: the
+        /// question the age answers is "when did we last confirm this is current".
+        /// </para>
         /// </summary>
         public TarkovDevCacheInfo GetCacheInfo()
         {
             var info = new TarkovDevCacheInfo();
 
-            if (File.Exists(_itemsCachePath))
-            {
-                try
-                {
-                    var fileInfo = new FileInfo(_itemsCachePath);
-                    info.ItemsCachedAt = fileInfo.LastWriteTime;
+            info.ItemsCachedAt = TryGetWriteTime(_itemsCachePath);
+            info.ItemsCount = TryCount(_itemsCachePath, json =>
+                JsonSerializer.Deserialize<TarkovDevItemsCache>(json)?.Items?.Count ?? 0);
 
-                    var json = File.ReadAllText(_itemsCachePath);
-                    var cache = JsonSerializer.Deserialize<TarkovDevItemsCache>(json);
-                    info.ItemsCount = cache?.Items?.Count ?? 0;
-                }
-                catch { }
-            }
+            info.QuestsCachedAt = TryGetWriteTime(_questsCachePath);
+            info.QuestsCount = TryCount(_questsCachePath, json =>
+                JsonSerializer.Deserialize<TarkovDevQuestsCache>(json)?.Quests?.Count ?? 0);
 
-            if (File.Exists(_questsCachePath))
-            {
-                try
-                {
-                    var fileInfo = new FileInfo(_questsCachePath);
-                    info.QuestsCachedAt = fileInfo.LastWriteTime;
+            info.HideoutCachedAt = TryGetWriteTime(_hideoutCachePath);
+            info.HideoutCount = TryCount(_hideoutCachePath, json =>
+                JsonSerializer.Deserialize<TarkovDevHideoutCache>(json)?.Stations?.Count ?? 0);
 
-                    var json = File.ReadAllText(_questsCachePath);
-                    var cache = JsonSerializer.Deserialize<TarkovDevQuestsCache>(json);
-                    info.QuestsCount = cache?.Quests?.Count ?? 0;
-                }
-                catch { }
-            }
-
-            if (File.Exists(_hideoutCachePath))
-            {
-                try
-                {
-                    var fileInfo = new FileInfo(_hideoutCachePath);
-                    info.HideoutCachedAt = fileInfo.LastWriteTime;
-
-                    var json = File.ReadAllText(_hideoutCachePath);
-                    var cache = JsonSerializer.Deserialize<TarkovDevHideoutCache>(json);
-                    info.HideoutCount = cache?.Stations?.Count ?? 0;
-                }
-                catch { }
-            }
-
-            if (File.Exists(_tradersCachePath))
-            {
-                try
-                {
-                    var fileInfo = new FileInfo(_tradersCachePath);
-                    info.TradersCachedAt = fileInfo.LastWriteTime;
-
-                    var json = File.ReadAllText(_tradersCachePath);
-                    var cache = JsonSerializer.Deserialize<TarkovDevTradersCache>(json);
-                    info.TradersCount = cache?.Traders?.Count ?? 0;
-                }
-                catch { }
-            }
+            info.TradersCachedAt = TryGetWriteTime(_tradersCachePath);
+            info.TradersCount = TryCount(_tradersCachePath, json =>
+                JsonSerializer.Deserialize<TarkovDevTradersCache>(json)?.Traders?.Count ?? 0);
 
             return info;
         }
 
+        private static DateTime? TryGetWriteTime(string path)
+        {
+            try
+            {
+                return File.Exists(path) ? new FileInfo(path).LastWriteTime : null;
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+
+        private static int TryCount(string path, Func<string, int> count)
+        {
+            try
+            {
+                return File.Exists(path) ? count(File.ReadAllText(path)) : 0;
+            }
+            catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+            {
+                return 0;
+            }
+        }
+
         /// <summary>
-        /// 캐시된 아이템 데이터 로드
+        /// Reads one cache file. A missing file returns null (the caller decides whether that
+        /// is fatal); a file that is present but unreadable throws, because silently treating
+        /// a damaged cache as "no cache" is how a refresh ends up writing English names or
+        /// NULL external IDs over good data.
         /// </summary>
+        private static async Task<T?> LoadCacheAsync<T>(string path, CancellationToken cancellationToken)
+            where T : class
+        {
+            if (!File.Exists(path))
+                return null;
+
+            var json = await File.ReadAllTextAsync(path, cancellationToken);
+            try
+            {
+                return JsonSerializer.Deserialize<T>(json);
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException(
+                    $"{path} is not a readable tarkov.dev cache file ({ex.Message}). " +
+                    "Delete it and run 'Debug > Cache Tarkov Dev Data'.", ex);
+            }
+        }
+
+        /// <summary>Cached items, keyed by the URL-decoded wiki page link.</summary>
         public async Task<Dictionary<string, TarkovDevMultiLangItem>?> LoadCachedItemsAsync(
             CancellationToken cancellationToken = default)
         {
-            if (!File.Exists(_itemsCachePath))
-                return null;
-
-            try
-            {
-                var json = await File.ReadAllTextAsync(_itemsCachePath, cancellationToken);
-                var cache = JsonSerializer.Deserialize<TarkovDevItemsCache>(json);
-                return cache?.Items;
-            }
-            catch
-            {
-                return null;
-            }
+            var cache = await LoadCacheAsync<TarkovDevItemsCache>(_itemsCachePath, cancellationToken);
+            return cache?.Items;
         }
 
         /// <summary>
-        /// 캐시된 퀘스트 데이터 로드
+        /// Cached tasks. A list, not a dictionary keyed by <c>wikiLink</c>: ten wiki titles are
+        /// the link of two or three tasks, and the old dictionary silently kept whichever it
+        /// saw last. Choosing among them is <see cref="QuestIdentityResolver"/>'s job and it
+        /// needs to see all of them.
         /// </summary>
-        public async Task<Dictionary<string, TarkovDevQuestCacheItem>?> LoadCachedQuestsAsync(
+        public async Task<List<TarkovDevQuestCacheItem>?> LoadCachedQuestsAsync(
             CancellationToken cancellationToken = default)
         {
-            if (!File.Exists(_questsCachePath))
-                return null;
-
-            try
-            {
-                var json = await File.ReadAllTextAsync(_questsCachePath, cancellationToken);
-                var cache = JsonSerializer.Deserialize<TarkovDevQuestsCache>(json);
-                return cache?.Quests;
-            }
-            catch
-            {
-                return null;
-            }
+            var cache = await LoadCacheAsync<TarkovDevQuestsCache>(_questsCachePath, cancellationToken);
+            return cache?.Quests;
         }
 
-        /// <summary>
-        /// 캐시된 Hideout 데이터 로드
-        /// </summary>
         public async Task<List<TarkovDevHideoutStation>?> LoadCachedHideoutAsync(
             CancellationToken cancellationToken = default)
         {
-            if (!File.Exists(_hideoutCachePath))
-                return null;
-
-            try
-            {
-                var json = await File.ReadAllTextAsync(_hideoutCachePath, cancellationToken);
-                var cache = JsonSerializer.Deserialize<TarkovDevHideoutCache>(json);
-                return cache?.Stations;
-            }
-            catch
-            {
-                return null;
-            }
+            var cache = await LoadCacheAsync<TarkovDevHideoutCache>(_hideoutCachePath, cancellationToken);
+            return cache?.Stations;
         }
 
-        /// <summary>
-        /// 캐시된 Traders 데이터 로드
-        /// </summary>
         public async Task<List<TarkovDevTraderCacheItem>?> LoadCachedTradersAsync(
             CancellationToken cancellationToken = default)
         {
-            if (!File.Exists(_tradersCachePath))
-                return null;
-
-            try
-            {
-                var json = await File.ReadAllTextAsync(_tradersCachePath, cancellationToken);
-                var cache = JsonSerializer.Deserialize<TarkovDevTradersCache>(json);
-                return cache?.Traders;
-            }
-            catch
-            {
-                return null;
-            }
+            var cache = await LoadCacheAsync<TarkovDevTradersCache>(_tradersCachePath, cancellationToken);
+            return cache?.Traders;
         }
 
-        /// <summary>
-        /// 아이템 데이터 캐시에 저장
-        /// </summary>
         public async Task SaveItemsCacheAsync(
             Dictionary<string, TarkovDevMultiLangItem> items,
+            DateTime? sourceLastModified = null,
             CancellationToken cancellationToken = default)
         {
-            var cache = new TarkovDevItemsCache
+            await WriteCacheAsync(_itemsCachePath, new TarkovDevItemsCache
             {
                 CachedAt = DateTime.UtcNow,
+                SourceLastModified = sourceLastModified,
                 Items = items
-            };
-
-            var options = new JsonSerializerOptions { WriteIndented = true };
-            var json = JsonSerializer.Serialize(cache, options);
-            await File.WriteAllTextAsync(_itemsCachePath, json, cancellationToken);
+            }, cancellationToken);
         }
 
-        /// <summary>
-        /// 퀘스트 데이터 캐시에 저장
-        /// </summary>
         public async Task SaveQuestsCacheAsync(
-            Dictionary<string, TarkovDevQuestCacheItem> quests,
+            List<TarkovDevQuestCacheItem> quests,
+            DateTime? sourceLastModified = null,
             CancellationToken cancellationToken = default)
         {
-            var cache = new TarkovDevQuestsCache
+            await WriteCacheAsync(_questsCachePath, new TarkovDevQuestsCache
             {
                 CachedAt = DateTime.UtcNow,
+                SourceLastModified = sourceLastModified,
                 Quests = quests
-            };
-
-            var options = new JsonSerializerOptions { WriteIndented = true };
-            var json = JsonSerializer.Serialize(cache, options);
-            await File.WriteAllTextAsync(_questsCachePath, json, cancellationToken);
+            }, cancellationToken);
         }
 
-        /// <summary>
-        /// Hideout 데이터 캐시에 저장
-        /// </summary>
         public async Task SaveHideoutCacheAsync(
             List<TarkovDevHideoutStation> stations,
+            DateTime? sourceLastModified = null,
             CancellationToken cancellationToken = default)
         {
-            var cache = new TarkovDevHideoutCache
+            await WriteCacheAsync(_hideoutCachePath, new TarkovDevHideoutCache
             {
                 CachedAt = DateTime.UtcNow,
+                SourceLastModified = sourceLastModified,
                 Stations = stations
-            };
-
-            var options = new JsonSerializerOptions { WriteIndented = true };
-            var json = JsonSerializer.Serialize(cache, options);
-            await File.WriteAllTextAsync(_hideoutCachePath, json, cancellationToken);
+            }, cancellationToken);
         }
 
-        /// <summary>
-        /// Traders 데이터 캐시에 저장
-        /// </summary>
         public async Task SaveTradersCacheAsync(
             List<TarkovDevTraderCacheItem> traders,
+            DateTime? sourceLastModified = null,
             CancellationToken cancellationToken = default)
         {
-            var cache = new TarkovDevTradersCache
+            await WriteCacheAsync(_tradersCachePath, new TarkovDevTradersCache
             {
                 CachedAt = DateTime.UtcNow,
+                SourceLastModified = sourceLastModified,
                 Traders = traders
-            };
+            }, cancellationToken);
+        }
 
-            var options = new JsonSerializerOptions { WriteIndented = true };
-            var json = JsonSerializer.Serialize(cache, options);
-            await File.WriteAllTextAsync(_tradersCachePath, json, cancellationToken);
+        private static async Task WriteCacheAsync<T>(string path, T cache, CancellationToken cancellationToken)
+        {
+            var json = JsonSerializer.Serialize(cache, WriteOptions);
+            await File.WriteAllTextAsync(path, json, cancellationToken);
         }
 
         /// <summary>
-        /// tarkov.dev에서 모든 데이터를 다운로드하고 캐시에 저장
+        /// Records that a part upstream reported unchanged was confirmed current now, without
+        /// rewriting its body (the items file is 16 MB). The staleness guard in the refresh
+        /// reads this timestamp.
+        /// </summary>
+        private static void MarkVerified(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Costs one unconditional fetch on a later run; never correctness.
+            }
+        }
+
+        /// <summary>
+        /// Refills every cache file from json.tarkov.dev. Parts are independent: one that
+        /// throws, and one upstream reports unchanged, both leave the existing file in place,
+        /// and the result records which happened and how old the kept file is.
+        /// <para>
+        /// Order matters. Hideout levels reference items and traders by id only, so those two
+        /// parts are read (fresh, or from the cache when unchanged) before the hideout part
+        /// can name what a level requires.
+        /// </para>
         /// </summary>
         public async Task<TarkovDevCacheResult> CacheAllDataAsync(
             Action<string>? progress = null,
@@ -307,184 +273,127 @@ namespace TarkovDBEditor.Services
         {
             var result = new TarkovDevCacheResult();
 
-            try
+            var items = await RunPartAsync(result.Items, progress, cancellationToken, async () =>
             {
-                // 아이템 데이터 다운로드 및 캐시
-                progress?.Invoke("Downloading items from tarkov.dev...");
-                var items = await FetchAllLanguagesAsync(progress, cancellationToken);
-                await SaveItemsCacheAsync(items, cancellationToken);
-                result.ItemsCount = items.Count;
-                result.ItemsSuccess = true;
-                progress?.Invoke($"Cached {items.Count} items from tarkov.dev");
-            }
-            catch (Exception ex)
-            {
-                result.ItemsError = ex.Message;
-                progress?.Invoke($"Failed to cache items: {ex.Message}");
-            }
+                var fetched = await _jsonClient.FetchItemsAsync(HasCachedItems(), progress, cancellationToken);
+                if (fetched == null)
+                {
+                    MarkVerified(_itemsCachePath);
+                    return (await LoadCachedItemsAsync(cancellationToken), true, (DateTime?)null);
+                }
 
-            try
-            {
-                // 퀘스트 데이터 다운로드 및 캐시
-                progress?.Invoke("Downloading quests from tarkov.dev...");
-                var quests = await FetchAllQuestsAsync(progress, cancellationToken);
-                await SaveQuestsCacheAsync(quests, cancellationToken);
-                result.QuestsCount = quests.Count;
-                result.QuestsSuccess = true;
-                progress?.Invoke($"Cached {quests.Count} quests from tarkov.dev");
-            }
-            catch (Exception ex)
-            {
-                result.QuestsError = ex.Message;
-                progress?.Invoke($"Failed to cache quests: {ex.Message}");
-            }
+                await SaveItemsCacheAsync(fetched.Value, fetched.SourceLastModified, cancellationToken);
+                return (fetched.Value, false, fetched.SourceLastModified);
+            }, v => v?.Count ?? 0);
 
-            try
+            var traders = await RunPartAsync(result.Traders, progress, cancellationToken, async () =>
             {
-                // Hideout 데이터 다운로드 및 캐시
-                progress?.Invoke("Downloading hideout stations from tarkov.dev...");
-                var hideout = await FetchAllHideoutAsync(progress, cancellationToken);
-                await SaveHideoutCacheAsync(hideout, cancellationToken);
-                result.HideoutCount = hideout.Count;
-                result.HideoutSuccess = true;
-                progress?.Invoke($"Cached {hideout.Count} hideout stations from tarkov.dev");
-            }
-            catch (Exception ex)
-            {
-                result.HideoutError = ex.Message;
-                progress?.Invoke($"Failed to cache hideout: {ex.Message}");
-            }
+                var fetched = await _jsonClient.FetchTradersAsync(HasCachedTraders(), progress, cancellationToken);
+                if (fetched == null)
+                {
+                    MarkVerified(_tradersCachePath);
+                    return (await LoadCachedTradersAsync(cancellationToken), true, (DateTime?)null);
+                }
 
-            try
+                await SaveTradersCacheAsync(fetched.Value, fetched.SourceLastModified, cancellationToken);
+                return (fetched.Value, false, fetched.SourceLastModified);
+            }, v => v?.Count ?? 0);
+
+            await RunPartAsync(result.Quests, progress, cancellationToken, async () =>
             {
-                // Traders 데이터 다운로드 및 캐시
-                progress?.Invoke("Downloading traders from tarkov.dev...");
-                var traders = await FetchAllTradersAsync(progress, cancellationToken);
-                await SaveTradersCacheAsync(traders, cancellationToken);
-                result.TradersCount = traders.Count;
-                result.TradersSuccess = true;
-                progress?.Invoke($"Cached {traders.Count} traders from tarkov.dev");
-            }
-            catch (Exception ex)
+                var fetched = await _jsonClient.FetchTasksAsync(HasCachedQuests(), progress, cancellationToken);
+                if (fetched == null)
+                {
+                    MarkVerified(_questsCachePath);
+                    return (await LoadCachedQuestsAsync(cancellationToken), true, (DateTime?)null);
+                }
+
+                await SaveQuestsCacheAsync(fetched.Value, fetched.SourceLastModified, cancellationToken);
+                return (fetched.Value, false, fetched.SourceLastModified);
+            }, v => v?.Count ?? 0);
+
+            await RunPartAsync(result.Hideout, progress, cancellationToken, async () =>
             {
-                result.TradersError = ex.Message;
-                progress?.Invoke($"Failed to cache traders: {ex.Message}");
-            }
+                if (items == null || traders == null)
+                {
+                    throw new InvalidOperationException(
+                        "Hideout levels name their items and traders by id only, so the items and traders "
+                        + "caches must be readable first. Fix those parts and re-run.");
+                }
+
+                var fetched = await _jsonClient.FetchHideoutAsync(
+                    items.Values, traders, HasCachedHideout(), progress, cancellationToken);
+                if (fetched == null)
+                {
+                    MarkVerified(_hideoutCachePath);
+                    return (await LoadCachedHideoutAsync(cancellationToken), true, (DateTime?)null);
+                }
+
+                await SaveHideoutCacheAsync(fetched.Value, fetched.SourceLastModified, cancellationToken);
+                return (fetched.Value, false, fetched.SourceLastModified);
+            }, v => v?.Count ?? 0);
 
             result.CachedAt = DateTime.Now;
             return result;
         }
 
         /// <summary>
-        /// tarkov.dev에서 퀘스트 다국어 데이터 가져오기
+        /// Runs one cache part, recording success, an upstream-unchanged keep, or the failure
+        /// that left the old file alone. Returns the part's value so a later part can use it.
         /// </summary>
-        public async Task<Dictionary<string, TarkovDevQuestCacheItem>> FetchAllQuestsAsync(
-            Action<string>? progress = null,
-            CancellationToken cancellationToken = default)
+        private async Task<T?> RunPartAsync<T>(
+            TarkovDevCachePart part,
+            Action<string>? progress,
+            CancellationToken cancellationToken,
+            Func<Task<(T? Value, bool Kept, DateTime? SourceLastModified)>> fetch,
+            Func<T?, int> count)
+            where T : class
         {
-            progress?.Invoke("Fetching quests from tarkov.dev API...");
-
-            var query = @"
+            try
             {
-                tasks(lang: en) {
-                    id
-                    tarkovDataId
-                    name
-                    normalizedName
-                    wikiLink
-                    trader { name }
-                }
-                ko: tasks(lang: ko) { id name }
-                ja: tasks(lang: ja) { id name }
-            }";
-
-            var requestBody = JsonSerializer.Serialize(new { query });
-            var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync(GraphQLEndpoint, content, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
-            using var doc = JsonDocument.Parse(json);
-
-            var result = new Dictionary<string, TarkovDevQuestCacheItem>(StringComparer.OrdinalIgnoreCase);
-
-            if (!doc.RootElement.TryGetProperty("data", out var data))
-                return result;
-
-            // 한국어, 일본어 맵 생성
-            var koNames = new Dictionary<string, string>();
-            var jaNames = new Dictionary<string, string>();
-
-            if (data.TryGetProperty("ko", out var koTasks))
-            {
-                foreach (var task in koTasks.EnumerateArray())
-                {
-                    var id = task.GetProperty("id").GetString();
-                    var name = task.GetProperty("name").GetString();
-                    if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                        koNames[id] = name;
-                }
+                var (value, kept, sourceLastModified) = await fetch();
+                part.Success = true;
+                part.Kept = kept;
+                part.Count = count(value);
+                part.CachedAt = TryGetWriteTime(CachePathFor(part.Name));
+                part.SourceLastModified = sourceLastModified;
+                progress?.Invoke(kept
+                    ? $"{part.Name}: unchanged upstream, kept {part.Count} from {part.CachedAt:yyyy-MM-dd HH:mm}"
+                    : $"{part.Name}: cached {part.Count}");
+                return value;
             }
-
-            if (data.TryGetProperty("ja", out var jaTasks))
+            catch (OperationCanceledException)
             {
-                foreach (var task in jaTasks.EnumerateArray())
-                {
-                    var id = task.GetProperty("id").GetString();
-                    var name = task.GetProperty("name").GetString();
-                    if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                        jaNames[id] = name;
-                }
+                throw;
             }
-
-            // 영어 기준으로 병합
-            if (data.TryGetProperty("tasks", out var tasks))
+            catch (Exception ex)
             {
-                foreach (var task in tasks.EnumerateArray())
-                {
-                    var id = task.GetProperty("id").GetString();
-                    var name = task.GetProperty("name").GetString();
-                    var normalizedName = task.TryGetProperty("normalizedName", out var nn) ? nn.GetString() : null;
-                    var wikiLink = task.TryGetProperty("wikiLink", out var wl) ? wl.GetString() : null;
-                    var tarkovDataId = task.TryGetProperty("tarkovDataId", out var tdid) && tdid.ValueKind == JsonValueKind.Number ? tdid.GetInt32() : (int?)null;
-                    var trader = task.TryGetProperty("trader", out var tr) && tr.ValueKind == JsonValueKind.Object && tr.TryGetProperty("name", out var tn) ? tn.GetString() : null;
-
-                    if (string.IsNullOrEmpty(id))
-                        continue;
-
-                    var quest = new TarkovDevQuestCacheItem
-                    {
-                        Id = id,
-                        TarkovDataId = tarkovDataId,
-                        NameEN = name ?? "",
-                        NormalizedName = normalizedName,
-                        NameKO = ResolveLocalizedQuestName(koNames.TryGetValue(id, out var ko) ? ko : null, name ?? ""),
-                        NameJA = ResolveLocalizedQuestName(jaNames.TryGetValue(id, out var ja) ? ja : null, name ?? ""),
-                        Trader = trader,
-                        WikiLink = wikiLink
-                    };
-
-                    // wikiLink가 있으면 키로 사용, 없으면 ID 사용
-                    if (!string.IsNullOrEmpty(wikiLink))
-                    {
-                        result[wikiLink] = quest;
-                    }
-                    else if (!string.IsNullOrEmpty(id))
-                    {
-                        result[id] = quest;
-                    }
-                }
+                part.Success = false;
+                part.Kept = File.Exists(CachePathFor(part.Name));
+                part.Error = ex.Message;
+                part.CachedAt = TryGetWriteTime(CachePathFor(part.Name));
+                progress?.Invoke($"{part.Name}: failed ({ex.Message})"
+                    + (part.Kept ? $"; kept the copy from {part.CachedAt:yyyy-MM-dd HH:mm}" : "; no cache to keep"));
+                return null;
             }
-
-            progress?.Invoke($"Fetched {result.Count} quests from tarkov.dev");
-            return result;
         }
 
+        private string CachePathFor(string partName) => partName switch
+        {
+            TarkovDevCacheResult.ItemsPart => _itemsCachePath,
+            TarkovDevCacheResult.QuestsPart => _questsCachePath,
+            TarkovDevCacheResult.HideoutPart => _hideoutCachePath,
+            TarkovDevCacheResult.TradersPart => _tradersCachePath,
+            _ => throw new ArgumentOutOfRangeException(nameof(partName), partName, "Unknown tarkov.dev cache part.")
+        };
+
+        #endregion
+
         /// <summary>
-        /// 퀘스트의 현지화 이름(KO/JA)을 결정한다.
-        /// 번역이 없거나(누락/공백) 영문과 동일하면 null을 반환해, 미번역 퀘스트가 영문 폴백 대신
-        /// NULL로 저장되도록 한다(Trader/Item 경로와 동일한 규칙).
+        /// Decides a quest's localized name. A missing, blank, or English-identical translation
+        /// becomes NULL so an untranslated quest falls back at display time instead of storing
+        /// the English string as if it were a translation (the same rule the trader and item
+        /// paths use).
         /// </summary>
         public static string? ResolveLocalizedQuestName(string? localizedName, string englishName)
         {
@@ -494,636 +403,9 @@ namespace TarkovDBEditor.Services
         }
 
         /// <summary>
-        /// tarkov.dev에서 Traders 다국어 데이터 가져오기
-        /// </summary>
-        public async Task<List<TarkovDevTraderCacheItem>> FetchAllTradersAsync(
-            Action<string>? progress = null,
-            CancellationToken cancellationToken = default)
-        {
-            progress?.Invoke("Fetching traders from tarkov.dev API...");
-
-            var query = @"
-            {
-                traders(lang: en) {
-                    id
-                    name
-                    normalizedName
-                    imageLink
-                }
-                ko: traders(lang: ko) { id name }
-                ja: traders(lang: ja) { id name }
-            }";
-
-            var requestBody = JsonSerializer.Serialize(new { query });
-            var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync(GraphQLEndpoint, content, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
-            using var doc = JsonDocument.Parse(json);
-
-            var result = new List<TarkovDevTraderCacheItem>();
-
-            if (!doc.RootElement.TryGetProperty("data", out var data))
-                return result;
-
-            // 한국어, 일본어 맵 생성
-            var koNames = new Dictionary<string, string>();
-            var jaNames = new Dictionary<string, string>();
-
-            if (data.TryGetProperty("ko", out var koTraders))
-            {
-                foreach (var trader in koTraders.EnumerateArray())
-                {
-                    var id = trader.GetProperty("id").GetString();
-                    var name = trader.GetProperty("name").GetString();
-                    if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                        koNames[id] = name;
-                }
-            }
-
-            if (data.TryGetProperty("ja", out var jaTraders))
-            {
-                foreach (var trader in jaTraders.EnumerateArray())
-                {
-                    var id = trader.GetProperty("id").GetString();
-                    var name = trader.GetProperty("name").GetString();
-                    if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                        jaNames[id] = name;
-                }
-            }
-
-            // 영어 기준으로 병합
-            if (data.TryGetProperty("traders", out var traders))
-            {
-                foreach (var trader in traders.EnumerateArray())
-                {
-                    var id = trader.GetProperty("id").GetString();
-                    var name = trader.GetProperty("name").GetString();
-                    var normalizedName = trader.TryGetProperty("normalizedName", out var nn) ? nn.GetString() : null;
-                    var imageLink = trader.TryGetProperty("imageLink", out var il) ? il.GetString() : null;
-
-                    if (string.IsNullOrEmpty(id))
-                        continue;
-
-                    var nameKo = koNames.TryGetValue(id, out var ko) ? ko : null;
-                    var nameJa = jaNames.TryGetValue(id, out var ja) ? ja : null;
-
-                    // 번역이 영어와 같으면 null로 처리
-                    if (nameKo == name) nameKo = null;
-                    if (nameJa == name) nameJa = null;
-
-                    result.Add(new TarkovDevTraderCacheItem
-                    {
-                        Id = id,
-                        Name = name ?? "",
-                        NameKO = nameKo,
-                        NameJA = nameJa,
-                        NormalizedName = normalizedName,
-                        ImageLink = imageLink
-                    });
-                }
-            }
-
-            progress?.Invoke($"Fetched {result.Count} traders from tarkov.dev");
-            return result;
-        }
-
-        /// <summary>
-        /// tarkov.dev에서 Hideout 다국어 데이터 가져오기
-        /// </summary>
-        public async Task<List<TarkovDevHideoutStation>> FetchAllHideoutAsync(
-            Action<string>? progress = null,
-            CancellationToken cancellationToken = default)
-        {
-            progress?.Invoke("Fetching hideout stations from tarkov.dev API...");
-
-            // 영어 데이터 가져오기
-            var stationsEn = await FetchHideoutStationsAsync("en", cancellationToken);
-            progress?.Invoke($"Fetched {stationsEn.Count} stations (EN)");
-
-            // 한국어 데이터 가져오기
-            var stationsKo = await FetchHideoutStationsAsync("ko", cancellationToken);
-            progress?.Invoke($"Fetched {stationsKo.Count} stations (KO)");
-
-            // 일본어 데이터 가져오기
-            var stationsJa = await FetchHideoutStationsAsync("ja", cancellationToken);
-            progress?.Invoke($"Fetched {stationsJa.Count} stations (JA)");
-
-            // ID 기반 룩업 생성
-            var koById = stationsKo.ToDictionary(s => s.Id);
-            var jaById = stationsJa.ToDictionary(s => s.Id);
-
-            var result = new List<TarkovDevHideoutStation>();
-
-            foreach (var stationEn in stationsEn)
-            {
-                var stationKo = koById.TryGetValue(stationEn.Id, out var ko) ? ko : null;
-                var stationJa = jaById.TryGetValue(stationEn.Id, out var ja) ? ja : null;
-
-                var nameKo = stationKo?.Name;
-                var nameJa = stationJa?.Name;
-
-                // 번역이 영어와 같으면 null
-                if (nameKo == stationEn.Name) nameKo = null;
-                if (nameJa == stationEn.Name) nameJa = null;
-
-                var station = new TarkovDevHideoutStation
-                {
-                    Id = stationEn.Id,
-                    Name = stationEn.Name,
-                    NameKo = nameKo,
-                    NameJa = nameJa,
-                    NormalizedName = stationEn.NormalizedName,
-                    ImageLink = stationEn.ImageLink,
-                    Levels = new List<TarkovDevHideoutLevel>()
-                };
-
-                // 레벨 처리
-                if (stationEn.Levels != null)
-                {
-                    foreach (var levelEn in stationEn.Levels)
-                    {
-                        var levelKo = stationKo?.Levels?.FirstOrDefault(l => l.Level == levelEn.Level);
-                        var levelJa = stationJa?.Levels?.FirstOrDefault(l => l.Level == levelEn.Level);
-
-                        var hideoutLevel = new TarkovDevHideoutLevel
-                        {
-                            Level = levelEn.Level,
-                            ConstructionTime = levelEn.ConstructionTime,
-                            ItemRequirements = new List<TarkovDevHideoutItemReq>(),
-                            StationLevelRequirements = new List<TarkovDevHideoutStationReq>(),
-                            TraderRequirements = new List<TarkovDevHideoutTraderReq>(),
-                            SkillRequirements = new List<TarkovDevHideoutSkillReq>()
-                        };
-
-                        // 아이템 요구사항
-                        if (levelEn.ItemRequirements != null)
-                        {
-                            foreach (var itemReqEn in levelEn.ItemRequirements)
-                            {
-                                if (itemReqEn.Item == null) continue;
-
-                                var itemReqKo = levelKo?.ItemRequirements?.FirstOrDefault(i => i.Item?.Id == itemReqEn.Item.Id);
-                                var itemReqJa = levelJa?.ItemRequirements?.FirstOrDefault(i => i.Item?.Id == itemReqEn.Item.Id);
-
-                                var itemNameKo = itemReqKo?.Item?.Name;
-                                var itemNameJa = itemReqJa?.Item?.Name;
-                                if (itemNameKo == itemReqEn.Item.Name) itemNameKo = null;
-                                if (itemNameJa == itemReqEn.Item.Name) itemNameJa = null;
-
-                                // FIR 속성 파싱
-                                var foundInRaid = false;
-                                if (itemReqEn.Attributes != null)
-                                {
-                                    var firAttr = itemReqEn.Attributes.FirstOrDefault(a => a.Type == "foundInRaid");
-                                    if (firAttr != null && firAttr.Value?.Equals("true", StringComparison.OrdinalIgnoreCase) == true)
-                                    {
-                                        foundInRaid = true;
-                                    }
-                                }
-
-                                hideoutLevel.ItemRequirements.Add(new TarkovDevHideoutItemReq
-                                {
-                                    ItemId = itemReqEn.Item.Id,
-                                    ItemName = itemReqEn.Item.Name,
-                                    ItemNameKo = itemNameKo,
-                                    ItemNameJa = itemNameJa,
-                                    ItemNormalizedName = itemReqEn.Item.NormalizedName,
-                                    IconLink = itemReqEn.Item.IconLink,
-                                    Count = itemReqEn.Count,
-                                    FoundInRaid = foundInRaid
-                                });
-                            }
-                        }
-
-                        // 스테이션 요구사항
-                        if (levelEn.StationLevelRequirements != null)
-                        {
-                            foreach (var stationReqEn in levelEn.StationLevelRequirements)
-                            {
-                                if (stationReqEn.Station == null) continue;
-
-                                var stationReqKo = levelKo?.StationLevelRequirements?.FirstOrDefault(s => s.Station?.Id == stationReqEn.Station.Id);
-                                var stationReqJa = levelJa?.StationLevelRequirements?.FirstOrDefault(s => s.Station?.Id == stationReqEn.Station.Id);
-
-                                var stationNameKo = stationReqKo?.Station?.Name;
-                                var stationNameJa = stationReqJa?.Station?.Name;
-                                if (stationNameKo == stationReqEn.Station.Name) stationNameKo = null;
-                                if (stationNameJa == stationReqEn.Station.Name) stationNameJa = null;
-
-                                hideoutLevel.StationLevelRequirements.Add(new TarkovDevHideoutStationReq
-                                {
-                                    StationId = stationReqEn.Station.Id,
-                                    StationName = stationReqEn.Station.Name,
-                                    StationNameKo = stationNameKo,
-                                    StationNameJa = stationNameJa,
-                                    Level = stationReqEn.Level
-                                });
-                            }
-                        }
-
-                        // 트레이더 요구사항
-                        if (levelEn.TraderRequirements != null)
-                        {
-                            foreach (var traderReqEn in levelEn.TraderRequirements)
-                            {
-                                if (traderReqEn.Trader == null) continue;
-
-                                var traderReqKo = levelKo?.TraderRequirements?.FirstOrDefault(t => t.Trader?.Id == traderReqEn.Trader.Id);
-                                var traderReqJa = levelJa?.TraderRequirements?.FirstOrDefault(t => t.Trader?.Id == traderReqEn.Trader.Id);
-
-                                var traderNameKo = traderReqKo?.Trader?.Name;
-                                var traderNameJa = traderReqJa?.Trader?.Name;
-                                if (traderNameKo == traderReqEn.Trader.Name) traderNameKo = null;
-                                if (traderNameJa == traderReqEn.Trader.Name) traderNameJa = null;
-
-                                hideoutLevel.TraderRequirements.Add(new TarkovDevHideoutTraderReq
-                                {
-                                    TraderId = traderReqEn.Trader.Id,
-                                    TraderName = traderReqEn.Trader.Name,
-                                    TraderNameKo = traderNameKo,
-                                    TraderNameJa = traderNameJa,
-                                    Level = traderReqEn.Level
-                                });
-                            }
-                        }
-
-                        // 스킬 요구사항
-                        if (levelEn.SkillRequirements != null)
-                        {
-                            foreach (var skillReqEn in levelEn.SkillRequirements)
-                            {
-                                var skillReqKo = levelKo?.SkillRequirements?.FirstOrDefault(s => s.Name == skillReqEn.Name);
-                                var skillReqJa = levelJa?.SkillRequirements?.FirstOrDefault(s => s.Name == skillReqEn.Name);
-
-                                var skillNameKo = skillReqKo?.Name;
-                                var skillNameJa = skillReqJa?.Name;
-                                if (skillNameKo == skillReqEn.Name) skillNameKo = null;
-                                if (skillNameJa == skillReqEn.Name) skillNameJa = null;
-
-                                hideoutLevel.SkillRequirements.Add(new TarkovDevHideoutSkillReq
-                                {
-                                    Name = skillReqEn.Name,
-                                    NameKo = skillNameKo,
-                                    NameJa = skillNameJa,
-                                    Level = skillReqEn.Level
-                                });
-                            }
-                        }
-
-                        station.Levels.Add(hideoutLevel);
-                    }
-                }
-
-                result.Add(station);
-            }
-
-            progress?.Invoke($"Merged {result.Count} hideout stations with translations");
-            return result;
-        }
-
-        /// <summary>
-        /// tarkov.dev API에서 특정 언어의 Hideout 데이터 가져오기
-        /// </summary>
-        private async Task<List<ApiHideoutStation>> FetchHideoutStationsAsync(
-            string lang,
-            CancellationToken cancellationToken = default)
-        {
-            var query = $@"{{
-                hideoutStations(lang: {lang}) {{
-                    id
-                    name
-                    normalizedName
-                    imageLink
-                    levels {{
-                        level
-                        constructionTime
-                        itemRequirements {{
-                            item {{
-                                id
-                                name
-                                normalizedName
-                                iconLink
-                            }}
-                            count
-                            attributes {{
-                                type
-                                name
-                                value
-                            }}
-                        }}
-                        stationLevelRequirements {{
-                            station {{
-                                id
-                                name
-                                normalizedName
-                            }}
-                            level
-                        }}
-                        traderRequirements {{
-                            trader {{
-                                id
-                                name
-                            }}
-                            level
-                        }}
-                        skillRequirements {{
-                            name
-                            level
-                        }}
-                    }}
-                }}
-            }}";
-
-            var requestBody = JsonSerializer.Serialize(new { query });
-            var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync(GraphQLEndpoint, content, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
-            using var doc = JsonDocument.Parse(json);
-
-            var result = new List<ApiHideoutStation>();
-
-            if (!doc.RootElement.TryGetProperty("data", out var data))
-                return result;
-
-            if (!data.TryGetProperty("hideoutStations", out var stations))
-                return result;
-
-            foreach (var station in stations.EnumerateArray())
-            {
-                var apiStation = new ApiHideoutStation
-                {
-                    Id = station.GetProperty("id").GetString() ?? "",
-                    Name = station.GetProperty("name").GetString() ?? "",
-                    NormalizedName = station.TryGetProperty("normalizedName", out var nn) ? nn.GetString() : null,
-                    ImageLink = station.TryGetProperty("imageLink", out var il) ? il.GetString() : null,
-                    Levels = new List<ApiHideoutLevel>()
-                };
-
-                if (station.TryGetProperty("levels", out var levels))
-                {
-                    foreach (var level in levels.EnumerateArray())
-                    {
-                        var apiLevel = new ApiHideoutLevel
-                        {
-                            Level = level.GetProperty("level").GetInt32(),
-                            ConstructionTime = level.TryGetProperty("constructionTime", out var ct) ? ct.GetInt32() : 0,
-                            ItemRequirements = new List<ApiHideoutItemReq>(),
-                            StationLevelRequirements = new List<ApiHideoutStationReq>(),
-                            TraderRequirements = new List<ApiHideoutTraderReq>(),
-                            SkillRequirements = new List<ApiHideoutSkillReq>()
-                        };
-
-                        // 아이템 요구사항 파싱
-                        if (level.TryGetProperty("itemRequirements", out var itemReqs))
-                        {
-                            foreach (var itemReq in itemReqs.EnumerateArray())
-                            {
-                                var apiItemReq = new ApiHideoutItemReq
-                                {
-                                    Count = itemReq.TryGetProperty("count", out var cnt) ? cnt.GetInt32() : 1,
-                                    Attributes = new List<ApiHideoutAttribute>()
-                                };
-
-                                if (itemReq.TryGetProperty("item", out var item))
-                                {
-                                    apiItemReq.Item = new ApiHideoutItem
-                                    {
-                                        Id = item.GetProperty("id").GetString() ?? "",
-                                        Name = item.GetProperty("name").GetString() ?? "",
-                                        NormalizedName = item.TryGetProperty("normalizedName", out var itemNn) ? itemNn.GetString() : null,
-                                        IconLink = item.TryGetProperty("iconLink", out var itemIcon) ? itemIcon.GetString() : null
-                                    };
-                                }
-
-                                if (itemReq.TryGetProperty("attributes", out var attrs))
-                                {
-                                    foreach (var attr in attrs.EnumerateArray())
-                                    {
-                                        apiItemReq.Attributes.Add(new ApiHideoutAttribute
-                                        {
-                                            Type = attr.TryGetProperty("type", out var attrType) ? attrType.GetString() : null,
-                                            Name = attr.TryGetProperty("name", out var attrName) ? attrName.GetString() : null,
-                                            Value = attr.TryGetProperty("value", out var attrValue) ? attrValue.GetString() : null
-                                        });
-                                    }
-                                }
-
-                                apiLevel.ItemRequirements.Add(apiItemReq);
-                            }
-                        }
-
-                        // 스테이션 요구사항 파싱
-                        if (level.TryGetProperty("stationLevelRequirements", out var stationReqs))
-                        {
-                            foreach (var stationReq in stationReqs.EnumerateArray())
-                            {
-                                var apiStationReq = new ApiHideoutStationReq
-                                {
-                                    Level = stationReq.TryGetProperty("level", out var lvl) ? lvl.GetInt32() : 1
-                                };
-
-                                if (stationReq.TryGetProperty("station", out var reqStation))
-                                {
-                                    apiStationReq.Station = new ApiHideoutStationRef
-                                    {
-                                        Id = reqStation.GetProperty("id").GetString() ?? "",
-                                        Name = reqStation.GetProperty("name").GetString() ?? "",
-                                        NormalizedName = reqStation.TryGetProperty("normalizedName", out var sNn) ? sNn.GetString() : null
-                                    };
-                                }
-
-                                apiLevel.StationLevelRequirements.Add(apiStationReq);
-                            }
-                        }
-
-                        // 트레이더 요구사항 파싱
-                        if (level.TryGetProperty("traderRequirements", out var traderReqs))
-                        {
-                            foreach (var traderReq in traderReqs.EnumerateArray())
-                            {
-                                var apiTraderReq = new ApiHideoutTraderReq
-                                {
-                                    Level = traderReq.TryGetProperty("level", out var lvl) ? lvl.GetInt32() : 1
-                                };
-
-                                if (traderReq.TryGetProperty("trader", out var trader))
-                                {
-                                    apiTraderReq.Trader = new ApiHideoutTrader
-                                    {
-                                        Id = trader.GetProperty("id").GetString() ?? "",
-                                        Name = trader.GetProperty("name").GetString() ?? ""
-                                    };
-                                }
-
-                                apiLevel.TraderRequirements.Add(apiTraderReq);
-                            }
-                        }
-
-                        // 스킬 요구사항 파싱
-                        if (level.TryGetProperty("skillRequirements", out var skillReqs))
-                        {
-                            foreach (var skillReq in skillReqs.EnumerateArray())
-                            {
-                                apiLevel.SkillRequirements.Add(new ApiHideoutSkillReq
-                                {
-                                    Name = skillReq.GetProperty("name").GetString() ?? "",
-                                    Level = skillReq.TryGetProperty("level", out var lvl) ? lvl.GetInt32() : 1
-                                });
-                            }
-                        }
-
-                        apiStation.Levels.Add(apiLevel);
-                    }
-                }
-
-                result.Add(apiStation);
-            }
-
-            return result;
-        }
-
-        #endregion
-
-        /// <summary>
-        /// wikiLink URL을 정규화합니다 (URL 인코딩 차이 해결)
-        /// </summary>
-        private static string NormalizeWikiLink(string wikiLink)
-        {
-            if (string.IsNullOrEmpty(wikiLink))
-                return wikiLink;
-
-            // URL 디코딩하여 통일 (%28 -> (, %29 -> ) 등)
-            try
-            {
-                return Uri.UnescapeDataString(wikiLink);
-            }
-            catch
-            {
-                return wikiLink;
-            }
-        }
-
-        /// <summary>
-        /// tarkov.dev API에서 특정 언어의 모든 아이템을 가져옵니다
-        /// </summary>
-        public async Task<List<TarkovDevItem>> FetchAllItemsAsync(
-            string lang = "en",
-            Action<string>? progress = null,
-            CancellationToken cancellationToken = default)
-        {
-            progress?.Invoke($"Fetching all items from tarkov.dev (lang: {lang})...");
-
-            var query = @"
-            {
-                items(lang: " + lang + @") {
-                    id
-                    name
-                    shortName
-                    wikiLink
-                }
-            }";
-
-            var requestBody = new { query };
-            var content = new StringContent(
-                JsonSerializer.Serialize(requestBody),
-                Encoding.UTF8,
-                "application/json");
-
-            var response = await _httpClient.PostAsync(GraphQLEndpoint, content, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
-            using var doc = JsonDocument.Parse(json);
-
-            var items = new List<TarkovDevItem>();
-
-            if (doc.RootElement.TryGetProperty("data", out var data) &&
-                data.TryGetProperty("items", out var itemsArray))
-            {
-                foreach (var item in itemsArray.EnumerateArray())
-                {
-                    var devItem = new TarkovDevItem
-                    {
-                        Id = item.GetProperty("id").GetString() ?? "",
-                        Name = item.GetProperty("name").GetString() ?? "",
-                        ShortName = item.TryGetProperty("shortName", out var sn) ? sn.GetString() ?? "" : "",
-                        WikiLink = item.TryGetProperty("wikiLink", out var wl) ? wl.GetString() ?? "" : ""
-                    };
-                    items.Add(devItem);
-                }
-            }
-
-            progress?.Invoke($"Fetched {items.Count} items from tarkov.dev (lang: {lang})");
-            return items;
-        }
-
-        /// <summary>
-        /// 여러 언어의 아이템 데이터를 가져와 wikiLink로 매핑된 딕셔너리를 반환합니다
-        /// </summary>
-        public async Task<Dictionary<string, TarkovDevMultiLangItem>> FetchAllLanguagesAsync(
-            Action<string>? progress = null,
-            CancellationToken cancellationToken = default)
-        {
-            progress?.Invoke("Fetching items from tarkov.dev for all languages (EN, KO, JA)...");
-
-            // 영어 데이터를 기준으로 시작
-            var enItems = await FetchAllItemsAsync("en", progress, cancellationToken);
-            var koItems = await FetchAllItemsAsync("ko", progress, cancellationToken);
-            var jaItems = await FetchAllItemsAsync("ja", progress, cancellationToken);
-
-            // wikiLink를 키로 사용하는 딕셔너리 생성 (정규화된 URL 사용)
-            var result = new Dictionary<string, TarkovDevMultiLangItem>(StringComparer.OrdinalIgnoreCase);
-
-            // 영어 아이템 기준으로 딕셔너리 초기화
-            foreach (var item in enItems)
-            {
-                if (string.IsNullOrEmpty(item.WikiLink))
-                    continue;
-
-                var normalizedLink = NormalizeWikiLink(item.WikiLink);
-                result[normalizedLink] = new TarkovDevMultiLangItem
-                {
-                    BsgId = item.Id,
-                    WikiLink = item.WikiLink,  // 원본 보존
-                    NameEN = item.Name,
-                    ShortNameEN = item.ShortName
-                };
-            }
-
-            // 한국어 이름 추가 (ID 기준 매칭)
-            var koById = koItems.ToDictionary(x => x.Id, x => x);
-            foreach (var kvp in result)
-            {
-                if (koById.TryGetValue(kvp.Value.BsgId, out var koItem))
-                {
-                    kvp.Value.NameKO = koItem.Name;
-                    kvp.Value.ShortNameKO = koItem.ShortName;
-                }
-            }
-
-            // 일본어 이름 추가 (ID 기준 매칭)
-            var jaById = jaItems.ToDictionary(x => x.Id, x => x);
-            foreach (var kvp in result)
-            {
-                if (jaById.TryGetValue(kvp.Value.BsgId, out var jaItem))
-                {
-                    kvp.Value.NameJA = jaItem.Name;
-                    kvp.Value.ShortNameJA = jaItem.ShortName;
-                }
-            }
-
-            progress?.Invoke($"Built multi-language dictionary with {result.Count} items");
-            return result;
-        }
-
-        /// <summary>
-        /// wiki_items.json을 읽어 tarkov.dev 데이터로 enrichment하고 저장합니다
+        /// Annotates the debug export <c>wiki_items.json</c> with the cached tarkov.dev item
+        /// data and writes the two difference lists beside it. Reads the cache, never the
+        /// network, so this export describes exactly the data a refresh would use.
         /// </summary>
         public async Task<EnrichmentResult> EnrichWikiItemsAsync(
             string wikiItemsPath,
@@ -1135,21 +417,24 @@ namespace TarkovDBEditor.Services
         {
             progress?.Invoke("Loading wiki_items.json...");
 
-            // wiki_items.json 로드
             var wikiJson = await File.ReadAllTextAsync(wikiItemsPath, cancellationToken);
             var wikiItemList = JsonSerializer.Deserialize<WikiItemList>(wikiJson);
 
-            if (wikiItemList == null || wikiItemList.Items == null)
+            if (wikiItemList?.Items == null)
             {
-                throw new InvalidOperationException("Failed to load wiki_items.json");
+                throw new InvalidOperationException($"Failed to load {wikiItemsPath}");
             }
 
             progress?.Invoke($"Loaded {wikiItemList.Items.Count} wiki items");
 
-            // tarkov.dev에서 다국어 데이터 가져오기
-            var devItems = await FetchAllLanguagesAsync(progress, cancellationToken);
+            var devItems = await LoadCachedItemsAsync(cancellationToken);
+            if (devItems == null || devItems.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "tarkov.dev item cache is empty or missing. Run 'Debug > Cache Tarkov Dev Data' first.");
+            }
 
-            progress?.Invoke("Matching wiki items with tarkov.dev data by wikiLink...");
+            progress?.Invoke($"Matching {wikiItemList.Items.Count} wiki items against {devItems.Count} cached tarkov.dev items...");
 
             var enrichedItems = new List<EnrichedWikiItem>();
             var missingItems = new List<MissingDevItem>();
@@ -1158,20 +443,18 @@ namespace TarkovDBEditor.Services
 
             foreach (var wikiItem in wikiItemList.Items)
             {
-                // wikiPageLink URL 디코딩 (%22 -> ", %28 -> ( 등)
-                var decodedWikiLink = NormalizeWikiLink(wikiItem.WikiPageLink);
+                var decodedWikiLink = TarkovDevJsonClient.NormalizeWikiLink(wikiItem.WikiPageLink);
 
                 var enriched = new EnrichedWikiItem
                 {
                     Id = wikiItem.Id,
                     Name = wikiItem.Name,
                     WikiPageLink = decodedWikiLink,
-                    IconUrl = wikiItem.IconUrl,  // 아이콘 URL 보존
+                    IconUrl = wikiItem.IconUrl,
                     Category = wikiItem.Category,
                     Categories = wikiItem.Categories
                 };
 
-                // 정규화된 wikiPageLink로 매칭 시도
                 if (!string.IsNullOrEmpty(decodedWikiLink) &&
                     devItems.TryGetValue(decodedWikiLink, out var devItem))
                 {
@@ -1187,12 +470,10 @@ namespace TarkovDBEditor.Services
                 }
                 else
                 {
-                    // 매칭 실패 - Name을 다국어 이름으로 사용
                     enriched.NameEN = wikiItem.Name;
                     enriched.NameKO = wikiItem.Name;
                     enriched.NameJA = wikiItem.Name;
 
-                    // missing 목록에 추가
                     missingItems.Add(new MissingDevItem
                     {
                         WikiId = wikiItem.Id,
@@ -1206,29 +487,27 @@ namespace TarkovDBEditor.Services
                 enrichedItems.Add(enriched);
             }
 
-            // tarkov.dev에만 있는 아이템 찾기
             var devOnlyItems = new List<DevOnlyItem>();
             foreach (var kvp in devItems)
             {
-                if (!matchedWikiLinks.Contains(kvp.Key))
+                if (matchedWikiLinks.Contains(kvp.Key))
+                    continue;
+
+                devOnlyItems.Add(new DevOnlyItem
                 {
-                    devOnlyItems.Add(new DevOnlyItem
-                    {
-                        BsgId = kvp.Value.BsgId,
-                        WikiLink = kvp.Value.WikiLink,
-                        NameEN = kvp.Value.NameEN,
-                        NameKO = kvp.Value.NameKO,
-                        NameJA = kvp.Value.NameJA,
-                        ShortNameEN = kvp.Value.ShortNameEN,
-                        ShortNameKO = kvp.Value.ShortNameKO,
-                        ShortNameJA = kvp.Value.ShortNameJA
-                    });
-                }
+                    BsgId = kvp.Value.BsgId,
+                    WikiLink = kvp.Value.WikiLink,
+                    NameEN = kvp.Value.NameEN,
+                    NameKO = kvp.Value.NameKO,
+                    NameJA = kvp.Value.NameJA,
+                    ShortNameEN = kvp.Value.ShortNameEN,
+                    ShortNameKO = kvp.Value.ShortNameKO,
+                    ShortNameJA = kvp.Value.ShortNameJA
+                });
             }
 
             progress?.Invoke($"Matched {matchedCount}/{wikiItemList.Items.Count} items. Wiki missing: {missingItems.Count}, Dev only: {devOnlyItems.Count}");
 
-            // 결과 저장
             var enrichedResult = new EnrichedWikiItemList
             {
                 ExportedAt = DateTime.UtcNow,
@@ -1246,13 +525,11 @@ namespace TarkovDBEditor.Services
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
             };
 
-            // enriched wiki_items.json 저장
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
             var enrichedJson = JsonSerializer.Serialize(enrichedResult, options);
             await File.WriteAllTextAsync(outputPath, enrichedJson, Encoding.UTF8, cancellationToken);
             progress?.Invoke($"Saved enriched items to: {outputPath}");
 
-            // dev_missing.json 저장 (Wiki에는 있지만 tarkov.dev에 없는 아이템)
             if (missingItems.Count > 0)
             {
                 var missingResult = new MissingDevItemList
@@ -1266,7 +543,6 @@ namespace TarkovDBEditor.Services
                 progress?.Invoke($"Saved wiki-only items to: {missingOutputPath}");
             }
 
-            // dev_only.json 저장 (tarkov.dev에는 있지만 Wiki에 없는 아이템)
             if (devOnlyItems.Count > 0)
             {
                 var devOnlyResult = new DevOnlyItemList
@@ -1294,25 +570,14 @@ namespace TarkovDBEditor.Services
 
         public void Dispose()
         {
-            _httpClient.Dispose();
+            _jsonClient.Dispose();
         }
     }
 
     #region tarkov.dev Models
 
     /// <summary>
-    /// tarkov.dev API에서 가져온 단일 언어 아이템
-    /// </summary>
-    public class TarkovDevItem
-    {
-        public string Id { get; set; } = "";
-        public string Name { get; set; } = "";
-        public string ShortName { get; set; } = "";
-        public string WikiLink { get; set; } = "";
-    }
-
-    /// <summary>
-    /// 다국어 통합 아이템 (wikiLink 기준 매핑)
+    /// An item as the cache holds it: one row per wiki page, with the three languages merged.
     /// </summary>
     public class TarkovDevMultiLangItem
     {
@@ -1324,10 +589,16 @@ namespace TarkovDBEditor.Services
         public string? ShortNameKO { get; set; }
         public string? NameJA { get; set; }
         public string? ShortNameJA { get; set; }
+
+        /// <summary>tarkov.dev's own slug. Carried so hideout requirements can name their item.</summary>
+        public string? NormalizedName { get; set; }
+
+        /// <summary>Remote icon URL. Carried for the same reason as <see cref="NormalizedName"/>.</summary>
+        public string? IconLink { get; set; }
     }
 
     /// <summary>
-    /// tarkov.dev 데이터로 enrichment된 Wiki 아이템
+    /// A Wiki item annotated with tarkov.dev data (the <c>wiki_items.json</c> debug export).
     /// </summary>
     public class EnrichedWikiItem
     {
@@ -1371,9 +642,6 @@ namespace TarkovDBEditor.Services
         public List<string> Categories { get; set; } = new();
     }
 
-    /// <summary>
-    /// Enrichment된 Wiki 아이템 목록
-    /// </summary>
     public class EnrichedWikiItemList
     {
         [JsonPropertyName("exportedAt")]
@@ -1395,9 +663,7 @@ namespace TarkovDBEditor.Services
         public List<EnrichedWikiItem> Items { get; set; } = new();
     }
 
-    /// <summary>
-    /// tarkov.dev에서 매칭되지 않은 아이템
-    /// </summary>
+    /// <summary>A wiki item with no tarkov.dev counterpart.</summary>
     public class MissingDevItem
     {
         [JsonPropertyName("wikiId")]
@@ -1416,9 +682,6 @@ namespace TarkovDBEditor.Services
         public List<string> Categories { get; set; } = new();
     }
 
-    /// <summary>
-    /// 누락 아이템 목록 (dev_missing.json)
-    /// </summary>
     public class MissingDevItemList
     {
         [JsonPropertyName("exportedAt")]
@@ -1431,9 +694,6 @@ namespace TarkovDBEditor.Services
         public List<MissingDevItem> Items { get; set; } = new();
     }
 
-    /// <summary>
-    /// Enrichment 결과
-    /// </summary>
     public class EnrichmentResult
     {
         public int TotalItems { get; set; }
@@ -1445,9 +705,7 @@ namespace TarkovDBEditor.Services
         public string DevOnlyOutputPath { get; set; } = "";
     }
 
-    /// <summary>
-    /// tarkov.dev에만 있는 아이템 (Wiki에는 없음)
-    /// </summary>
+    /// <summary>A tarkov.dev item with no wiki page in the crawl.</summary>
     public class DevOnlyItem
     {
         [JsonPropertyName("bsgId")]
@@ -1475,9 +733,6 @@ namespace TarkovDBEditor.Services
         public string? ShortNameJA { get; set; }
     }
 
-    /// <summary>
-    /// tarkov.dev에만 있는 아이템 목록 (dev_only.json)
-    /// </summary>
     public class DevOnlyItemList
     {
         [JsonPropertyName("exportedAt")]
@@ -1494,9 +749,6 @@ namespace TarkovDBEditor.Services
 
     #region Cache Models
 
-    /// <summary>
-    /// tarkov.dev 캐시 정보
-    /// </summary>
     public class TarkovDevCacheInfo
     {
         public DateTime? ItemsCachedAt { get; set; }
@@ -1514,60 +766,86 @@ namespace TarkovDBEditor.Services
         public bool HasTradersCache => TradersCachedAt.HasValue;
     }
 
-    /// <summary>
-    /// tarkov.dev 캐시 결과
-    /// </summary>
-    public class TarkovDevCacheResult
+    /// <summary>What one cache part did on a refill.</summary>
+    public class TarkovDevCachePart
     {
-        public DateTime CachedAt { get; set; }
-        public bool ItemsSuccess { get; set; }
-        public int ItemsCount { get; set; }
-        public string? ItemsError { get; set; }
-        public bool QuestsSuccess { get; set; }
-        public int QuestsCount { get; set; }
-        public string? QuestsError { get; set; }
-        public bool HideoutSuccess { get; set; }
-        public int HideoutCount { get; set; }
-        public string? HideoutError { get; set; }
-        public bool TradersSuccess { get; set; }
-        public int TradersCount { get; set; }
-        public string? TradersError { get; set; }
+        public TarkovDevCachePart(string name) => Name = name;
+
+        /// <summary>Display name, and the key <see cref="TarkovDevDataService"/> maps to a file.</summary>
+        public string Name { get; }
+
+        /// <summary>True when the part ended with a usable cache file, fresh or kept.</summary>
+        public bool Success { get; set; }
+
+        /// <summary>
+        /// True when the existing file was kept rather than rewritten: either upstream reported
+        /// it unchanged, or the fetch failed and the old copy is still there.
+        /// </summary>
+        public bool Kept { get; set; }
+
+        public int Count { get; set; }
+        public string? Error { get; set; }
+
+        /// <summary>When this part was last confirmed current (the cache file's write time).</summary>
+        public DateTime? CachedAt { get; set; }
+
+        /// <summary>Upstream's own <c>Last-Modified</c>, when the part was fetched.</summary>
+        public DateTime? SourceLastModified { get; set; }
     }
 
-    /// <summary>
-    /// tarkov.dev 아이템 캐시 파일
-    /// </summary>
+    /// <summary>The outcome of <see cref="TarkovDevDataService.CacheAllDataAsync"/>, part by part.</summary>
+    public class TarkovDevCacheResult
+    {
+        public const string ItemsPart = "Items";
+        public const string QuestsPart = "Quests";
+        public const string HideoutPart = "Hideout";
+        public const string TradersPart = "Traders";
+
+        public DateTime CachedAt { get; set; }
+
+        public TarkovDevCachePart Items { get; } = new(ItemsPart);
+        public TarkovDevCachePart Quests { get; } = new(QuestsPart);
+        public TarkovDevCachePart Hideout { get; } = new(HideoutPart);
+        public TarkovDevCachePart Traders { get; } = new(TradersPart);
+
+        public IReadOnlyList<TarkovDevCachePart> Parts => new[] { Items, Quests, Hideout, Traders };
+
+        public bool AllSucceeded => Parts.All(p => p.Success);
+    }
+
     public class TarkovDevItemsCache
     {
         [JsonPropertyName("cachedAt")]
         public DateTime CachedAt { get; set; }
 
+        [JsonPropertyName("sourceLastModified")]
+        public DateTime? SourceLastModified { get; set; }
+
         [JsonPropertyName("items")]
         public Dictionary<string, TarkovDevMultiLangItem> Items { get; set; } = new();
     }
 
-    /// <summary>
-    /// tarkov.dev 퀘스트 캐시 파일
-    /// </summary>
     public class TarkovDevQuestsCache
     {
         [JsonPropertyName("cachedAt")]
         public DateTime CachedAt { get; set; }
 
+        [JsonPropertyName("sourceLastModified")]
+        public DateTime? SourceLastModified { get; set; }
+
         [JsonPropertyName("quests")]
-        public Dictionary<string, TarkovDevQuestCacheItem> Quests { get; set; } = new();
+        public List<TarkovDevQuestCacheItem> Quests { get; set; } = new();
     }
 
     /// <summary>
-    /// tarkov.dev 퀘스트 캐시 아이템
+    /// One tarkov.dev task as the cache holds it: the identity and names the pipeline always
+    /// used, plus the 1.1 game rules (level, Kappa, faction, loyalty, prerequisites) that the
+    /// old GraphQL queries never asked for.
     /// </summary>
     public class TarkovDevQuestCacheItem
     {
         [JsonPropertyName("id")]
         public string Id { get; set; } = "";
-
-        [JsonPropertyName("tarkovDataId")]
-        public int? TarkovDataId { get; set; }
 
         [JsonPropertyName("nameEN")]
         public string NameEN { get; set; } = "";
@@ -1581,40 +859,81 @@ namespace TarkovDBEditor.Services
         [JsonPropertyName("nameJA")]
         public string? NameJA { get; set; }
 
+        /// <summary>Giving trader, as a trader id (resolved to a nickname through the traders cache).</summary>
         [JsonPropertyName("trader")]
         public string? Trader { get; set; }
 
         [JsonPropertyName("wikiLink")]
         public string? WikiLink { get; set; }
+
+        /// <summary>Minimum player level; 0 means "none" and is stored as NULL.</summary>
+        [JsonPropertyName("minPlayerLevel")]
+        public int MinPlayerLevel { get; set; }
+
+        [JsonPropertyName("kappaRequired")]
+        public bool KappaRequired { get; set; }
+
+        /// <summary>"Any", "BEAR" or "USEC" upstream; mapped to NULL/Bear/Usec on the way in.</summary>
+        [JsonPropertyName("factionName")]
+        public string? FactionName { get; set; }
+
+        /// <summary>Delay before the quest becomes available, in seconds; 0 means none.</summary>
+        [JsonPropertyName("availableDelaySecondsMin")]
+        public int AvailableDelaySecondsMin { get; set; }
+
+        /// <summary>Loyalty gates only; reputation gates the app cannot express are dropped.</summary>
+        [JsonPropertyName("traderLevelRequirements")]
+        public List<TarkovDevTaskTraderLevel> TraderLevelRequirements { get; set; } = new();
+
+        /// <summary>Prerequisite tasks, AND semantics (the API has no OR groups).</summary>
+        [JsonPropertyName("taskRequirements")]
+        public List<TarkovDevTaskPrerequisite> TaskRequirements { get; set; } = new();
     }
 
-    /// <summary>
-    /// tarkov.dev Hideout 캐시 파일
-    /// </summary>
+    /// <summary>A "loyalty level N with trader T" gate on a task.</summary>
+    public class TarkovDevTaskTraderLevel
+    {
+        [JsonPropertyName("traderId")]
+        public string TraderId { get; set; } = "";
+
+        [JsonPropertyName("level")]
+        public int Level { get; set; }
+    }
+
+    /// <summary>A prerequisite task and the statuses that satisfy it.</summary>
+    public class TarkovDevTaskPrerequisite
+    {
+        [JsonPropertyName("taskId")]
+        public string TaskId { get; set; } = "";
+
+        [JsonPropertyName("status")]
+        public List<string> Status { get; set; } = new();
+    }
+
     public class TarkovDevHideoutCache
     {
         [JsonPropertyName("cachedAt")]
         public DateTime CachedAt { get; set; }
 
+        [JsonPropertyName("sourceLastModified")]
+        public DateTime? SourceLastModified { get; set; }
+
         [JsonPropertyName("stations")]
         public List<TarkovDevHideoutStation> Stations { get; set; } = new();
     }
 
-    /// <summary>
-    /// tarkov.dev Traders 캐시 파일
-    /// </summary>
     public class TarkovDevTradersCache
     {
         [JsonPropertyName("cachedAt")]
         public DateTime CachedAt { get; set; }
 
+        [JsonPropertyName("sourceLastModified")]
+        public DateTime? SourceLastModified { get; set; }
+
         [JsonPropertyName("traders")]
         public List<TarkovDevTraderCacheItem> Traders { get; set; } = new();
     }
 
-    /// <summary>
-    /// tarkov.dev Trader 캐시 아이템
-    /// </summary>
     public class TarkovDevTraderCacheItem
     {
         [JsonPropertyName("id")]
@@ -1643,9 +962,6 @@ namespace TarkovDBEditor.Services
 
     #region Hideout Models
 
-    /// <summary>
-    /// Hideout 스테이션 (다국어 통합)
-    /// </summary>
     public class TarkovDevHideoutStation
     {
         [JsonPropertyName("id")]
@@ -1673,9 +989,6 @@ namespace TarkovDBEditor.Services
         public int MaxLevel => Levels?.Count ?? 0;
     }
 
-    /// <summary>
-    /// Hideout 레벨
-    /// </summary>
     public class TarkovDevHideoutLevel
     {
         [JsonPropertyName("level")]
@@ -1697,9 +1010,6 @@ namespace TarkovDBEditor.Services
         public List<TarkovDevHideoutSkillReq> SkillRequirements { get; set; } = new();
     }
 
-    /// <summary>
-    /// Hideout 아이템 요구사항
-    /// </summary>
     public class TarkovDevHideoutItemReq
     {
         [JsonPropertyName("itemId")]
@@ -1727,9 +1037,6 @@ namespace TarkovDBEditor.Services
         public bool FoundInRaid { get; set; }
     }
 
-    /// <summary>
-    /// Hideout 스테이션 요구사항
-    /// </summary>
     public class TarkovDevHideoutStationReq
     {
         [JsonPropertyName("stationId")]
@@ -1748,9 +1055,6 @@ namespace TarkovDBEditor.Services
         public int Level { get; set; }
     }
 
-    /// <summary>
-    /// Hideout 트레이더 요구사항
-    /// </summary>
     public class TarkovDevHideoutTraderReq
     {
         [JsonPropertyName("traderId")]
@@ -1769,9 +1073,6 @@ namespace TarkovDBEditor.Services
         public int Level { get; set; }
     }
 
-    /// <summary>
-    /// Hideout 스킬 요구사항
-    /// </summary>
     public class TarkovDevHideoutSkillReq
     {
         [JsonPropertyName("name")]
@@ -1784,82 +1085,6 @@ namespace TarkovDBEditor.Services
         public string? NameJa { get; set; }
 
         [JsonPropertyName("level")]
-        public int Level { get; set; }
-    }
-
-    #endregion
-
-    #region Hideout API Models (Internal)
-
-    internal class ApiHideoutStation
-    {
-        public string Id { get; set; } = "";
-        public string Name { get; set; } = "";
-        public string? NormalizedName { get; set; }
-        public string? ImageLink { get; set; }
-        public List<ApiHideoutLevel>? Levels { get; set; }
-    }
-
-    internal class ApiHideoutLevel
-    {
-        public int Level { get; set; }
-        public int ConstructionTime { get; set; }
-        public List<ApiHideoutItemReq>? ItemRequirements { get; set; }
-        public List<ApiHideoutStationReq>? StationLevelRequirements { get; set; }
-        public List<ApiHideoutTraderReq>? TraderRequirements { get; set; }
-        public List<ApiHideoutSkillReq>? SkillRequirements { get; set; }
-    }
-
-    internal class ApiHideoutItemReq
-    {
-        public ApiHideoutItem? Item { get; set; }
-        public int Count { get; set; }
-        public List<ApiHideoutAttribute>? Attributes { get; set; }
-    }
-
-    internal class ApiHideoutItem
-    {
-        public string Id { get; set; } = "";
-        public string Name { get; set; } = "";
-        public string? NormalizedName { get; set; }
-        public string? IconLink { get; set; }
-    }
-
-    internal class ApiHideoutAttribute
-    {
-        public string? Type { get; set; }
-        public string? Name { get; set; }
-        public string? Value { get; set; }
-    }
-
-    internal class ApiHideoutStationReq
-    {
-        public ApiHideoutStationRef? Station { get; set; }
-        public int Level { get; set; }
-    }
-
-    internal class ApiHideoutStationRef
-    {
-        public string Id { get; set; } = "";
-        public string Name { get; set; } = "";
-        public string? NormalizedName { get; set; }
-    }
-
-    internal class ApiHideoutTraderReq
-    {
-        public ApiHideoutTrader? Trader { get; set; }
-        public int Level { get; set; }
-    }
-
-    internal class ApiHideoutTrader
-    {
-        public string Id { get; set; } = "";
-        public string Name { get; set; } = "";
-    }
-
-    internal class ApiHideoutSkillReq
-    {
-        public string Name { get; set; } = "";
         public int Level { get; set; }
     }
 

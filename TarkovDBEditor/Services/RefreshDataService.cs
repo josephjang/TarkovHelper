@@ -37,6 +37,10 @@ namespace TarkovDBEditor.Services
 
         public RefreshDataService(string? basePath = null)
         {
+            // Every collaborator is pointed at this instance's own data directory rather than
+            // letting each one default to the app base directory. They agree in the shipping
+            // app, where basePath is that directory anyway, and only a service that can be
+            // pointed somewhere else is testable at all.
             basePath ??= AppDomain.CurrentDomain.BaseDirectory;
             _wikiDataDir = Path.Combine(basePath, "wiki_data");
             _logDir = Path.Combine(basePath, "logs");
@@ -110,14 +114,23 @@ namespace TarkovDBEditor.Services
                 var existingItems = await LoadItemsFromDatabaseAsync(databasePath, cancellationToken);
                 logBuilder.AppendLine($"Items loaded from DB: {existingItems.Count} items");
 
+                // Read before the write transaction opens: these rows are what a renamed quest
+                // carries its identity across, so they have to describe the database as it was.
+                var previousQuests = await LoadPreviousQuestRowsAsync(databasePath, cancellationToken);
+                logBuilder.AppendLine(
+                    $"Previous quest rows: {previousQuests.Count} "
+                    + $"({previousQuests.Count(q => !string.IsNullOrEmpty(q.BsgId))} with an external ID)");
+
                 // 캐시된 Quests 로드
                 progress?.Invoke("Loading cached quests...");
-                var questsResult = await LoadQuestsFromCacheAsync(existingItems, progress, cancellationToken);
+                var questsResult = await LoadQuestsFromCacheAsync(existingItems, previousQuests, progress, cancellationToken);
                 logBuilder.AppendLine($"Quests loaded from cache: {questsResult.Quests.Count} quests");
                 logBuilder.AppendLine($"Requirements: {questsResult.Requirements.Count}");
+                logBuilder.AppendLine($"TraderRequirements: {questsResult.TraderRequirements.Count}");
                 logBuilder.AppendLine($"Objectives: {questsResult.Objectives.Count}");
                 logBuilder.AppendLine($"OptionalQuests: {questsResult.OptionalQuests.Count}");
                 logBuilder.AppendLine($"RequiredItems: {questsResult.RequiredItems.Count}");
+                AppendIdentitySummary(logBuilder, questsResult.Identity);
 
                 // Dogtag 아이템 자동 생성 (QuestRequiredItems/Objectives에서 필요한 경우)
                 // EnsureDogtagItemsExist는 생성된 아이템을 existingItems에도 추가함
@@ -139,6 +152,7 @@ namespace TarkovDBEditor.Services
                     questsResult.Objectives,
                     questsResult.OptionalQuests,
                     questsResult.RequiredItems,
+                    questsResult.TraderRequirements,
                     logBuilder,
                     progress,
                     cancellationToken);
@@ -221,9 +235,24 @@ namespace TarkovDBEditor.Services
                 var currentRevision = await LoadRevisionAsync(cancellationToken);
                 logBuilder.AppendLine($"Current Revision - Items: {currentRevision.ItemsRevision ?? "N/A"}, Quests: {currentRevision.QuestsRevision ?? "N/A"}");
 
+                // Read before anything writes: identity is carried from these rows, for items
+                // (so a renamed item keeps the icon file named after its row key) as well as
+                // for quests.
+                var previousQuests = await LoadPreviousQuestRowsAsync(databasePath, cancellationToken);
+                var previousItems = await LoadPreviousItemRowsAsync(databasePath, cancellationToken);
+                logBuilder.AppendLine(
+                    $"Previous rows: {previousQuests.Count} quests "
+                    + $"({previousQuests.Count(q => !string.IsNullOrEmpty(q.BsgId))} with an external ID), "
+                    + $"{previousItems.Count} items "
+                    + $"({previousItems.Count(i => !string.IsNullOrEmpty(i.BsgId))} with an external ID)");
+
+                // The carry-over guard runs before the crawl, not after it: a run that cannot
+                // preserve identity should cost the operator a message, not an hour of network.
+                AssertPreviousDatabaseIsBackfilled(previousQuests);
+
                 // Wiki 데이터 수집 (Items)
                 progress?.Invoke("Fetching Wiki item categories...");
-                var itemsResult = await FetchAndProcessItemsAsync(progress, cancellationToken);
+                var itemsResult = await FetchAndProcessItemsAsync(previousItems, progress, cancellationToken);
                 logBuilder.AppendLine($"Items fetched: {itemsResult.Items.Count} items");
                 logBuilder.AppendLine($"Icons: {itemsResult.IconsDownloaded} downloaded, {itemsResult.IconsFailed} failed, {itemsResult.IconsCached} cached");
 
@@ -245,8 +274,9 @@ namespace TarkovDBEditor.Services
 
                 // Wiki 데이터 수집 (Quests)
                 progress?.Invoke("Fetching Wiki quests...");
-                var questsResult = await FetchAndProcessQuestsAsync(itemsResult.Items, progress, cancellationToken);
+                var questsResult = await FetchAndProcessQuestsAsync(itemsResult.Items, previousQuests, progress, cancellationToken);
                 logBuilder.AppendLine($"Quests fetched: {questsResult.Quests.Count} quests");
+                AppendIdentitySummary(logBuilder, questsResult.Identity);
 
                 // 새 리비전 생성
                 var newRevision = new RevisionInfo
@@ -264,8 +294,8 @@ namespace TarkovDBEditor.Services
                 logBuilder.AppendLine($"New Revision - Items: {newRevision.ItemsRevision}, Quests: {newRevision.QuestsRevision}");
                 logBuilder.AppendLine($"Items Changed: {itemsChanged}, Quests Changed: {questsChanged}");
 
-                // DB는 항상 초기화 및 업데이트 (Items, Quests, QuestRequirements, QuestObjectives, OptionalQuests, QuestRequiredItems 테이블)
-                progress?.Invoke("Updating database (Items, Quests, QuestRequirements, QuestObjectives, OptionalQuests & QuestRequiredItems tables)...");
+                // DB는 항상 초기화 및 업데이트 (Items, Quests, QuestRequirements, QuestTraderRequirements, QuestObjectives, OptionalQuests, QuestRequiredItems 테이블)
+                progress?.Invoke("Updating database (Items, Quests, QuestRequirements, QuestTraderRequirements, QuestObjectives, OptionalQuests & QuestRequiredItems tables)...");
                 await UpdateDatabaseAsync(
                     databasePath,
                     itemsResult.Items,
@@ -274,9 +304,25 @@ namespace TarkovDBEditor.Services
                     questsResult.Objectives,
                     questsResult.OptionalQuests,
                     questsResult.RequiredItems,
+                    questsResult.TraderRequirements,
                     logBuilder,
                     progress,
                     cancellationToken);
+
+                // Traders were written only by the from-cache path, so a full refresh used to
+                // leave the table describing whichever trader list the last from-cache run saw.
+                // 1.1 adds a sixteenth trader, which would otherwise never arrive. The quest
+                // build above has already refused to continue on an empty trader cache, so
+                // there is always something to write by the time this runs.
+                progress?.Invoke("Updating Traders table...");
+                using (var traderCacheService = new TarkovDevDataService(_wikiDataDir))
+                using (var traderIconCache = new WikiCacheService(_wikiDataDir))
+                {
+                    var traderStats = await UpdateTradersFromCacheAsync(
+                        databasePath, traderCacheService, traderIconCache, progress, cancellationToken);
+                    logBuilder.AppendLine(
+                        $"Traders: {traderStats.inserted} inserted, {traderStats.updated} updated, {traderStats.deleted} deleted");
+                }
 
                 result.ItemsUpdated = true;
                 result.QuestsUpdated = true;
@@ -322,6 +368,7 @@ namespace TarkovDBEditor.Services
         /// Wiki에서 아이템 데이터 수집 및 처리
         /// </summary>
         private async Task<ItemsFetchResult> FetchAndProcessItemsAsync(
+            IReadOnlyList<PreviousItemRow> previousItems,
             Action<string>? progress = null,
             CancellationToken cancellationToken = default)
         {
@@ -356,6 +403,60 @@ namespace TarkovDBEditor.Services
             // 아이템 목록 빌드
             var itemList = wikiService.BuildItemList(structure, tree, excludedItems, pagesWithoutInfobox);
 
+            // tarkov.dev 데이터로 enrichment (캐시 우선)
+            progress?.Invoke("Loading tarkov.dev item data (from cache)...");
+            using var devService = new TarkovDevDataService(_wikiDataDir);
+            var devItems = await devService.LoadCachedItemsAsync(cancellationToken);
+
+            if (devItems == null || devItems.Count == 0)
+            {
+                // This used to continue with an empty dictionary, which is how the January
+                // regeneration published 4014 items with BsgId NULL: hideout requirements join
+                // to items through that column, so every one of them stopped resolving.
+                throw new InvalidOperationException(
+                    "tarkov.dev item cache is empty or missing. Run 'Debug > Cache Tarkov Dev Data' before "
+                    + "refreshing; without it every item would be published with no external ID and hideout "
+                    + "requirements would show raw identifiers instead of items.");
+            }
+
+            progress?.Invoke($"Loaded {devItems.Count} items from the tarkov.dev cache");
+
+            // Identity carry-over runs before the icons are downloaded: an item whose page was
+            // renamed keeps its previous row key, and the icon file is named after that key, so
+            // resolving identity afterwards would download the icon under a name nothing reads.
+            var identity = ItemIdentityResolver.Resolve(
+                itemList.Items
+                    .Select(i => new WikiItemIdentity { Id = i.Id, Name = i.Name, WikiPageLink = i.WikiPageLink })
+                    .ToList(),
+                devItems,
+                previousItems);
+
+            foreach (var item in itemList.Items)
+            {
+                if (identity.CarriedIds.TryGetValue(item.Id, out var carriedId))
+                    item.Id = carriedId;
+            }
+
+            // A carried key can land on a key another page mints for itself: the item version of
+            // a reused title. Two rows with one primary key would silently collapse into one on
+            // the upsert, so the run stops instead.
+            var duplicateItemIds = itemList.Items
+                .GroupBy(i => i.Id, StringComparer.Ordinal)
+                .Where(g => g.Count() > 1)
+                .ToList();
+            if (duplicateItemIds.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "Two items would share one row key after identity carry-over, which would collapse them "
+                    + "into a single row: "
+                    + string.Join("; ", duplicateItemIds.Take(10).Select(g => $"{g.Key} <- {string.Join(", ", g.Select(i => i.Name))}")));
+            }
+
+            if (identity.Renames.Count > 0)
+            {
+                progress?.Invoke($"{identity.Renames.Count} items kept their row key across a page rename");
+            }
+
             // 아이콘 URL 가져오기
             var itemNames = itemList.Items.Select(i => i.Name).ToList();
             var iconUrls = await cacheService.GetIconUrlsAsync(itemNames, progress);
@@ -375,22 +476,6 @@ namespace TarkovDBEditor.Services
                 .ToList();
             var downloadResult = await cacheService.DownloadIconsAsync(iconItems, progress, cancellationToken);
             progress?.Invoke($"Icons: {downloadResult.Downloaded} downloaded, {downloadResult.Failed} failed, {downloadResult.AlreadyDownloaded} cached");
-
-            // tarkov.dev 데이터로 enrichment (캐시 우선)
-            progress?.Invoke("Loading tarkov.dev data (from cache)...");
-            using var devService = new TarkovDevDataService();
-            var devItems = await devService.LoadCachedItemsAsync(cancellationToken);
-
-            if (devItems == null || devItems.Count == 0)
-            {
-                progress?.Invoke("No cached tarkov.dev items found. Please run 'Debug > Cache Tarkov Dev Data' first.");
-                // 빈 딕셔너리로 대체하여 계속 진행 (매칭 없이)
-                devItems = new Dictionary<string, TarkovDevMultiLangItem>();
-            }
-            else
-            {
-                progress?.Invoke($"Loaded {devItems.Count} items from tarkov.dev cache");
-            }
 
             var enrichedItems = new List<DbItem>();
             foreach (var item in itemList.Items)
@@ -447,355 +532,1102 @@ namespace TarkovDBEditor.Services
             };
         }
 
+        #region Quest building
+
         /// <summary>
-        /// Wiki에서 퀘스트 데이터 수집 및 처리
+        /// Writes the parts of a resolve a human reads in the run log: what was renamed, what
+        /// was held back, and which pages several game records claimed. The full lists go to
+        /// the JSON log the diff report consumes.
+        /// </summary>
+        private static void AppendIdentitySummary(StringBuilder logBuilder, QuestIdentityResolution? resolution)
+        {
+            if (resolution == null)
+                return;
+
+            logBuilder.AppendLine();
+            logBuilder.AppendLine("=== Quest identity ===");
+            logBuilder.AppendLine($"Matched to a game record: {resolution.Quests.Count(q => q.Task != null)}");
+            logBuilder.AppendLine($"Imported on the wiki's seasonal marker alone: {resolution.WikiOnlyPages.Count}");
+            logBuilder.AppendLine($"Identities carried from the previous database: {resolution.Quests.Count(q => q.IdentityCarried)}");
+            logBuilder.AppendLine($"Renamed: {resolution.Renames.Count} (of which {resolution.TitleReuses.Count()} gave their old title to another quest)");
+            logBuilder.AppendLine($"Pages held back (no game record, not seasonal): {resolution.HeldBackPages.Count}");
+            logBuilder.AppendLine($"Game records with no wiki page: {resolution.TasksWithoutPage.Count}");
+            logBuilder.AppendLine($"Pages claimed by several game records: {resolution.Collisions.Count}");
+
+            foreach (var reuse in resolution.TitleReuses)
+                logBuilder.AppendLine($"  [TITLE REUSE] '{reuse.PreviousName}' -> '{reuse.Title}' (task {reuse.BsgId})");
+
+            foreach (var collision in resolution.Collisions)
+            {
+                logBuilder.AppendLine(
+                    $"  [COLLISION] {collision.Title}: chose {collision.ChosenTaskId} by {collision.Rule} "
+                    + $"from {string.Join(", ", collision.CandidateTaskIds)}");
+            }
+
+            foreach (var alias in resolution.UnusedAliases)
+            {
+                logBuilder.AppendLine(
+                    $"  [ALIAS UNUSED] '{alias.PageTitle}' no longer needs its override; upstream may have fixed "
+                    + $"{alias.UpstreamIssue}. Remove the entry.");
+            }
+        }
+
+        /// <summary>
+        /// Thresholds a refresh refuses to cross. Each one describes a way the pipeline has
+        /// failed silently before: a wiki crawl that half arrived, a task cache that was
+        /// overwritten with an empty set, or a previous database whose external IDs were gone.
+        /// Crossing one is always a source problem, never something to publish.
+        /// See docs/decisions/feature-quest-data-1-1-refresh.spec.md, "Pipeline guards".
+        /// </summary>
+        internal static class RefreshGuards
+        {
+            /// <summary>
+            /// Above this share of previous quests without an external ID, the carry-over
+            /// cannot work: every renamed quest would be minted a fresh row key while its page
+            /// still matched, so all 91 of them would lose their recorded progress. The
+            /// match-rate guard does not catch this, because the pages do still match.
+            /// </summary>
+            public const double MaxPreviousQuestsWithoutBsgId = 0.10;
+
+            /// <summary>
+            /// Above this share of previously published quests losing their game record, the
+            /// task set is wrong (an outage serving a partial file, a game mode with fewer
+            /// tasks), not the game.
+            /// </summary>
+            public const double MaxLostMatches = 0.05;
+
+            /// <summary>Above this share of imported quests without a trader, the trader cache is wrong.</summary>
+            public const double MaxTradersMissing = 0.05;
+
+            /// <summary>
+            /// How far the task cache may lag the wiki crawl before the pair stops describing
+            /// one moment in the game.
+            /// </summary>
+            public static readonly TimeSpan MaxTaskCacheLag = TimeSpan.FromDays(7);
+        }
+
+        /// <summary>
+        /// Collects the wiki pages, updates the wiki cache from the network, and builds the
+        /// quest rows. The crawl is the only difference from the from-cache path.
         /// </summary>
         private async Task<QuestsFetchResult> FetchAndProcessQuestsAsync(
             List<DbItem> items,
+            IReadOnlyList<PreviousQuestRow> previousQuests,
             Action<string>? progress = null,
             CancellationToken cancellationToken = default)
         {
-            // 아이템 이름 -> ID 매핑 (Objective의 ItemName을 ItemId로 변환용)
-            var itemNameToId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            // BsgId -> (Id, Name) 매핑 (Wiki {{itemId}} 템플릿 처리용)
-            var bsgIdToItem = new Dictionary<string, (string Id, string Name)>(StringComparer.OrdinalIgnoreCase);
-            foreach (var item in items)
-            {
-                // Wiki Name으로 매핑
-                if (!string.IsNullOrEmpty(item.Name) && !itemNameToId.ContainsKey(item.Name))
-                    itemNameToId[item.Name] = item.Id;
-                // NameEN으로도 매핑 (다국어 지원)
-                if (!string.IsNullOrEmpty(item.NameEN) && !itemNameToId.ContainsKey(item.NameEN))
-                    itemNameToId[item.NameEN] = item.Id;
-                // BsgId로 매핑 (Wiki {{24자hex}} 템플릿 처리용)
-                if (!string.IsNullOrEmpty(item.BsgId) && !bsgIdToItem.ContainsKey(item.BsgId))
-                    bsgIdToItem[item.BsgId] = (item.Id, item.Name);
-            }
             using var questService = new WikiQuestService(_wikiDataDir);
+            await questService.LoadCacheAsync(cancellationToken);
 
-            // 캐시 로드
-            await questService.LoadCacheAsync();
-
-            // 퀘스트 목록 가져오기
             var questPages = await questService.GetAllQuestPagesAsync(progress, cancellationToken);
 
-            // 퀘스트 캐시 업데이트
             progress?.Invoke("Updating quest cache...");
-            await questService.UpdateQuestCacheAsync(questPages, progress);
+            await questService.UpdateQuestCacheAsync(questPages, progress, cancellationToken);
+            await questService.SaveCacheAsync(cancellationToken);
 
-            // 캐시 저장
-            await questService.SaveCacheAsync();
+            // Only the pages the category still lists: a page the crawl kept from an earlier
+            // run but the category has since dropped is not part of the game any more.
+            var crawled = new HashSet<string>(questPages, StringComparer.Ordinal);
+            var cached = questService.GetCachedQuests()
+                .Where(kvp => crawled.Contains(kvp.Key))
+                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.Ordinal);
 
-            // 캐시에서 Trader 정보 가져오기
-            var cachedQuests = questService.GetCachedQuests();
+            return await BuildQuestsAsync(cached, items, previousQuests, progress, cancellationToken);
+        }
 
-            // tarkov.dev 데이터 가져오기 (캐시 우선)
-            progress?.Invoke("Loading tarkov.dev quest data (from cache)...");
-            using var devService = new TarkovDevDataService();
-            var devQuestsCached = await devService.LoadCachedQuestsAsync(cancellationToken);
+        /// <summary>
+        /// Builds the quest rows from the caches on disk, with no network request.
+        /// </summary>
+        private async Task<QuestsFetchResult> LoadQuestsFromCacheAsync(
+            List<DbItem> items,
+            IReadOnlyList<PreviousQuestRow> previousQuests,
+            Action<string>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            using var questService = new WikiQuestService(_wikiDataDir);
+            await questService.LoadCacheAsync(cancellationToken);
 
-            if (devQuestsCached == null || devQuestsCached.Count == 0)
+            return await BuildQuestsAsync(
+                questService.GetCachedQuests(), items, previousQuests, progress, cancellationToken);
+        }
+
+        /// <summary>
+        /// Turns the two caches and the previous database into the rows a refresh writes.
+        /// <para>
+        /// The wiki supplies page identity, objective text, required items, location, editions,
+        /// prestige and the DSP decode count. The tarkov.dev task set supplies the rules that
+        /// decide availability (minimum level, Kappa, faction, prerequisites, per-trader
+        /// loyalty) and the external id everything else hangs off. Where a page has no task the
+        /// wiki's own parsers fill in, but only for the pages the wiki marks as seasonal; every
+        /// other unmatched page is held back.
+        /// </para>
+        /// </summary>
+        private async Task<QuestsFetchResult> BuildQuestsAsync(
+            IReadOnlyDictionary<string, CachedQuestInfo> cachedQuests,
+            List<DbItem> items,
+            IReadOnlyList<PreviousQuestRow> previousQuests,
+            Action<string>? progress,
+            CancellationToken cancellationToken)
+        {
+            var result = new QuestsFetchResult();
+
+            var pagesWithContent = cachedQuests.Values.Count(q => !string.IsNullOrEmpty(q.PageContent));
+            if (pagesWithContent == 0)
             {
-                // Block instead of silently falling back: an empty/missing tarkov.dev cache would
-                // leave every quest NameKO/NameJA as the English name. Force an explicit re-cache.
+                // This used to return an empty result and report success, which meant a refresh
+                // could delete every quest in the database and call it a day.
                 throw new InvalidOperationException(
-                    "tarkov.dev quest cache is empty or missing. Run 'Debug > Cache Tarkov Dev Data' " +
-                    "before refreshing; otherwise quest NameKO/NameJA would be filled with English fallbacks.");
+                    "The wiki quest cache holds no page content. Run 'Debug > Export Wiki Quests' first; "
+                    + "refreshing from an empty cache would delete every quest in the database.");
             }
 
-            var questsCachedAt = devService.GetCacheInfo().QuestsCachedAt;
+            progress?.Invoke($"Found {cachedQuests.Count} cached quest pages ({pagesWithContent} with content)");
+
+            using var devService = new TarkovDevDataService(_wikiDataDir);
+            var tasks = await devService.LoadCachedQuestsAsync(cancellationToken);
+            if (tasks == null || tasks.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "tarkov.dev task cache is empty or missing. Run 'Debug > Cache Tarkov Dev Data' before "
+                    + "refreshing; without it no quest gets its external ID, level, Kappa flag or prerequisites.");
+            }
+
+            var traders = await devService.LoadCachedTradersAsync(cancellationToken);
+            if (traders == null || traders.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "tarkov.dev trader cache is empty or missing. Run 'Debug > Cache Tarkov Dev Data' before "
+                    + "refreshing; quests name their trader by id, which only that cache can resolve.");
+            }
+
+            var cacheInfo = devService.GetCacheInfo();
+            AssertTaskCacheIsCurrent(cacheInfo.QuestsCachedAt, progress);
+            AssertPreviousDatabaseIsBackfilled(previousQuests);
+
             progress?.Invoke(
-                $"Loaded {devQuestsCached.Count} quests from tarkov.dev cache" +
-                (questsCachedAt.HasValue ? $" (cached {questsCachedAt:yyyy-MM-dd HH:mm})" : ""));
+                $"Loaded {tasks.Count} tasks and {traders.Count} traders from the tarkov.dev cache"
+                + (cacheInfo.QuestsCachedAt.HasValue ? $" (verified {cacheInfo.QuestsCachedAt:yyyy-MM-dd HH:mm})" : ""));
 
-            // 퀘스트 매칭 및 DB 데이터 생성
-            var dbQuests = new List<DbQuest>();
-            var devQuestsByNormalizedName = devQuestsCached.Values
+            var traderNamesById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var trader in traders)
+            {
+                if (!string.IsNullOrEmpty(trader.Id))
+                    traderNamesById[trader.Id] = trader.Name;
+            }
+
+            var pages = BuildWikiPages(cachedQuests, progress);
+            var resolution = QuestIdentityResolver.Resolve(
+                pages, tasks, previousQuests, QuestMatchOverrides.Load());
+            result.Identity = resolution;
+
+            AssertMatchRateHeld(previousQuests, resolution, progress);
+
+            progress?.Invoke(
+                $"Resolved {resolution.Quests.Count} quests: {resolution.Renames.Count} renamed, "
+                + $"{resolution.WikiOnlyPages.Count} seasonal (wiki only), {resolution.HeldBackPages.Count} held back, "
+                + $"{resolution.Collisions.Count} pages shared by several records");
+
+            var itemLookup = new ItemLookup(items);
+            var questIdByTitle = resolution.Quests.ToDictionary(q => q.Title, q => q.Id, StringComparer.Ordinal);
+
+            foreach (var quest in resolution.Quests)
+            {
+                cachedQuests.TryGetValue(quest.Title, out var cached);
+                result.Quests.Add(BuildQuestRow(quest, cached, traderNamesById));
+                result.TraderRequirements.AddRange(BuildTraderRequirements(quest, traderNamesById));
+            }
+
+            result.Requirements.AddRange(BuildRequirements(resolution, cachedQuests, questIdByTitle));
+            result.Requirements.AddRange(SynthesizeCollectorRequirements(result.Quests, progress));
+            // A requirement row's key is the (quest, prerequisite, group) triple, so two rows
+            // describing the same pair collide on the primary key and take the whole refresh
+            // down with a constraint error rather than a message anyone can act on. The two
+            // sources that could produce one are handled above; this keeps a third from being
+            // discovered the hard way, mid-regeneration.
+            result.Requirements = DeduplicateRequirements(result.Requirements, progress);
+            result.PrerequisiteDisagreements = ComputePrerequisiteDisagreements(resolution, cachedQuests, questIdByTitle);
+            result.Objectives.AddRange(BuildObjectives(resolution, cachedQuests, itemLookup));
+            result.OptionalQuests.AddRange(BuildOptionalQuests(resolution, cachedQuests, questIdByTitle));
+            result.RequiredItems.AddRange(BuildRequiredItems(resolution, cachedQuests, itemLookup));
+
+            AssertPublishConstraints(result, progress);
+
+            progress?.Invoke(
+                $"Built {result.Quests.Count} quests, {result.Requirements.Count} prerequisites, "
+                + $"{result.TraderRequirements.Count} loyalty gates, {result.Objectives.Count} objectives, "
+                + $"{result.RequiredItems.Count} required items");
+
+            await WriteRefreshLogAsync(result, cancellationToken);
+
+            result.Revision = $"{result.Quests.Count}_{DateTime.UtcNow:yyyyMMddHH}";
+            return result;
+        }
+
+        /// <summary>
+        /// Turns the cached pages into resolver input, and refuses a crawl whose seasonal
+        /// marker has stopped matching: pages that talk about a seasonal mode while none is
+        /// recognised means the wording moved upstream, and importing zero seasonal quests
+        /// without saying so is exactly the kind of silence this pipeline keeps producing.
+        /// </summary>
+        private static List<WikiQuestPage> BuildWikiPages(
+            IReadOnlyDictionary<string, CachedQuestInfo> cachedQuests,
+            Action<string>? progress)
+        {
+            var pages = new List<WikiQuestPage>();
+            var mentionsSeasonal = 0;
+
+            foreach (var (title, cached) in cachedQuests)
+            {
+                if (string.IsNullOrEmpty(cached.PageContent))
+                    continue;
+
+                var isSeasonal = WikiQuestService.ExtractIsSeasonal(cached.PageContent);
+                if (!isSeasonal && WikiQuestService.MentionsSeasonalMode(cached.PageContent))
+                    mentionsSeasonal++;
+
+                pages.Add(new WikiQuestPage { Title = title, IsSeasonal = isSeasonal });
+            }
+
+            var seasonal = pages.Count(p => p.IsSeasonal);
+            if (seasonal == 0 && mentionsSeasonal > 0)
+            {
+                throw new InvalidOperationException(
+                    $"{mentionsSeasonal} quest pages mention a seasonal mode in their Requirements section, but none "
+                    + "matches the marker ExtractIsSeasonal reads, so every seasonal quest would silently leave the "
+                    + "app. The wiki's wording has moved; update ExtractIsSeasonal and its tests.");
+            }
+
+            progress?.Invoke($"{pages.Count} quest pages with content, {seasonal} marked seasonal");
+            return pages;
+        }
+
+        private static void AssertTaskCacheIsCurrent(DateTime? taskCacheVerifiedAt, Action<string>? progress)
+        {
+            if (!taskCacheVerifiedAt.HasValue)
+                return;
+
+            var lag = DateTime.Now - taskCacheVerifiedAt.Value;
+            if (lag > RefreshGuards.MaxTaskCacheLag)
+            {
+                throw new InvalidOperationException(
+                    $"The tarkov.dev task cache was last confirmed current {lag.TotalDays:F0} days ago, more than "
+                    + $"{RefreshGuards.MaxTaskCacheLag.TotalDays:F0}. The wiki crawl and the game rules would describe "
+                    + "different moments in the game. Run 'Debug > Cache Tarkov Dev Data' first.");
+            }
+
+            progress?.Invoke($"tarkov.dev task cache last confirmed {lag.TotalHours:F0} hours ago");
+        }
+
+        /// <summary>
+        /// The guard the whole carry-over rests on. See the class remarks on
+        /// <see cref="BsgIdBackfillService"/> for why a database without external IDs cannot be
+        /// refreshed safely.
+        /// </summary>
+        private static void AssertPreviousDatabaseIsBackfilled(IReadOnlyList<PreviousQuestRow> previousQuests)
+        {
+            if (previousQuests.Count == 0)
+                return;
+
+            var missing = previousQuests.Count(q => string.IsNullOrEmpty(q.BsgId));
+            var share = (double)missing / previousQuests.Count;
+            if (share <= RefreshGuards.MaxPreviousQuestsWithoutBsgId)
+                return;
+
+            throw new InvalidOperationException(
+                $"{missing} of {previousQuests.Count} quests in the current database have no external ID "
+                + $"({share:P0}, over the {RefreshGuards.MaxPreviousQuestsWithoutBsgId:P0} limit). Refreshing now would "
+                + "mint a fresh row key for every quest patch 1.1 renamed, detaching the recorded progress of each one "
+                + "in every build in the field. Run 'Debug > Backfill external IDs from snapshot...' first.");
+        }
+
+        /// <summary>
+        /// A published quest losing its game record is normal in a patch that removes quests;
+        /// a lot of them losing it at once is an upstream problem.
+        /// </summary>
+        private static void AssertMatchRateHeld(
+            IReadOnlyList<PreviousQuestRow> previousQuests,
+            QuestIdentityResolution resolution,
+            Action<string>? progress)
+        {
+            var previouslyMatched = previousQuests.Where(q => !string.IsNullOrEmpty(q.BsgId)).ToList();
+            if (previouslyMatched.Count == 0)
+                return;
+
+            var carriedBsgIds = new HashSet<string>(
+                resolution.Quests.Where(q => q.Task != null).Select(q => q.Task!.Id), StringComparer.OrdinalIgnoreCase);
+            var lost = previouslyMatched.Count(q => !carriedBsgIds.Contains(q.BsgId!));
+            var share = (double)lost / previouslyMatched.Count;
+
+            if (share > RefreshGuards.MaxLostMatches)
+            {
+                throw new InvalidOperationException(
+                    $"{lost} of {previouslyMatched.Count} published quests ({share:P0}) would lose their game record, "
+                    + $"over the {RefreshGuards.MaxLostMatches:P0} limit. A patch removes quests; it does not remove this "
+                    + "many at once. Check that the task cache is complete before publishing.");
+            }
+
+            progress?.Invoke($"{lost} of {previouslyMatched.Count} published quests lost their game record ({share:P1})");
+        }
+
+        /// <summary>
+        /// The value vocabularies and NULL rules the fielded build depends on. Each of these is
+        /// a way an additive publish could still break a build already installed: an unknown
+        /// requirement type locks a quest forever, an unknown faction hides it, and a normalized
+        /// name that does not match what the app computes silently orphans recorded progress.
+        /// </summary>
+        private static void AssertPublishConstraints(QuestsFetchResult result, Action<string>? progress)
+        {
+            var problems = new List<string>();
+
+            var badTypes = result.Requirements
+                .Where(r => r.RequirementType is not ("Complete" or "Accept" or "Fail"))
+                .Select(r => r.RequirementType)
+                .Distinct()
+                .ToList();
+            if (badTypes.Count > 0)
+            {
+                problems.Add(
+                    $"RequirementType outside {{Complete, Accept, Fail}}: {string.Join(", ", badTypes)}. "
+                    + "The fielded build treats an unknown type as never satisfied, locking the quest forever.");
+            }
+
+            var badFactions = result.Quests
+                .Where(q => q.Faction != null && q.Faction is not ("Bear" or "Usec"))
+                .Select(q => $"{q.Name} ({q.Faction})")
+                .ToList();
+            if (badFactions.Count > 0)
+            {
+                problems.Add(
+                    $"Faction outside {{NULL, Bear, Usec}}: {string.Join(", ", badFactions.Take(10))}. "
+                    + "The fielded build compares the string for equality, so any other value hides the quest.");
+            }
+
+            var missingTrader = result.Quests.Where(q => string.IsNullOrEmpty(q.Trader)).ToList();
+            if (result.Quests.Count > 0)
+            {
+                var share = (double)missingTrader.Count / result.Quests.Count;
+                if (share > RefreshGuards.MaxTradersMissing)
+                {
+                    problems.Add(
+                        $"{missingTrader.Count} of {result.Quests.Count} quests ({share:P0}) have no Trader, over the "
+                        + $"{RefreshGuards.MaxTradersMissing:P0} limit: "
+                        + string.Join(", ", missingTrader.Take(10).Select(q => q.Name)));
+                }
+            }
+
+            var blankNormalized = result.Quests.Where(q => string.IsNullOrEmpty(q.NormalizedName)).ToList();
+            if (blankNormalized.Count > 0)
+                problems.Add($"NormalizedName is empty on: {string.Join(", ", blankNormalized.Take(10).Select(q => q.Name))}");
+
+            var driftedNormalized = result.Quests
                 .Where(q => !string.IsNullOrEmpty(q.NormalizedName))
-                .ToDictionary(q => q.NormalizedName!, q => q, StringComparer.OrdinalIgnoreCase);
-
-            // 퀘스트 이름 -> ID 매핑 (requirements 파싱용)
-            var questNameToId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var questName in questPages)
-            {
-                var encodedName = Uri.EscapeDataString(questName.Replace(" ", "_"))
-                    .Replace("%28", "(").Replace("%29", ")");
-                var wikiPageLink = $"https://escapefromtarkov.fandom.com/wiki/{encodedName}";
-                var id = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(wikiPageLink));
-
-                questNameToId[questName] = id;
-
-                var dbQuest = new DbQuest
+                .Where(q =>
                 {
-                    Id = id,
-                    Name = questName,
-                    WikiPageLink = wikiPageLink
+                    var mintedTitle = WikiQuestIdentity.TitleOf(q.Id);
+                    return mintedTitle == null || QuestNormalizedName.SqlForm(mintedTitle) != q.NormalizedName;
+                })
+                .ToList();
+            if (driftedNormalized.Count > 0)
+            {
+                problems.Add(
+                    "NormalizedName does not match the value the app computes from the row key on: "
+                    + string.Join(", ", driftedNormalized.Take(10).Select(q => $"{q.Name} ({q.NormalizedName})"))
+                    + ". Progress recorded against these quests would not be found.");
+            }
+
+            foreach (var duplicate in result.Quests.GroupBy(q => q.Id, StringComparer.Ordinal).Where(g => g.Count() > 1))
+                problems.Add($"Two quests share the row key {duplicate.Key}: {string.Join(", ", duplicate.Select(q => q.Name))}");
+
+            foreach (var duplicate in result.Quests
+                .GroupBy(q => q.NormalizedName, StringComparer.Ordinal)
+                .Where(g => g.Key.Length > 0 && g.Count() > 1))
+            {
+                problems.Add(
+                    $"Two quests share the normalized name '{duplicate.Key}': "
+                    + string.Join(", ", duplicate.Select(q => q.Name)));
+            }
+
+            if (problems.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "The refresh would publish data the builds in the field cannot read correctly:\n  - "
+                    + string.Join("\n  - ", problems));
+            }
+
+            progress?.Invoke("Publish constraints hold (requirement types, factions, traders, normalized names)");
+        }
+
+        /// <summary>
+        /// Maps one resolved quest onto its database row, source by source. See the per-field
+        /// precedence table in the spec.
+        /// </summary>
+        private static DbQuest BuildQuestRow(
+            ResolvedQuest quest,
+            CachedQuestInfo? cached,
+            IReadOnlyDictionary<string, string> traderNamesById)
+        {
+            var content = cached?.PageContent ?? "";
+            var row = new DbQuest
+            {
+                Id = quest.Id,
+                Name = quest.Title,
+                NormalizedName = quest.NormalizedName,
+                WikiPageLink = quest.WikiPageLink,
+                Location = ExtractLocationFromContent(content) ?? "Any",
+                MinScavKarma = cached?.MinScavKarma ?? WikiQuestService.ExtractMinScavKarma(content),
+                RequiredEdition = cached?.RequiredEdition ?? WikiQuestService.ExtractRequiredEdition(content),
+                ExcludedEdition = cached?.ExcludedEdition ?? WikiQuestService.ExtractExcludedEdition(content),
+                RequiredDecodeCount = cached?.RequiredDecodeCount ?? WikiQuestService.ExtractRequiredDecodeCount(content),
+                RequiredPrestigeLevel = WikiQuestService.ExtractRequiredPrestigeLevel(content),
+            };
+
+            var wikiTrader = NormalizeTraderName(cached?.Trader) ?? ExtractTraderFromContent(content);
+
+            if (quest.Task == null)
+            {
+                // A seasonal page the API does not carry: everything the game would have told
+                // us comes from the wiki's own parsers, as it did before this refresh.
+                row.NameEN = quest.Title;
+                row.Trader = wikiTrader;
+                row.MinLevel = cached?.MinLevel ?? WikiQuestService.ExtractMinLevel(content);
+                row.KappaRequired = false;
+                row.Faction = cached?.Faction ?? WikiQuestService.ExtractFaction(content);
+                return row;
+            }
+
+            var task = quest.Task;
+            row.BsgId = task.Id;
+            row.NameEN = string.IsNullOrEmpty(task.NameEN) ? quest.Title : task.NameEN;
+            row.NameKO = task.NameKO;
+            row.NameJA = task.NameJA;
+            // The API names the giving trader by id; the wiki's "given by" line stands in when
+            // the traders cache does not know that id (a trader added since it was filled).
+            row.Trader = (task.Trader != null && traderNamesById.TryGetValue(task.Trader, out var traderName)
+                ? traderName
+                : null) ?? wikiTrader;
+            // 0 means "no level requirement" upstream, and no published row has ever held 0;
+            // the app's level gate and detail pane both read 0 and NULL the same way.
+            row.MinLevel = task.MinPlayerLevel > 0 ? task.MinPlayerLevel : null;
+            row.KappaRequired = task.KappaRequired;
+            row.Faction = quest.FactionPairShared ? null : MapFaction(task.FactionName, quest.Title);
+            return row;
+        }
+
+        /// <summary>
+        /// "Any" is no restriction at all; anything but the two factions would be a value the
+        /// fielded build hides the quest for, so it fails the run instead.
+        /// </summary>
+        private static string? MapFaction(string? factionName, string questTitle) => factionName switch
+        {
+            null or "" or "Any" => null,
+            "BEAR" => "Bear",
+            "USEC" => "Usec",
+            _ => throw new InvalidOperationException(
+                $"'{questTitle}' has faction '{factionName}', which is not Any, BEAR or USEC. "
+                + "The fielded build compares Faction for equality with the player's side, so an unknown value "
+                + "would hide the quest from everyone.")
+        };
+
+        private static IEnumerable<DbQuestTraderRequirement> BuildTraderRequirements(
+            ResolvedQuest quest,
+            IReadOnlyDictionary<string, string> traderNamesById)
+        {
+            if (quest.Task == null)
+                yield break;
+
+            foreach (var gate in quest.Task.TraderLevelRequirements)
+            {
+                if (string.IsNullOrEmpty(gate.TraderId))
+                    continue;
+
+                yield return new DbQuestTraderRequirement
+                {
+                    QuestId = quest.Id,
+                    TraderId = gate.TraderId,
+                    TraderName = traderNamesById.TryGetValue(gate.TraderId, out var name) ? name : gate.TraderId,
+                    RequiredLevel = gate.Level,
                 };
-
-                // 캐시에서 Trader (givenby), Location, MinLevel, MinScavKarma 가져오기
-                if (cachedQuests.TryGetValue(questName, out var cached))
-                {
-                    // 캐시된 Trader가 있으면 사용, 없으면 PageContent에서 직접 파싱
-                    var trader = NormalizeTraderName(cached.Trader);
-                    if (string.IsNullOrEmpty(trader) && !string.IsNullOrEmpty(cached.PageContent))
-                    {
-                        trader = ExtractTraderFromContent(cached.PageContent);
-                    }
-                    dbQuest.Trader = trader;
-
-                    // Location - PageContent에서 파싱, null이면 "Any"
-                    if (!string.IsNullOrEmpty(cached.PageContent))
-                    {
-                        dbQuest.Location = ExtractLocationFromContent(cached.PageContent) ?? "Any";
-                    }
-                    else
-                    {
-                        dbQuest.Location = "Any";
-                    }
-
-                    // MinLevel, MinScavKarma - 캐시에 있으면 사용, 없으면 PageContent에서 파싱
-                    dbQuest.MinLevel = cached.MinLevel ?? WikiQuestService.ExtractMinLevel(cached.PageContent ?? "");
-                    dbQuest.MinScavKarma = cached.MinScavKarma ?? WikiQuestService.ExtractMinScavKarma(cached.PageContent ?? "");
-                }
-
-                // Wiki 캐시에서 KappaRequired, Faction, RequiredEdition, ExcludedEdition, RequiredDecodeCount 파싱
-                if (cachedQuests.TryGetValue(questName, out var cachedForKappa) && !string.IsNullOrEmpty(cachedForKappa.PageContent))
-                {
-                    dbQuest.KappaRequired = WikiQuestService.ExtractKappaRequired(cachedForKappa.PageContent);
-                    dbQuest.Faction = cachedForKappa.Faction ?? WikiQuestService.ExtractFaction(cachedForKappa.PageContent);
-                    dbQuest.RequiredEdition = cachedForKappa.RequiredEdition ?? WikiQuestService.ExtractRequiredEdition(cachedForKappa.PageContent);
-                    dbQuest.ExcludedEdition = cachedForKappa.ExcludedEdition ?? WikiQuestService.ExtractExcludedEdition(cachedForKappa.PageContent);
-                    dbQuest.RequiredDecodeCount = cachedForKappa.RequiredDecodeCount ?? WikiQuestService.ExtractRequiredDecodeCount(cachedForKappa.PageContent);
-                    dbQuest.RequiredPrestigeLevel = WikiQuestService.ExtractRequiredPrestigeLevel(cachedForKappa.PageContent);
-                }
-
-                // tarkov.dev 매칭 (캐시된 데이터 사용) - 번역용
-                TarkovDevQuestCacheItem? devQuest = null;
-                var normalizedQuestName = NormalizeQuestName(questName);
-
-                // 1차: wikiPageLink로 매칭 시도
-                // 2차: normalizedName으로 매칭 시도
-                if (devQuestsCached.TryGetValue(wikiPageLink, out devQuest) ||
-                    devQuestsByNormalizedName.TryGetValue(normalizedQuestName, out devQuest))
-                {
-                    dbQuest.BsgId = devQuest.Id;
-                    dbQuest.NameEN = devQuest.NameEN;
-                    dbQuest.NameKO = devQuest.NameKO;
-                    dbQuest.NameJA = devQuest.NameJA;
-                    // Trader는 캐시에서 이미 설정됨 (Wiki givenby 우선)
-                    System.Diagnostics.Debug.WriteLine($"[RefreshData] Matched quest: {questName} -> BSG ID: {devQuest.Id}");
-                }
-                else
-                {
-                    dbQuest.NameEN = questName;
-                    dbQuest.NameKO = questName;
-                    dbQuest.NameJA = questName;
-                    System.Diagnostics.Debug.WriteLine($"[RefreshData] No match for: {questName} (normalized: {normalizedQuestName})");
-                }
-
-                dbQuests.Add(dbQuest);
             }
+        }
 
-            // 매칭 통계 출력
-            var matchedCount = dbQuests.Count(q => !string.IsNullOrEmpty(q.BsgId));
-            progress?.Invoke($"Matched {matchedCount}/{dbQuests.Count} quests with tarkov.dev data");
-            System.Diagnostics.Debug.WriteLine($"[RefreshData] Matched {matchedCount}/{dbQuests.Count} quests with tarkov.dev BsgId");
+        /// <summary>
+        /// Prerequisites come from the game data for every matched quest, and from the wiki only
+        /// for the seasonal pages the API does not carry.
+        /// <para>
+        /// The wiki's list is both stale (111 quests where it names chains 1.1 dissolved) and
+        /// short (60 where it names fewer than the game does, Sew it Good - Part 4 among them),
+        /// so it is no longer consulted for a quest the game describes. The cost is the wiki's
+        /// OR groups on 15 quests, which the API has no equivalent for; they collapse to the
+        /// game's AND list and the diff report shows each one.
+        /// </para>
+        /// </summary>
+        private static IEnumerable<DbQuestRequirement> BuildRequirements(
+            QuestIdentityResolution resolution,
+            IReadOnlyDictionary<string, CachedQuestInfo> cachedQuests,
+            IReadOnlyDictionary<string, string> questIdByTitle)
+        {
+            var questIdByBsgId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var quest in resolution.Quests.Where(q => q.Task != null))
+                questIdByBsgId[quest.Task!.Id] = quest.Id;
 
-            // 퀘스트 선행 조건(requirements) 파싱
-            // NOTE: Collector 퀘스트는 |previous 필드가 자기 자신을 참조하므로 스킵
-            // Collector의 선행 조건은 DB 저장 후 KappaRequired=1인 퀘스트들을 기반으로 별도 추가됨
-            progress?.Invoke("Parsing quest requirements...");
-            var dbRequirements = new List<DbQuestRequirement>();
-
-            foreach (var questName in questPages)
+            foreach (var quest in resolution.Quests)
             {
-                // Collector 퀘스트는 |previous 파싱 스킵 (자기 자신 참조 방지)
-                if (questName.Equals("Collector", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                if (!questNameToId.TryGetValue(questName, out var questId))
-                    continue;
-
-                if (!cachedQuests.TryGetValue(questName, out var cached) || string.IsNullOrEmpty(cached.PageContent))
-                    continue;
-
-                var parsedReqs = WikiQuestService.ExtractPreviousQuests(cached.PageContent);
-
-                foreach (var req in parsedReqs)
+                if (quest.Task != null)
                 {
-                    // 선행 퀘스트 이름으로 ID 찾기
-                    if (!questNameToId.TryGetValue(req.QuestName, out var requiredQuestId))
-                    {
-                        // (quest) 접미사 추가해서 다시 시도
-                        if (!questNameToId.TryGetValue($"{req.QuestName} (quest)", out requiredQuestId))
-                            continue; // 매칭 실패 - 스킵
-                    }
-
-                    dbRequirements.Add(new DbQuestRequirement
-                    {
-                        QuestId = questId,
-                        RequiredQuestId = requiredQuestId,
-                        RequirementType = req.RequirementType,
-                        DelayMinutes = req.DelayMinutes,
-                        GroupId = req.GroupId
-                    });
-                }
-            }
-
-            progress?.Invoke($"Parsed {dbRequirements.Count} quest requirements");
-
-            // 퀘스트 목표(objectives) 파싱
-            progress?.Invoke("Parsing quest objectives...");
-            var dbObjectives = new List<DbQuestObjective>();
-
-            foreach (var questName in questPages)
-            {
-                if (!questNameToId.TryGetValue(questName, out var questId))
-                    continue;
-
-                if (!cachedQuests.TryGetValue(questName, out var cached) || string.IsNullOrEmpty(cached.PageContent))
-                    continue;
-
-                var parsedObjs = WikiQuestService.ExtractObjectives(cached.PageContent);
-
-                foreach (var obj in parsedObjs)
-                {
-                    // ItemName으로 ItemId 매핑
-                    string? itemId = null;
-                    if (!string.IsNullOrEmpty(obj.ItemName))
-                    {
-                        itemNameToId.TryGetValue(obj.ItemName, out itemId);
-                    }
-
-                    dbObjectives.Add(new DbQuestObjective
-                    {
-                        QuestId = questId,
-                        SortOrder = obj.SortOrder,
-                        ObjectiveType = obj.Type.ToString(),
-                        Description = obj.Description,
-                        TargetType = obj.TargetType,
-                        TargetCount = obj.TargetCount,
-                        ItemId = itemId,
-                        ItemName = obj.ItemName,
-                        RequiresFIR = obj.RequiresFIR,
-                        MapName = obj.MapName,
-                        LocationName = obj.LocationName,
-                        Conditions = obj.Conditions,
-                        DogtagMinLevel = obj.DogtagMinLevel,
-                        DogtagFaction = obj.DogtagFaction
-                    });
-                }
-            }
-
-            progress?.Invoke($"Parsed {dbObjectives.Count} quest objectives");
-
-            // 대체 퀘스트(Other Choices) 파싱
-            progress?.Invoke("Parsing optional quests (other choices)...");
-            var dbOptionalQuests = new List<DbOptionalQuest>();
-
-            foreach (var questName in questPages)
-            {
-                if (!questNameToId.TryGetValue(questName, out var questId))
-                    continue;
-
-                if (!cachedQuests.TryGetValue(questName, out var cached) || string.IsNullOrEmpty(cached.PageContent))
-                    continue;
-
-                var relatedQuests = WikiQuestService.ExtractRelatedQuests(cached.PageContent);
-
-                foreach (var relatedQuestName in relatedQuests)
-                {
-                    // 대체 퀘스트 이름으로 ID 찾기
-                    if (!questNameToId.TryGetValue(relatedQuestName, out var alternativeQuestId))
-                    {
-                        // (quest) 접미사 추가해서 다시 시도
-                        if (!questNameToId.TryGetValue($"{relatedQuestName} (quest)", out alternativeQuestId))
-                            continue; // 매칭 실패 - 스킵
-                    }
-
-                    // 자기 자신을 참조하는 경우 스킵
-                    if (questId == alternativeQuestId)
+                    // Collector's prerequisite list is the Kappa set, synthesized from the flags
+                    // (see SynthesizeCollectorRequirements). The API also gives it five of its
+                    // own, and all five are already in that set, so taking both would emit the
+                    // same row twice. Matched on the same names the synthesis matches on, so
+                    // exactly one of the two owns the list.
+                    if (IsCollector(quest.Title) || IsCollector(quest.Task.NameEN))
                         continue;
 
-                    dbOptionalQuests.Add(new DbOptionalQuest
+                    foreach (var prerequisite in quest.Task.TaskRequirements)
                     {
-                        QuestId = questId,
-                        AlternativeQuestId = alternativeQuestId
-                    });
+                        // A prerequisite pointing at a quest this refresh did not import (a
+                        // removed record, or one held back) has nothing to reference, and the
+                        // foreign key would reject the row.
+                        if (!questIdByBsgId.TryGetValue(prerequisite.TaskId, out var requiredQuestId))
+                            continue;
+
+                        yield return new DbQuestRequirement
+                        {
+                            QuestId = quest.Id,
+                            RequiredQuestId = requiredQuestId,
+                            RequirementType = MapRequirementStatuses(prerequisite.Status, quest.Title),
+                            // The API has no OR groups, so every row is one AND term. The app
+                            // reads a singleton group as AND, which is what the wiki parser's
+                            // 1..n numbering also produced.
+                            GroupId = 0,
+                            DelayMinutes = quest.Task.AvailableDelaySecondsMin > 0
+                                ? quest.Task.AvailableDelaySecondsMin / 60
+                                : null,
+                        };
+                    }
+
+                    continue;
                 }
-            }
 
-            progress?.Invoke($"Parsed {dbOptionalQuests.Count} optional quests");
-
-            // 퀘스트 필요 아이템(Required Items) 파싱
-            progress?.Invoke("Parsing quest required items...");
-            var dbRequiredItems = new List<DbQuestRequiredItem>();
-
-            foreach (var questName in questPages)
-            {
-                if (!questNameToId.TryGetValue(questName, out var questId))
+                if (!cachedQuests.TryGetValue(quest.Title, out var cached) || string.IsNullOrEmpty(cached.PageContent))
                     continue;
 
-                if (!cachedQuests.TryGetValue(questName, out var cached) || string.IsNullOrEmpty(cached.PageContent))
-                    continue;
-
-                var parsedItems = WikiQuestService.ExtractRequiredItems(cached.PageContent);
-
-                foreach (var item in parsedItems)
+                foreach (var parsed in WikiQuestService.ExtractPreviousQuests(cached.PageContent))
                 {
-                    // ItemId, ItemName 매핑
-                    string? itemId = null;
-                    string itemName = item.ItemName;
+                    if (!TryResolveQuestId(questIdByTitle, parsed.QuestName, out var requiredQuestId))
+                        continue;
 
-                    // 1. Wiki {{itemId}} 템플릿의 24자 hex ID -> Items 테이블의 BsgId로 찾기
-                    if (!string.IsNullOrEmpty(item.ItemId) && bsgIdToItem.TryGetValue(item.ItemId, out var bsgMatch))
+                    yield return new DbQuestRequirement
                     {
-                        itemId = bsgMatch.Id;
-                        // ItemName이 비어있으면 매칭된 아이템 이름 사용
-                        if (string.IsNullOrEmpty(itemName))
-                            itemName = bsgMatch.Name;
-                    }
-
-                    // 2. ItemName으로 ItemId 매핑 (BsgId 매칭 실패 시)
-                    if (string.IsNullOrEmpty(itemId) && !string.IsNullOrEmpty(itemName))
-                    {
-                        itemNameToId.TryGetValue(itemName, out itemId);
-                    }
-
-                    var dbItem = new DbQuestRequiredItem
-                    {
-                        QuestId = questId,
-                        ItemId = itemId,
-                        ItemName = itemName,
-                        Count = item.Count,
-                        RequiresFIR = item.RequiresFIR,
-                        RequirementType = item.RequirementType,
-                        SortOrder = item.SortOrder,
-                        DogtagMinLevel = item.DogtagMinLevel,
-                        DogtagFaction = item.DogtagFaction
+                        QuestId = quest.Id,
+                        RequiredQuestId = requiredQuestId,
+                        RequirementType = parsed.RequirementType,
+                        DelayMinutes = parsed.DelayMinutes,
+                        GroupId = parsed.GroupId,
                     };
-                    dbItem.Id = dbItem.ComputeId(); // ID 생성
-                    dbRequiredItems.Add(dbItem);
                 }
             }
+        }
 
-            progress?.Invoke($"Parsed {dbRequiredItems.Count} quest required items");
+        /// <summary>
+        /// Compares, per matched quest, the prerequisite list the wiki still records against the
+        /// one the game reports. Nothing here reaches the database: the game's list is what
+        /// ships, and this is the review material for that decision.
+        /// <para>
+        /// The wiki parser is kept for exactly two jobs now: writing rows for the seasonal
+        /// quests the API does not carry, and producing this list. Dropping it entirely would
+        /// leave the refresh with no way to notice the game data going wrong.
+        /// </para>
+        /// </summary>
+        private static List<PrerequisiteDisagreement> ComputePrerequisiteDisagreements(
+            QuestIdentityResolution resolution,
+            IReadOnlyDictionary<string, CachedQuestInfo> cachedQuests,
+            IReadOnlyDictionary<string, string> questIdByTitle)
+        {
+            var nameByQuestId = resolution.Quests.ToDictionary(q => q.Id, q => q.Title, StringComparer.Ordinal);
+            var questIdByBsgId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var quest in resolution.Quests.Where(q => q.Task != null))
+                questIdByBsgId[quest.Task!.Id] = quest.Id;
 
-            // 리비전 생성
-            var revision = $"{dbQuests.Count}_{DateTime.UtcNow:yyyyMMddHH}";
+            var disagreements = new List<PrerequisiteDisagreement>();
 
-            return new QuestsFetchResult
+            foreach (var quest in resolution.Quests)
             {
-                Quests = dbQuests,
-                Requirements = dbRequirements,
-                Objectives = dbObjectives,
-                OptionalQuests = dbOptionalQuests,
-                RequiredItems = dbRequiredItems,
-                Revision = revision
+                if (quest.Task == null)
+                    continue;
+                if (!cachedQuests.TryGetValue(quest.Title, out var cached) || string.IsNullOrEmpty(cached.PageContent))
+                    continue;
+
+                // Collector's own page points its |previous field at itself, which is why the
+                // Kappa set is synthesized rather than parsed; comparing it here says nothing.
+                if (IsCollector(quest.Title))
+                    continue;
+
+                var wiki = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var parsed in WikiQuestService.ExtractPreviousQuests(cached.PageContent))
+                {
+                    if (TryResolveQuestId(questIdByTitle, parsed.QuestName, out var requiredQuestId))
+                        wiki.Add(requiredQuestId);
+                }
+
+                var game = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var prerequisite in quest.Task.TaskRequirements)
+                {
+                    if (questIdByBsgId.TryGetValue(prerequisite.TaskId, out var requiredQuestId))
+                        game.Add(requiredQuestId);
+                }
+
+                var verdict = (wiki.SetEquals(game), wiki.IsSupersetOf(game), game.IsSupersetOf(wiki)) switch
+                {
+                    (true, _, _) => "agree",
+                    (false, true, _) => "wikiSuperset",
+                    (false, false, true) => "taskSuperset",
+                    _ => "conflict",
+                };
+
+                disagreements.Add(new PrerequisiteDisagreement
+                {
+                    Quest = quest.Title,
+                    Verdict = verdict,
+                    Wiki = wiki.Select(id => nameByQuestId.TryGetValue(id, out var n) ? n : id)
+                        .OrderBy(n => n, StringComparer.Ordinal).ToList(),
+                    Game = game.Select(id => nameByQuestId.TryGetValue(id, out var n) ? n : id)
+                        .OrderBy(n => n, StringComparer.Ordinal).ToList(),
+                });
+            }
+
+            return disagreements;
+        }
+
+        /// <summary>
+        /// Collapses the statuses that satisfy one prerequisite into the single requirement type
+        /// a row can hold.
+        /// <para>
+        /// Fourteen 1.1 prerequisites name more than one: ten are "active or complete" and four
+        /// are "complete or failed". A row carries one type, and its identity is the
+        /// (quest, prerequisite, group) triple, so emitting one row per status would collide on
+        /// the primary key rather than express an alternative.
+        /// </para>
+        /// <para>
+        /// The most permissive available type wins. "Accept" is satisfied by an active
+        /// <em>and</em> by a completed prerequisite (<c>QuestProgressService.IsStatusSatisfied</c>),
+        /// so "active or complete" collapses onto it with nothing lost. "Complete or failed" has
+        /// no single equivalent and takes Complete, the path a player normally follows; the
+        /// alternative is over-locking, which the refresh report lists so the handful of quests
+        /// affected are reviewed rather than discovered.
+        /// </para>
+        /// </summary>
+        // Public because it is a rule about the published data, not an implementation detail:
+        // the guard tests pin it directly, and a change here changes what every build in the
+        // field reads as a prerequisite.
+        public static string MapRequirementStatuses(IReadOnlyList<string> statuses, string questTitle)
+        {
+            // An entry with no status at all means the ordinary "must be completed".
+            if (statuses.Count == 0)
+                return "Complete";
+
+            var types = statuses.Select(s => MapRequirementStatus(s, questTitle)).ToList();
+
+            if (types.Contains("Accept")) return "Accept";
+            if (types.Contains("Complete")) return "Complete";
+            return "Fail";
+        }
+
+        private static string MapRequirementStatus(string status, string questTitle) => status.ToLowerInvariant() switch
+        {
+            "complete" => "Complete",
+            "active" => "Accept",
+            "failed" => "Fail",
+            _ => throw new InvalidOperationException(
+                $"'{questTitle}' has a prerequisite with status '{status}', which the app has no reading for. "
+                + "It treats an unknown requirement type as never satisfied, which would lock the quest forever.")
+        };
+
+        /// <summary>
+        /// Keeps one row per (quest, prerequisite, group), preferring the most permissive
+        /// requirement type among the duplicates for the same reason
+        /// <see cref="MapRequirementStatuses"/> does: a quest shown slightly early is a smaller
+        /// harm than one locked forever.
+        /// </summary>
+        private static List<DbQuestRequirement> DeduplicateRequirements(
+            List<DbQuestRequirement> requirements,
+            Action<string>? progress)
+        {
+            var kept = new Dictionary<string, DbQuestRequirement>(StringComparer.Ordinal);
+            var collapsed = 0;
+
+            foreach (var requirement in requirements)
+            {
+                var key = requirement.ComputeId();
+                if (!kept.TryGetValue(key, out var existing))
+                {
+                    kept[key] = requirement;
+                    continue;
+                }
+
+                collapsed++;
+                if (Permissiveness(requirement.RequirementType) > Permissiveness(existing.RequirementType))
+                    kept[key] = requirement;
+            }
+
+            if (collapsed > 0)
+                progress?.Invoke($"Collapsed {collapsed} duplicate prerequisite rows onto their most permissive type");
+
+            return kept.Values.ToList();
+
+            static int Permissiveness(string requirementType) => requirementType switch
+            {
+                "Accept" => 2,
+                "Complete" => 1,
+                _ => 0,
             };
         }
 
+        /// <summary>
+        /// Collector by any of the names the pipeline may know it under. Its prerequisite list is
+        /// derived from the Kappa flags rather than parsed or fetched, so both the wiki parser
+        /// and the game data skip it.
+        /// </summary>
+        private static bool IsCollector(string questTitle) =>
+            questTitle.Equals("Collector", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Collector's prerequisite list is the Kappa set, computed rather than curated: the
+        /// roadmap keeps it derived so the gauge and the Collector page cannot disagree with
+        /// the flags.
+        /// <para>
+        /// This used to run against the database after the write, which meant it could only
+        /// insert: a quest that lost its Kappa flag kept its Collector row forever, and the
+        /// published data carries one such leftover (Grenadier). Building the rows here puts
+        /// them through the same table-global diff as every other requirement, so a quest
+        /// leaving the Kappa set leaves Collector's list with it.
+        /// </para>
+        /// </summary>
+        private static IEnumerable<DbQuestRequirement> SynthesizeCollectorRequirements(
+            IReadOnlyList<DbQuest> quests,
+            Action<string>? progress)
+        {
+            var collector = quests.FirstOrDefault(q => IsCollector(q.Name) || IsCollector(q.NameEN ?? ""));
+
+            if (collector == null)
+            {
+                progress?.Invoke("Collector quest not found; skipping its Kappa prerequisites");
+                yield break;
+            }
+
+            var kappaQuests = quests.Where(q => q.KappaRequired && q.Id != collector.Id).ToList();
+            progress?.Invoke($"Collector: {kappaQuests.Count} Kappa prerequisites");
+
+            foreach (var quest in kappaQuests)
+            {
+                yield return new DbQuestRequirement
+                {
+                    QuestId = collector.Id,
+                    RequiredQuestId = quest.Id,
+                    RequirementType = "Complete",
+                    GroupId = 0,
+                };
+            }
+        }
+
+        private static IEnumerable<DbQuestObjective> BuildObjectives(
+            QuestIdentityResolution resolution,
+            IReadOnlyDictionary<string, CachedQuestInfo> cachedQuests,
+            ItemLookup itemLookup)
+        {
+            foreach (var quest in resolution.Quests)
+            {
+                if (!cachedQuests.TryGetValue(quest.Title, out var cached) || string.IsNullOrEmpty(cached.PageContent))
+                    continue;
+
+                foreach (var parsed in WikiQuestService.ExtractObjectives(cached.PageContent))
+                {
+                    var objective = new DbQuestObjective
+                    {
+                        QuestId = quest.Id,
+                        SortOrder = parsed.SortOrder,
+                        ObjectiveType = parsed.Type.ToString(),
+                        Description = parsed.Description,
+                        TargetType = parsed.TargetType,
+                        TargetCount = parsed.TargetCount,
+                        ItemId = itemLookup.IdByName(parsed.ItemName),
+                        ItemName = parsed.ItemName,
+                        RequiresFIR = parsed.RequiresFIR,
+                        MapName = parsed.MapName,
+                        LocationName = parsed.LocationName,
+                        Conditions = parsed.Conditions,
+                        DogtagMinLevel = parsed.DogtagMinLevel,
+                        DogtagFaction = parsed.DogtagFaction,
+                    };
+                    objective.Id = objective.ComputeId();
+                    yield return objective;
+                }
+            }
+        }
+
+        private static IEnumerable<DbOptionalQuest> BuildOptionalQuests(
+            QuestIdentityResolution resolution,
+            IReadOnlyDictionary<string, CachedQuestInfo> cachedQuests,
+            IReadOnlyDictionary<string, string> questIdByTitle)
+        {
+            foreach (var quest in resolution.Quests)
+            {
+                if (!cachedQuests.TryGetValue(quest.Title, out var cached) || string.IsNullOrEmpty(cached.PageContent))
+                    continue;
+
+                foreach (var relatedTitle in WikiQuestService.ExtractRelatedQuests(cached.PageContent))
+                {
+                    if (!TryResolveQuestId(questIdByTitle, relatedTitle, out var alternativeQuestId))
+                        continue;
+                    if (alternativeQuestId == quest.Id)
+                        continue;
+
+                    yield return new DbOptionalQuest
+                    {
+                        QuestId = quest.Id,
+                        AlternativeQuestId = alternativeQuestId,
+                    };
+                }
+            }
+        }
+
+        private static IEnumerable<DbQuestRequiredItem> BuildRequiredItems(
+            QuestIdentityResolution resolution,
+            IReadOnlyDictionary<string, CachedQuestInfo> cachedQuests,
+            ItemLookup itemLookup)
+        {
+            foreach (var quest in resolution.Quests)
+            {
+                if (!cachedQuests.TryGetValue(quest.Title, out var cached) || string.IsNullOrEmpty(cached.PageContent))
+                    continue;
+
+                foreach (var parsed in WikiQuestService.ExtractRequiredItems(cached.PageContent))
+                {
+                    var (itemId, itemName) = itemLookup.Resolve(parsed.ItemId, parsed.ItemName);
+
+                    var required = new DbQuestRequiredItem
+                    {
+                        QuestId = quest.Id,
+                        ItemId = itemId,
+                        ItemName = itemName,
+                        Count = parsed.Count,
+                        RequiresFIR = parsed.RequiresFIR,
+                        RequirementType = parsed.RequirementType,
+                        SortOrder = parsed.SortOrder,
+                        DogtagMinLevel = parsed.DogtagMinLevel,
+                        DogtagFaction = parsed.DogtagFaction,
+                    };
+                    required.Id = required.ComputeId();
+                    yield return required;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Looks a quest up by the title a wiki link names, retrying with the "(quest)" suffix
+        /// the wiki adds to disambiguate a title it shares with an item or a location.
+        /// </summary>
+        private static bool TryResolveQuestId(
+            IReadOnlyDictionary<string, string> questIdByTitle,
+            string title,
+            out string questId)
+        {
+            return questIdByTitle.TryGetValue(title, out questId!)
+                || questIdByTitle.TryGetValue($"{title} (quest)", out questId!);
+        }
+
+        /// <summary>
+        /// Name and external-ID lookups over the item set, so objectives and required items can
+        /// name a row in Items. Built once per refresh instead of once per quest.
+        /// </summary>
+        private sealed class ItemLookup
+        {
+            private readonly Dictionary<string, string> _idByName = new(StringComparer.OrdinalIgnoreCase);
+            private readonly Dictionary<string, (string Id, string Name)> _byBsgId = new(StringComparer.OrdinalIgnoreCase);
+
+            public ItemLookup(IEnumerable<DbItem> items)
+            {
+                foreach (var item in items)
+                {
+                    if (!string.IsNullOrEmpty(item.Name))
+                        _idByName.TryAdd(item.Name, item.Id);
+                    if (!string.IsNullOrEmpty(item.NameEN))
+                        _idByName.TryAdd(item.NameEN!, item.Id);
+                    if (!string.IsNullOrEmpty(item.BsgId))
+                        _byBsgId.TryAdd(item.BsgId!, (item.Id, item.Name));
+                }
+            }
+
+            public string? IdByName(string? itemName) =>
+                !string.IsNullOrEmpty(itemName) && _idByName.TryGetValue(itemName, out var id) ? id : null;
+
+            /// <summary>
+            /// Resolves a required item, preferring the wiki's <c>{{itemId}}</c> template (an
+            /// external ID) over its display name, and filling a blank name from the match.
+            /// </summary>
+            public (string? ItemId, string ItemName) Resolve(string? bsgId, string itemName)
+            {
+                if (!string.IsNullOrEmpty(bsgId) && _byBsgId.TryGetValue(bsgId, out var match))
+                    return (match.Id, string.IsNullOrEmpty(itemName) ? match.Name : itemName);
+
+                return (IdByName(itemName), itemName);
+            }
+        }
+
+        /// <summary>
+        /// Writes the machine-readable side of a refresh: what matched, what was held back and
+        /// what was renamed. The diff report reads it, and it is the record of a run nobody
+        /// watched.
+        /// </summary>
+        private async Task WriteRefreshLogAsync(QuestsFetchResult result, CancellationToken cancellationToken)
+        {
+            var resolution = result.Identity;
+            if (resolution == null)
+                return;
+
+            var logDir = Path.Combine(_wikiDataDir, "logs");
+            Directory.CreateDirectory(logDir);
+            var path = Path.Combine(logDir, $"refresh_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+
+            var payload = new
+            {
+                writtenAt = DateTime.UtcNow,
+                counts = new
+                {
+                    quests = result.Quests.Count,
+                    matched = resolution.Quests.Count(q => q.Task != null),
+                    wikiOnlySeasonal = resolution.WikiOnlyPages.Count,
+                    heldBackPages = resolution.HeldBackPages.Count,
+                    tasksWithoutPage = resolution.TasksWithoutPage.Count,
+                    collisions = resolution.Collisions.Count,
+                    carriedIdentities = resolution.Quests.Count(q => q.IdentityCarried),
+                    renames = resolution.Renames.Count,
+                    titleReuses = resolution.TitleReuses.Count(),
+                    kappaQuests = result.Quests.Count(q => q.KappaRequired),
+                    prerequisites = result.Requirements.Count,
+                    loyaltyGates = result.TraderRequirements.Count,
+                    objectives = result.Objectives.Count,
+                    requiredItems = result.RequiredItems.Count,
+                    prerequisiteConflicts = result.PrerequisiteDisagreements.Count(d => d.Verdict != "agree"),
+                },
+                prerequisiteDisagreements = result.PrerequisiteDisagreements.Where(d => d.Verdict != "agree"),
+                renames = resolution.Renames,
+                titleReuses = resolution.TitleReuses,
+                heldBackPages = resolution.HeldBackPages,
+                wikiOnlySeasonal = resolution.WikiOnlyPages,
+                tasksWithoutPage = resolution.TasksWithoutPage,
+                collisions = resolution.Collisions.Select(c => new
+                {
+                    c.Title,
+                    c.CandidateTaskIds,
+                    c.ChosenTaskId,
+                    Rule = c.Rule.ToString(),
+                }),
+                aliasesUsed = resolution.AliasesUsed,
+                unusedAliases = resolution.UnusedAliases.Select(a => new { a.PageTitle, a.TaskId, a.UpstreamIssue }),
+            };
+
+            var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            });
+            await File.WriteAllTextAsync(path, json, cancellationToken);
+        }
+
+        /// <summary>
+        /// Reads the rows the refresh is starting from, before the write transaction opens.
+        /// They are what identity is carried across: the row key, its normalized name where the
+        /// column exists, and the external ID that recognises a renamed quest.
+        /// </summary>
+        internal static async Task<List<PreviousQuestRow>> LoadPreviousQuestRowsAsync(
+            string databasePath,
+            CancellationToken cancellationToken = default)
+        {
+            var rows = new List<PreviousQuestRow>();
+            if (!File.Exists(databasePath))
+                return rows;
+
+            await using var connection = new SqliteConnection($"Data Source={databasePath}");
+            await connection.OpenAsync(cancellationToken);
+
+            if (!await TableExistsAsync(connection, "Quests", cancellationToken))
+                return rows;
+
+            var hasNormalizedName = await ColumnExistsAsync(connection, "Quests", "NormalizedName", cancellationToken);
+            var sql = hasNormalizedName
+                ? "SELECT Id, Name, BsgId, NormalizedName FROM Quests"
+                : "SELECT Id, Name, BsgId, NULL FROM Quests";
+
+            await using var cmd = new SqliteCommand(sql, connection);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                rows.Add(new PreviousQuestRow
+                {
+                    Id = reader.GetString(0),
+                    Name = reader.IsDBNull(1) ? "" : reader.GetString(1),
+                    BsgId = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    NormalizedName = reader.IsDBNull(3) ? null : reader.GetString(3),
+                });
+            }
+
+            return rows;
+        }
+
+        /// <summary>Item rows the refresh is starting from, for the item identity carry-over.</summary>
+        internal static async Task<List<PreviousItemRow>> LoadPreviousItemRowsAsync(
+            string databasePath,
+            CancellationToken cancellationToken = default)
+        {
+            var rows = new List<PreviousItemRow>();
+            if (!File.Exists(databasePath))
+                return rows;
+
+            await using var connection = new SqliteConnection($"Data Source={databasePath}");
+            await connection.OpenAsync(cancellationToken);
+
+            if (!await TableExistsAsync(connection, "Items", cancellationToken))
+                return rows;
+
+            await using var cmd = new SqliteCommand("SELECT Id, Name, BsgId FROM Items", connection);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                rows.Add(new PreviousItemRow
+                {
+                    Id = reader.GetString(0),
+                    Name = reader.IsDBNull(1) ? "" : reader.GetString(1),
+                    BsgId = reader.IsDBNull(2) ? null : reader.GetString(2),
+                });
+            }
+
+            return rows;
+        }
+
+        private static async Task<bool> TableExistsAsync(
+            SqliteConnection connection, string tableName, CancellationToken cancellationToken)
+        {
+            await using var cmd = new SqliteCommand(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=@Name", connection);
+            cmd.Parameters.AddWithValue("@Name", tableName);
+            return await cmd.ExecuteScalarAsync(cancellationToken) != null;
+        }
+
+        private static async Task<bool> ColumnExistsAsync(
+            SqliteConnection connection, string tableName, string columnName, CancellationToken cancellationToken)
+        {
+            await using var cmd = new SqliteCommand($"PRAGMA table_info({tableName})", connection);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        #endregion
         /// <summary>
         /// Dogtag 아이템이 필요하면 자동 생성
         /// QuestRequiredItems/QuestObjectives에서 DogtagFaction이 설정된 항목이 있으면
@@ -1152,293 +1984,6 @@ namespace TarkovDBEditor.Services
         }
 
         /// <summary>
-        /// 캐시된 Quests 데이터 로드 (Wiki 요청 없음)
-        /// </summary>
-        private async Task<QuestsFetchResult> LoadQuestsFromCacheAsync(
-            List<DbItem> items,
-            Action<string>? progress = null,
-            CancellationToken cancellationToken = default)
-        {
-            var result = new QuestsFetchResult();
-
-            // WikiQuestService로 캐시된 퀘스트 로드
-            using var questService = new WikiQuestService(_wikiDataDir);
-            await questService.LoadCacheAsync(cancellationToken);
-            var cachedQuests = questService.GetCachedQuests();
-
-            if (cachedQuests.Count == 0)
-            {
-                progress?.Invoke("No cached quests found. Run 'Fetch Wiki Data' first.");
-                return result;
-            }
-
-            progress?.Invoke($"Found {cachedQuests.Count} cached quests");
-
-            // tarkov.dev 캐시에서 퀘스트 기본 정보 가져오기
-            using var devService = new TarkovDevDataService();
-            var devQuestsCached = await devService.LoadCachedQuestsAsync(cancellationToken);
-
-            if (devQuestsCached == null || devQuestsCached.Count == 0)
-            {
-                // Block instead of silently falling back: an empty/missing tarkov.dev cache would
-                // leave every quest NameKO/NameJA as the English name. Force an explicit re-cache.
-                throw new InvalidOperationException(
-                    "tarkov.dev quest cache is empty or missing. Run 'Debug > Cache Tarkov Dev Data' " +
-                    "before refreshing; otherwise quest NameKO/NameJA would be filled with English fallbacks.");
-            }
-
-            var questsCachedAt = devService.GetCacheInfo().QuestsCachedAt;
-            progress?.Invoke(
-                $"Loaded {devQuestsCached.Count} quests from tarkov.dev cache" +
-                (questsCachedAt.HasValue ? $" (cached {questsCachedAt:yyyy-MM-dd HH:mm})" : ""));
-
-            // normalizedName 기반 매핑
-            var devQuestsByNormalizedName = devQuestsCached.Values
-                .Where(q => !string.IsNullOrEmpty(q.NormalizedName))
-                .ToDictionary(q => q.NormalizedName!, q => q, StringComparer.OrdinalIgnoreCase);
-
-            // 아이템 이름 → ID 매핑
-            var itemNameToId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            // BsgId -> (Id, Name) 매핑 (Wiki {{itemId}} 템플릿 처리용)
-            var bsgIdToItem = new Dictionary<string, (string Id, string Name)>(StringComparer.OrdinalIgnoreCase);
-            foreach (var item in items)
-            {
-                if (!string.IsNullOrEmpty(item.Name) && !itemNameToId.ContainsKey(item.Name))
-                    itemNameToId[item.Name] = item.Id;
-                if (!string.IsNullOrEmpty(item.NameEN) && !itemNameToId.ContainsKey(item.NameEN))
-                    itemNameToId[item.NameEN] = item.Id;
-                // BsgId로 매핑 (Wiki {{24자hex}} 템플릿 처리용)
-                if (!string.IsNullOrEmpty(item.BsgId) && !bsgIdToItem.ContainsKey(item.BsgId))
-                    bsgIdToItem[item.BsgId] = (item.Id, item.Name);
-            }
-
-            var questNameToId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            // 퀘스트 변환
-            foreach (var (questName, cached) in cachedQuests)
-            {
-                if (string.IsNullOrEmpty(cached.PageContent))
-                    continue;
-
-                var encodedName = Uri.EscapeDataString(questName.Replace(" ", "_"))
-                    .Replace("%28", "(").Replace("%29", ")");
-                var wikiPageLink = $"https://escapefromtarkov.fandom.com/wiki/{encodedName}";
-                var id = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(wikiPageLink));
-
-                var dbQuest = new DbQuest
-                {
-                    Id = id,
-                    Name = questName,
-                    WikiPageLink = wikiPageLink
-                };
-
-                // 캐시에서 Trader, MinLevel, MinScavKarma 가져오기
-                var trader = NormalizeTraderName(cached.Trader);
-                if (string.IsNullOrEmpty(trader) && !string.IsNullOrEmpty(cached.PageContent))
-                {
-                    trader = ExtractTraderFromContent(cached.PageContent);
-                }
-                dbQuest.Trader = trader;
-
-                // Location 파싱, null이면 "Any"
-                if (!string.IsNullOrEmpty(cached.PageContent))
-                {
-                    dbQuest.Location = ExtractLocationFromContent(cached.PageContent) ?? "Any";
-                }
-                else
-                {
-                    dbQuest.Location = "Any";
-                }
-
-                // MinLevel, MinScavKarma
-                dbQuest.MinLevel = cached.MinLevel ?? WikiQuestService.ExtractMinLevel(cached.PageContent ?? "");
-                dbQuest.MinScavKarma = cached.MinScavKarma ?? WikiQuestService.ExtractMinScavKarma(cached.PageContent ?? "");
-
-                // Wiki 캐시에서 KappaRequired, Faction, RequiredEdition, ExcludedEdition, RequiredDecodeCount 파싱
-                dbQuest.KappaRequired = WikiQuestService.ExtractKappaRequired(cached.PageContent ?? "");
-                dbQuest.Faction = cached.Faction ?? WikiQuestService.ExtractFaction(cached.PageContent ?? "");
-                dbQuest.RequiredEdition = cached.RequiredEdition ?? WikiQuestService.ExtractRequiredEdition(cached.PageContent ?? "");
-                dbQuest.ExcludedEdition = cached.ExcludedEdition ?? WikiQuestService.ExtractExcludedEdition(cached.PageContent ?? "");
-                dbQuest.RequiredDecodeCount = cached.RequiredDecodeCount ?? WikiQuestService.ExtractRequiredDecodeCount(cached.PageContent ?? "");
-                dbQuest.RequiredPrestigeLevel = WikiQuestService.ExtractRequiredPrestigeLevel(cached.PageContent ?? "");
-
-                // tarkov.dev 매칭 - 번역용
-                TarkovDevQuestCacheItem? devQuest = null;
-                if (devQuestsCached.TryGetValue(wikiPageLink, out devQuest) ||
-                    devQuestsByNormalizedName.TryGetValue(NormalizeQuestName(questName), out devQuest))
-                {
-                    dbQuest.BsgId = devQuest.Id;
-                    dbQuest.NameEN = devQuest.NameEN;
-                    dbQuest.NameKO = devQuest.NameKO;
-                    dbQuest.NameJA = devQuest.NameJA;
-                }
-                else
-                {
-                    dbQuest.NameEN = questName;
-                    dbQuest.NameKO = questName;
-                    dbQuest.NameJA = questName;
-                }
-
-                questNameToId[questName] = dbQuest.Id;
-                result.Quests.Add(dbQuest);
-            }
-
-            progress?.Invoke($"Processed {result.Quests.Count} quests");
-
-            // Requirements 파싱 (ExtractPreviousQuests 사용)
-            foreach (var (questName, cached) in cachedQuests)
-            {
-                if (!questNameToId.TryGetValue(questName, out var questId))
-                    continue;
-                if (string.IsNullOrEmpty(cached.PageContent))
-                    continue;
-
-                var parsedReqs = WikiQuestService.ExtractPreviousQuests(cached.PageContent);
-                foreach (var req in parsedReqs)
-                {
-                    if (!questNameToId.TryGetValue(req.QuestName, out var requiredQuestId))
-                    {
-                        if (!questNameToId.TryGetValue($"{req.QuestName} (quest)", out requiredQuestId))
-                            continue;
-                    }
-
-                    result.Requirements.Add(new DbQuestRequirement
-                    {
-                        QuestId = questId,
-                        RequiredQuestId = requiredQuestId,
-                        RequirementType = req.RequirementType,
-                        DelayMinutes = req.DelayMinutes,
-                        GroupId = req.GroupId
-                    });
-                }
-            }
-
-            progress?.Invoke($"Parsed {result.Requirements.Count} requirements");
-
-            // Objectives 파싱
-            foreach (var (questName, cached) in cachedQuests)
-            {
-                if (!questNameToId.TryGetValue(questName, out var questId))
-                    continue;
-                if (string.IsNullOrEmpty(cached.PageContent))
-                    continue;
-
-                var parsedObjs = WikiQuestService.ExtractObjectives(cached.PageContent);
-                foreach (var obj in parsedObjs)
-                {
-                    string? itemId = null;
-                    if (!string.IsNullOrEmpty(obj.ItemName))
-                    {
-                        itemNameToId.TryGetValue(obj.ItemName, out itemId);
-                    }
-
-                    var dbObj = new DbQuestObjective
-                    {
-                        QuestId = questId,
-                        SortOrder = obj.SortOrder,
-                        ObjectiveType = obj.Type.ToString(),
-                        Description = obj.Description,
-                        TargetType = obj.TargetType,
-                        TargetCount = obj.TargetCount,
-                        ItemId = itemId,
-                        ItemName = obj.ItemName,
-                        RequiresFIR = obj.RequiresFIR,
-                        MapName = obj.MapName,
-                        LocationName = obj.LocationName,
-                        Conditions = obj.Conditions,
-                        DogtagMinLevel = obj.DogtagMinLevel,
-                        DogtagFaction = obj.DogtagFaction
-                    };
-                    dbObj.Id = dbObj.ComputeId();
-                    result.Objectives.Add(dbObj);
-                }
-            }
-
-            progress?.Invoke($"Parsed {result.Objectives.Count} objectives");
-
-            // OptionalQuests 파싱 (ExtractRelatedQuests 사용)
-            foreach (var (questName, cached) in cachedQuests)
-            {
-                if (!questNameToId.TryGetValue(questName, out var questId))
-                    continue;
-                if (string.IsNullOrEmpty(cached.PageContent))
-                    continue;
-
-                var relatedQuests = WikiQuestService.ExtractRelatedQuests(cached.PageContent);
-                foreach (var relatedQuestName in relatedQuests)
-                {
-                    if (!questNameToId.TryGetValue(relatedQuestName, out var altQuestId))
-                    {
-                        if (!questNameToId.TryGetValue($"{relatedQuestName} (quest)", out altQuestId))
-                            continue;
-                    }
-                    if (questId == altQuestId)
-                        continue;
-
-                    result.OptionalQuests.Add(new DbOptionalQuest
-                    {
-                        QuestId = questId,
-                        AlternativeQuestId = altQuestId
-                    });
-                }
-            }
-
-            progress?.Invoke($"Parsed {result.OptionalQuests.Count} optional quests");
-
-            // RequiredItems 파싱
-            foreach (var (questName, cached) in cachedQuests)
-            {
-                if (!questNameToId.TryGetValue(questName, out var questId))
-                    continue;
-                if (string.IsNullOrEmpty(cached.PageContent))
-                    continue;
-
-                var parsedItems = WikiQuestService.ExtractRequiredItems(cached.PageContent);
-                foreach (var item in parsedItems)
-                {
-                    // ItemId, ItemName 매핑
-                    string? itemId = null;
-                    string itemName = item.ItemName;
-
-                    // 1. Wiki {{itemId}} 템플릿의 24자 hex ID -> Items 테이블의 BsgId로 찾기
-                    if (!string.IsNullOrEmpty(item.ItemId) && bsgIdToItem.TryGetValue(item.ItemId, out var bsgMatch))
-                    {
-                        itemId = bsgMatch.Id;
-                        // ItemName이 비어있으면 매칭된 아이템 이름 사용
-                        if (string.IsNullOrEmpty(itemName))
-                            itemName = bsgMatch.Name;
-                    }
-
-                    // 2. ItemName으로 ItemId 매핑 (BsgId 매칭 실패 시)
-                    if (string.IsNullOrEmpty(itemId) && !string.IsNullOrEmpty(itemName))
-                    {
-                        itemNameToId.TryGetValue(itemName, out itemId);
-                    }
-
-                    var dbItem = new DbQuestRequiredItem
-                    {
-                        QuestId = questId,
-                        ItemId = itemId,
-                        ItemName = itemName,
-                        Count = item.Count,
-                        RequiresFIR = item.RequiresFIR,
-                        RequirementType = item.RequirementType,
-                        SortOrder = item.SortOrder,
-                        DogtagMinLevel = item.DogtagMinLevel,
-                        DogtagFaction = item.DogtagFaction
-                    };
-                    dbItem.Id = dbItem.ComputeId();
-                    result.RequiredItems.Add(dbItem);
-                }
-            }
-
-            progress?.Invoke($"Parsed {result.RequiredItems.Count} required items");
-
-            result.Revision = $"{result.Quests.Count}_{DateTime.UtcNow:yyyyMMddHH}";
-            return result;
-        }
-
-        /// <summary>
         /// 데이터베이스 업데이트
         /// </summary>
         private async Task UpdateDatabaseAsync(
@@ -1449,6 +1994,7 @@ namespace TarkovDBEditor.Services
             List<DbQuestObjective>? questObjectives,
             List<DbOptionalQuest>? optionalQuests = null,
             List<DbQuestRequiredItem>? requiredItems = null,
+            List<DbQuestTraderRequirement>? questTraderRequirements = null,
             StringBuilder? logBuilder = null,
             Action<string>? progress = null,
             CancellationToken cancellationToken = default)
@@ -1505,8 +2051,23 @@ namespace TarkovDBEditor.Services
                     logBuilder?.AppendLine($"Inserted: {reqStats.Inserted}, Updated: {reqStats.Updated}, Deleted: {reqStats.Deleted}");
                 }
 
-                // Collector 퀘스트 특별 처리: DB에서 KappaRequired=1인 모든 퀘스트를 Collector의 선행 조건으로 추가
-                await AddCollectorKappaRequirementsAsync(connection, transaction, progress, logBuilder);
+                // QuestTraderRequirements 테이블 업데이트.
+                // An empty list is skipped, like Quests, Requirements and Objectives: a parse
+                // or fetch that produced nothing must not empty a table that describes 110
+                // quests. Rows that individually disappear are still deleted by the diff inside
+                // the upsert.
+                if (questTraderRequirements is { Count: > 0 })
+                {
+                    progress?.Invoke($"Updating QuestTraderRequirements table ({questTraderRequirements.Count} loyalty gates)...");
+                    logBuilder?.AppendLine();
+                    logBuilder?.AppendLine($"=== QuestTraderRequirements Table Update ===");
+
+                    await CreateQuestTraderRequirementsTableIfNotExistsAsync(connection, transaction);
+                    await RegisterQuestTraderRequirementsSchemaAsync(connection, transaction);
+                    var traderReqStats = await UpsertQuestTraderRequirementsAsync(connection, transaction, questTraderRequirements, logBuilder);
+
+                    logBuilder?.AppendLine($"Inserted: {traderReqStats.Inserted}, Updated: {traderReqStats.Updated}, Deleted: {traderReqStats.Deleted}");
+                }
 
                 // QuestObjectives 테이블 업데이트
                 if (questObjectives != null && questObjectives.Count > 0)
@@ -1522,8 +2083,11 @@ namespace TarkovDBEditor.Services
                     logBuilder?.AppendLine($"Inserted: {objStats.Inserted}, Updated: {objStats.Updated}, Deleted: {objStats.Deleted}");
                 }
 
-                // OptionalQuests 테이블 업데이트 (빈 리스트일 때도 기존 데이터 삭제를 위해 호출)
-                if (optionalQuests != null)
+                // OptionalQuests 테이블 업데이트.
+                // Skips an empty list for the same reason the other child tables do: a parse
+                // that returned nothing is a parse failure far more often than it is a game
+                // that has no alternative quests left.
+                if (optionalQuests is { Count: > 0 })
                 {
                     progress?.Invoke($"Updating OptionalQuests table ({optionalQuests.Count} optional quests)...");
                     logBuilder?.AppendLine();
@@ -1536,8 +2100,8 @@ namespace TarkovDBEditor.Services
                     logBuilder?.AppendLine($"Inserted: {optStats.Inserted}, Updated: {optStats.Updated}, Deleted: {optStats.Deleted}");
                 }
 
-                // QuestRequiredItems 테이블 업데이트
-                if (requiredItems != null)
+                // QuestRequiredItems 테이블 업데이트 (빈 리스트는 건너뜀, OptionalQuests와 동일한 이유)
+                if (requiredItems is { Count: > 0 })
                 {
                     progress?.Invoke($"Updating QuestRequiredItems table ({requiredItems.Count} required items)...");
                     logBuilder?.AppendLine();
@@ -1622,12 +2186,32 @@ namespace TarkovDBEditor.Services
                 new() { Name = "ExcludedEdition", DisplayName = "Excluded Edition", Type = ColumnType.Text, SortOrder = 14 },
                 new() { Name = "RequiredDecodeCount", DisplayName = "Decode Count", Type = ColumnType.Integer, SortOrder = 15 },
                 new() { Name = "RequiredPrestigeLevel", DisplayName = "Prestige Level", Type = ColumnType.Integer, SortOrder = 16 },
-                new() { Name = "IsApproved", DisplayName = "Approved", Type = ColumnType.Boolean, SortOrder = 17 },
-                new() { Name = "UpdatedAt", DisplayName = "Updated At", Type = ColumnType.DateTime, SortOrder = 18 }
+                new() { Name = "NormalizedName", DisplayName = "Normalized Name", Type = ColumnType.Text, SortOrder = 17 },
+                new() { Name = "IsApproved", DisplayName = "Approved", Type = ColumnType.Boolean, SortOrder = 18 },
+                new() { Name = "UpdatedAt", DisplayName = "Updated At", Type = ColumnType.DateTime, SortOrder = 19 }
             };
 
             var schemaJson = JsonSerializer.Serialize(columns);
             await UpsertSchemaMetaAsync(connection, transaction, "Quests", "Quests", schemaJson);
+        }
+
+        private async Task RegisterQuestTraderRequirementsSchemaAsync(SqliteConnection connection, SqliteTransaction transaction)
+        {
+            var columns = new List<ColumnSchema>
+            {
+                new() { Name = "Id", DisplayName = "ID", Type = ColumnType.Text, IsPrimaryKey = true, SortOrder = 0 },
+                new() { Name = "QuestId", DisplayName = "Quest ID", Type = ColumnType.Text, IsRequired = true, ForeignKeyTable = "Quests", ForeignKeyColumn = "Id", SortOrder = 1 },
+                new() { Name = "TraderId", DisplayName = "Trader ID", Type = ColumnType.Text, IsRequired = true, SortOrder = 2 },
+                new() { Name = "TraderName", DisplayName = "Trader", Type = ColumnType.Text, IsRequired = true, SortOrder = 3 },
+                new() { Name = "RequiredLevel", DisplayName = "Loyalty Level", Type = ColumnType.Integer, IsRequired = true, SortOrder = 4 },
+                new() { Name = "ContentHash", DisplayName = "Content Hash", Type = ColumnType.Text, SortOrder = 5 },
+                new() { Name = "IsApproved", DisplayName = "Approved", Type = ColumnType.Boolean, IsRequired = true, SortOrder = 6 },
+                new() { Name = "ApprovedAt", DisplayName = "Approved At", Type = ColumnType.DateTime, SortOrder = 7 },
+                new() { Name = "UpdatedAt", DisplayName = "Updated At", Type = ColumnType.DateTime, SortOrder = 8 }
+            };
+
+            var schemaJson = JsonSerializer.Serialize(columns);
+            await UpsertSchemaMetaAsync(connection, transaction, "QuestTraderRequirements", "Quest Trader Requirements", schemaJson);
         }
 
         private async Task UpsertSchemaMetaAsync(SqliteConnection connection, SqliteTransaction transaction, string tableName, string displayName, string schemaJson)
@@ -1722,6 +2306,7 @@ namespace TarkovDBEditor.Services
                     RequiredPrestigeLevel INTEGER,
                     RequiredPrestigeLevelApproved INTEGER NOT NULL DEFAULT 0,
                     RequiredPrestigeLevelApprovedAt TEXT,
+                    NormalizedName TEXT,
                     IsApproved INTEGER NOT NULL DEFAULT 0,
                     ApprovedAt TEXT,
                     UpdatedAt TEXT
@@ -1729,6 +2314,59 @@ namespace TarkovDBEditor.Services
 
             using var cmd = new SqliteCommand(sql, connection, transaction);
             await cmd.ExecuteNonQueryAsync();
+
+            // CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, and every
+            // database this pipeline touches already has one, so a new column arrives through
+            // the PRAGMA-guarded ALTER below (the pattern QuestObjectives uses).
+            var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var checkCmd = new SqliteCommand("PRAGMA table_info(Quests)", connection, transaction))
+            using (var reader = await checkCmd.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                    existingColumns.Add(reader.GetString(1));
+            }
+
+            if (!existingColumns.Contains("NormalizedName"))
+            {
+                using var alterCmd = new SqliteCommand(
+                    "ALTER TABLE Quests ADD COLUMN NormalizedName TEXT", connection, transaction);
+                await alterCmd.ExecuteNonQueryAsync();
+            }
+
+            // Unique because it is a lookup key for recorded progress: two quests answering to
+            // one normalized name would make a completion ambiguous in every build.
+            using var indexCmd = new SqliteCommand(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_quests_normalizedname ON Quests(NormalizedName)",
+                connection, transaction);
+            await indexCmd.ExecuteNonQueryAsync();
+        }
+
+        /// <summary>
+        /// Per-trader loyalty gates on a quest, mirroring HideoutTraderRequirements. Additive:
+        /// a build that predates the table simply never reads it.
+        /// </summary>
+        private async Task CreateQuestTraderRequirementsTableIfNotExistsAsync(SqliteConnection connection, SqliteTransaction transaction)
+        {
+            var sql = @"
+                CREATE TABLE IF NOT EXISTS QuestTraderRequirements (
+                    Id TEXT PRIMARY KEY,
+                    QuestId TEXT NOT NULL,
+                    TraderId TEXT NOT NULL,
+                    TraderName TEXT NOT NULL,
+                    RequiredLevel INTEGER NOT NULL,
+                    ContentHash TEXT,
+                    IsApproved INTEGER NOT NULL DEFAULT 0,
+                    ApprovedAt TEXT,
+                    UpdatedAt TEXT,
+                    FOREIGN KEY (QuestId) REFERENCES Quests(Id) ON DELETE CASCADE
+                )";
+
+            using var cmd = new SqliteCommand(sql, connection, transaction);
+            await cmd.ExecuteNonQueryAsync();
+
+            var indexSql = "CREATE INDEX IF NOT EXISTS idx_questtraderreq_questid ON QuestTraderRequirements(QuestId)";
+            using var indexCmd = new SqliteCommand(indexSql, connection, transaction);
+            await indexCmd.ExecuteNonQueryAsync();
         }
 
         private async Task CreateQuestRequirementsTableIfNotExistsAsync(SqliteConnection connection, SqliteTransaction transaction)
@@ -2762,8 +3400,8 @@ namespace TarkovDBEditor.Services
                 if (!exists)
                 {
                     var insertSql = @"
-                        INSERT INTO Quests (Id, BsgId, Name, NameEN, NameKO, NameJA, WikiPageLink, Trader, Location, MinLevel, MinScavKarma, KappaRequired, Faction, RequiredEdition, ExcludedEdition, RequiredDecodeCount, RequiredPrestigeLevel, UpdatedAt)
-                        VALUES (@Id, @BsgId, @Name, @NameEN, @NameKO, @NameJA, @WikiPageLink, @Trader, @Location, @MinLevel, @MinScavKarma, @KappaRequired, @Faction, @RequiredEdition, @ExcludedEdition, @RequiredDecodeCount, @RequiredPrestigeLevel, @UpdatedAt)";
+                        INSERT INTO Quests (Id, BsgId, Name, NameEN, NameKO, NameJA, WikiPageLink, Trader, Location, MinLevel, MinScavKarma, KappaRequired, Faction, RequiredEdition, ExcludedEdition, RequiredDecodeCount, RequiredPrestigeLevel, NormalizedName, UpdatedAt)
+                        VALUES (@Id, @BsgId, @Name, @NameEN, @NameKO, @NameJA, @WikiPageLink, @Trader, @Location, @MinLevel, @MinScavKarma, @KappaRequired, @Faction, @RequiredEdition, @ExcludedEdition, @RequiredDecodeCount, @RequiredPrestigeLevel, @NormalizedName, @UpdatedAt)";
 
                     using var insertCmd = new SqliteCommand(insertSql, connection, transaction);
                     AddQuestParameters(insertCmd, quest, now);
@@ -2777,7 +3415,7 @@ namespace TarkovDBEditor.Services
                     var updateSql = @"
                         UPDATE Quests SET
                             BsgId = @BsgId, Name = @Name, NameEN = @NameEN, NameKO = @NameKO, NameJA = @NameJA,
-                            WikiPageLink = @WikiPageLink, Trader = @Trader, Location = @Location, MinLevel = @MinLevel, MinScavKarma = @MinScavKarma, KappaRequired = @KappaRequired, Faction = @Faction, RequiredEdition = @RequiredEdition, ExcludedEdition = @ExcludedEdition, RequiredDecodeCount = @RequiredDecodeCount, RequiredPrestigeLevel = @RequiredPrestigeLevel, UpdatedAt = @UpdatedAt
+                            WikiPageLink = @WikiPageLink, Trader = @Trader, Location = @Location, MinLevel = @MinLevel, MinScavKarma = @MinScavKarma, KappaRequired = @KappaRequired, Faction = @Faction, RequiredEdition = @RequiredEdition, ExcludedEdition = @ExcludedEdition, RequiredDecodeCount = @RequiredDecodeCount, RequiredPrestigeLevel = @RequiredPrestigeLevel, NormalizedName = @NormalizedName, UpdatedAt = @UpdatedAt
                         WHERE Id = @Id";
 
                     using var updateCmd = new SqliteCommand(updateSql, connection, transaction);
@@ -2809,7 +3447,95 @@ namespace TarkovDBEditor.Services
             cmd.Parameters.AddWithValue("@ExcludedEdition", (object?)quest.ExcludedEdition ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@RequiredDecodeCount", (object?)quest.RequiredDecodeCount ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@RequiredPrestigeLevel", (object?)quest.RequiredPrestigeLevel ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@NormalizedName", quest.NormalizedName);
             cmd.Parameters.AddWithValue("@UpdatedAt", now);
+        }
+
+        /// <summary>
+        /// Table-global diff over the loyalty gates, the same shape as the other child tables:
+        /// rows absent from the new set are deleted, and an approval survives an unchanged
+        /// content hash.
+        /// </summary>
+        private async Task<UpsertStats> UpsertQuestTraderRequirementsAsync(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            List<DbQuestTraderRequirement> requirements,
+            StringBuilder? logBuilder)
+        {
+            var stats = new UpsertStats();
+            var now = DateTime.UtcNow.ToString("o");
+
+            var existingData = new Dictionary<string, (bool IsApproved, string? ApprovedAt, string? ContentHash)>();
+            using (var selectCmd = new SqliteCommand(
+                "SELECT Id, IsApproved, ApprovedAt, ContentHash FROM QuestTraderRequirements", connection, transaction))
+            using (var reader = await selectCmd.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    existingData[reader.GetString(0)] = (
+                        !reader.IsDBNull(1) && reader.GetInt64(1) != 0,
+                        reader.IsDBNull(2) ? null : reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetString(3));
+                }
+            }
+
+            var newIds = new HashSet<string>();
+            foreach (var req in requirements)
+            {
+                req.Id = req.ComputeId();
+                newIds.Add(req.Id);
+            }
+
+            foreach (var idToDelete in existingData.Keys.Where(id => !newIds.Contains(id)).ToList())
+            {
+                using var deleteCmd = new SqliteCommand(
+                    "DELETE FROM QuestTraderRequirements WHERE Id = @Id", connection, transaction);
+                deleteCmd.Parameters.AddWithValue("@Id", idToDelete);
+                await deleteCmd.ExecuteNonQueryAsync();
+                stats.Deleted++;
+            }
+
+            foreach (var req in requirements)
+            {
+                var newHash = req.ComputeContentHash();
+                var exists = existingData.TryGetValue(req.Id, out var existing);
+
+                var isApproved = false;
+                string? approvedAt = null;
+                if (exists && existing.ContentHash == newHash && existing.IsApproved)
+                {
+                    isApproved = true;
+                    approvedAt = existing.ApprovedAt;
+                    stats.Unchanged++;
+                }
+
+                var sql = exists
+                    ? @"UPDATE QuestTraderRequirements SET
+                            QuestId = @QuestId, TraderId = @TraderId, TraderName = @TraderName,
+                            RequiredLevel = @RequiredLevel, ContentHash = @ContentHash,
+                            IsApproved = @IsApproved, ApprovedAt = @ApprovedAt, UpdatedAt = @UpdatedAt
+                        WHERE Id = @Id"
+                    : @"INSERT INTO QuestTraderRequirements
+                            (Id, QuestId, TraderId, TraderName, RequiredLevel, ContentHash, IsApproved, ApprovedAt, UpdatedAt)
+                        VALUES (@Id, @QuestId, @TraderId, @TraderName, @RequiredLevel, @ContentHash, @IsApproved, @ApprovedAt, @UpdatedAt)";
+
+                using var cmd = new SqliteCommand(sql, connection, transaction);
+                cmd.Parameters.AddWithValue("@Id", req.Id);
+                cmd.Parameters.AddWithValue("@QuestId", req.QuestId);
+                cmd.Parameters.AddWithValue("@TraderId", req.TraderId);
+                cmd.Parameters.AddWithValue("@TraderName", req.TraderName);
+                cmd.Parameters.AddWithValue("@RequiredLevel", req.RequiredLevel);
+                cmd.Parameters.AddWithValue("@ContentHash", newHash);
+                cmd.Parameters.AddWithValue("@IsApproved", isApproved ? 1 : 0);
+                cmd.Parameters.AddWithValue("@ApprovedAt", (object?)approvedAt ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@UpdatedAt", now);
+                await cmd.ExecuteNonQueryAsync();
+
+                if (exists) stats.Updated++; else stats.Inserted++;
+            }
+
+            logBuilder?.AppendLine($"  QuestTraderRequirements: {stats.Inserted} inserted, {stats.Updated} updated, {stats.Deleted} deleted, {stats.Unchanged} approvals preserved");
+            return stats;
         }
 
         private async Task<UpsertStats> UpsertQuestRequirementsAsync(
@@ -2821,20 +3547,10 @@ namespace TarkovDBEditor.Services
             var stats = new UpsertStats();
             var now = DateTime.UtcNow.ToString("o");
 
-            // Collector 퀘스트 ID 조회 (Collector의 requirements는 AddCollectorKappaRequirementsAsync에서 관리)
-            string? collectorId = null;
-            using (var cmd = new SqliteCommand(
-                "SELECT Id FROM Quests WHERE Name = 'Collector' OR NameEN = 'Collector' LIMIT 1",
-                connection, transaction))
-            {
-                var result = await cmd.ExecuteScalarAsync();
-                collectorId = result?.ToString();
-            }
-
             // 기존 데이터 로드 (Id 기준으로 승인 상태 유지)
-            var existingData = new Dictionary<string, (bool IsApproved, string? ApprovedAt, string? ContentHash, string QuestId)>();
+            var existingData = new Dictionary<string, (bool IsApproved, string? ApprovedAt, string? ContentHash)>();
             var existingIds = new HashSet<string>();
-            var selectSql = "SELECT Id, IsApproved, ApprovedAt, ContentHash, QuestId FROM QuestRequirements";
+            var selectSql = "SELECT Id, IsApproved, ApprovedAt, ContentHash FROM QuestRequirements";
             using (var selectCmd = new SqliteCommand(selectSql, connection, transaction))
             using (var reader = await selectCmd.ExecuteReaderAsync())
             {
@@ -2844,9 +3560,8 @@ namespace TarkovDBEditor.Services
                     var isApproved = !reader.IsDBNull(1) && reader.GetInt64(1) != 0;
                     var approvedAt = reader.IsDBNull(2) ? null : reader.GetString(2);
                     var contentHash = reader.IsDBNull(3) ? null : reader.GetString(3);
-                    var questId = reader.GetString(4);
                     existingIds.Add(id);
-                    existingData[id] = (isApproved, approvedAt, contentHash, questId);
+                    existingData[id] = (isApproved, approvedAt, contentHash);
                 }
             }
 
@@ -2858,16 +3573,16 @@ namespace TarkovDBEditor.Services
                 newIds.Add(req.Id);
             }
 
-            // DB에 있지만 새 목록에 없는 항목 삭제 (Collector 퀘스트의 requirements는 제외)
+            // DB에 있지만 새 목록에 없는 항목 삭제.
+            // Collector's rows used to be exempt here so that AddCollectorKappaRequirementsAsync
+            // could own them, but that function only ever inserted, so a quest that lost its
+            // Kappa flag kept its Collector row forever: Collector shipped 248 prerequisites
+            // for 247 flagged quests, the extra being Grenadier. The synthesis now rebuilds the
+            // set itself (deleting what is no longer flagged), so the exemption is gone and
+            // this delete loop is what removes rows the wiki parse no longer produces.
             var idsToDelete = existingIds.Except(newIds).ToList();
             foreach (var idToDelete in idsToDelete)
             {
-                // Collector 퀘스트의 requirements는 AddCollectorKappaRequirementsAsync에서 관리하므로 삭제하지 않음
-                if (collectorId != null && existingData.TryGetValue(idToDelete, out var data) && data.QuestId == collectorId)
-                {
-                    continue;
-                }
-
                 using var deleteCmd = new SqliteCommand("DELETE FROM QuestRequirements WHERE Id = @Id", connection, transaction);
                 deleteCmd.Parameters.AddWithValue("@Id", idToDelete);
                 await deleteCmd.ExecuteNonQueryAsync();
@@ -2946,137 +3661,6 @@ namespace TarkovDBEditor.Services
             cmd.Parameters.AddWithValue("@IsApproved", isApproved ? 1 : 0);
             cmd.Parameters.AddWithValue("@ApprovedAt", (object?)approvedAt ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@UpdatedAt", now);
-        }
-
-        /// <summary>
-        /// Collector 퀘스트에 KappaRequired=1인 모든 퀘스트를 선행 조건으로 추가
-        /// DB에 저장된 후 실행되므로 정확한 KappaRequired 값을 사용할 수 있음
-        /// </summary>
-        private async Task AddCollectorKappaRequirementsAsync(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            Action<string>? progress = null,
-            StringBuilder? logBuilder = null)
-        {
-            // 1. Collector 퀘스트 ID 조회
-            string? collectorId = null;
-            using (var cmd = new SqliteCommand(
-                "SELECT Id FROM Quests WHERE Name = 'Collector' OR NameEN = 'Collector' LIMIT 1",
-                connection, transaction))
-            {
-                var result = await cmd.ExecuteScalarAsync();
-                collectorId = result?.ToString();
-            }
-
-            if (string.IsNullOrEmpty(collectorId))
-            {
-                logBuilder?.AppendLine("  Collector quest not found - skipping Kappa requirements");
-                return;
-            }
-
-            // 2. Collector → Collector 자기 참조 요구사항 삭제 (이전 버그로 인해 생성된 데이터 정리)
-            using (var cmd = new SqliteCommand(
-                "DELETE FROM QuestRequirements WHERE QuestId = @CollectorId AND RequiredQuestId = @CollectorId",
-                connection, transaction))
-            {
-                cmd.Parameters.AddWithValue("@CollectorId", collectorId);
-                var deleted = await cmd.ExecuteNonQueryAsync();
-                if (deleted > 0)
-                {
-                    logBuilder?.AppendLine($"  Removed self-referencing Collector requirement");
-                }
-            }
-
-            // 3. KappaRequired=1인 모든 퀘스트 ID 조회 (Collector 제외)
-            var kappaQuestIds = new HashSet<string>();
-            using (var cmd = new SqliteCommand(
-                "SELECT Id FROM Quests WHERE KappaRequired = 1 AND Id != @CollectorId",
-                connection, transaction))
-            {
-                cmd.Parameters.AddWithValue("@CollectorId", collectorId);
-                using var reader = await cmd.ExecuteReaderAsync();
-                while (await reader.ReadAsync())
-                {
-                    kappaQuestIds.Add(reader.GetString(0));
-                }
-            }
-
-            if (kappaQuestIds.Count == 0)
-            {
-                logBuilder?.AppendLine("  No Kappa-required quests found");
-                return;
-            }
-
-            // 4. 기존 Collector 선행 조건 조회 (중복 방지 및 승인 상태 보존)
-            var existingRequirements = new Dictionary<string, (bool IsApproved, string? ApprovedAt)>();
-            using (var cmd = new SqliteCommand(
-                "SELECT RequiredQuestId, IsApproved, ApprovedAt FROM QuestRequirements WHERE QuestId = @CollectorId",
-                connection, transaction))
-            {
-                cmd.Parameters.AddWithValue("@CollectorId", collectorId);
-                using var reader = await cmd.ExecuteReaderAsync();
-                while (await reader.ReadAsync())
-                {
-                    var reqId = reader.GetString(0);
-                    var isApproved = !reader.IsDBNull(1) && reader.GetInt64(1) != 0;
-                    var approvedAt = reader.IsDBNull(2) ? null : reader.GetString(2);
-                    existingRequirements[reqId] = (isApproved, approvedAt);
-                }
-            }
-
-            // 5. 선행 조건 추가/업데이트 (기존 승인 상태 보존)
-            var now = DateTime.UtcNow.ToString("o");
-            var insertedCount = 0;
-            var preservedCount = 0;
-
-            foreach (var kappaQuestId in kappaQuestIds)
-            {
-                var requirementId = $"{collectorId}_{kappaQuestId}";
-                // ContentHash 계산 (변경 감지용)
-                var hashData = $"{collectorId}|{kappaQuestId}|Complete||0";
-                using var sha = System.Security.Cryptography.SHA256.Create();
-                var hashBytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(hashData));
-                var contentHash = Convert.ToBase64String(hashBytes).Substring(0, 16);
-
-                // 기존 승인 상태 확인
-                var isApproved = false;
-                string? approvedAt = null;
-                if (existingRequirements.TryGetValue(kappaQuestId, out var existing))
-                {
-                    isApproved = existing.IsApproved;
-                    approvedAt = existing.ApprovedAt;
-                    if (isApproved)
-                        preservedCount++;
-                }
-
-                using var cmd = new SqliteCommand(@"
-                    INSERT INTO QuestRequirements (Id, QuestId, RequiredQuestId, RequirementType, DelayMinutes, GroupId, ContentHash, IsApproved, ApprovedAt, UpdatedAt)
-                    VALUES (@Id, @QuestId, @RequiredQuestId, @RequirementType, NULL, 0, @ContentHash, @IsApproved, @ApprovedAt, @UpdatedAt)
-                    ON CONFLICT(Id) DO UPDATE SET
-                        ContentHash = @ContentHash,
-                        IsApproved = @IsApproved,
-                        ApprovedAt = @ApprovedAt,
-                        UpdatedAt = @UpdatedAt", connection, transaction);
-
-                cmd.Parameters.AddWithValue("@Id", requirementId);
-                cmd.Parameters.AddWithValue("@QuestId", collectorId);
-                cmd.Parameters.AddWithValue("@RequiredQuestId", kappaQuestId);
-                cmd.Parameters.AddWithValue("@RequirementType", "Complete");
-                cmd.Parameters.AddWithValue("@ContentHash", contentHash);
-                cmd.Parameters.AddWithValue("@IsApproved", isApproved ? 1 : 0);
-                cmd.Parameters.AddWithValue("@ApprovedAt", (object?)approvedAt ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("@UpdatedAt", now);
-
-                var affected = await cmd.ExecuteNonQueryAsync();
-                if (affected > 0 && !existingRequirements.ContainsKey(kappaQuestId))
-                    insertedCount++;
-            }
-
-            var message = $"Collector: Added {insertedCount} new, preserved {preservedCount} approved (total Kappa quests: {kappaQuestIds.Count})";
-            progress?.Invoke(message);
-            logBuilder?.AppendLine();
-            logBuilder?.AppendLine($"=== Collector Kappa Requirements ===");
-            logBuilder?.AppendLine($"  {message}");
         }
 
         #endregion
@@ -3291,10 +3875,32 @@ namespace TarkovDBEditor.Services
     {
         public List<DbQuest> Quests { get; set; } = new();
         public List<DbQuestRequirement> Requirements { get; set; } = new();
+        public List<DbQuestTraderRequirement> TraderRequirements { get; set; } = new();
         public List<DbQuestObjective> Objectives { get; set; } = new();
         public List<DbOptionalQuest> OptionalQuests { get; set; } = new();
         public List<DbQuestRequiredItem> RequiredItems { get; set; } = new();
         public string Revision { get; set; } = "";
+
+        /// <summary>What the identity resolver decided, for the refresh log and the diff report.</summary>
+        public QuestIdentityResolution? Identity { get; set; }
+
+        /// <summary>
+        /// Per quest, whether the wiki and the game agree about its prerequisites. Review
+        /// material only: the game's list is what ships.
+        /// </summary>
+        public List<PrerequisiteDisagreement> PrerequisiteDisagreements { get; set; } = new();
+    }
+
+    /// <summary>One quest's prerequisite list as each source reports it, and how they compare.</summary>
+    public class PrerequisiteDisagreement
+    {
+        public string Quest { get; set; } = "";
+
+        /// <summary>agree, wikiSuperset (the wiki lists more), taskSuperset, or conflict.</summary>
+        public string Verdict { get; set; } = "";
+
+        public List<string> Wiki { get; set; } = new();
+        public List<string> Game { get; set; } = new();
     }
 
     public class DbItem
@@ -3335,6 +3941,43 @@ namespace TarkovDBEditor.Services
         public string? ExcludedEdition { get; set; }  // Unheard, EOD 등 게임 에디션 제외 조건 (이 에디션은 불가)
         public int? RequiredDecodeCount { get; set; }  // DSP 라디오 해독 필요 횟수 (Make Amends 퀘스트 등)
         public int? RequiredPrestigeLevel { get; set; }  // Prestige 레벨 요구사항 (New Beginning 퀘스트 등)
+
+        /// <summary>
+        /// The key recorded progress is filed under. Pinned to the expression both TarkovHelper
+        /// builds compute when this column is absent, which is what makes a renamed quest keep
+        /// its progress in the field. See <see cref="QuestNormalizedName"/>.
+        /// </summary>
+        public string NormalizedName { get; set; } = "";
+    }
+
+    /// <summary>
+    /// A "loyalty level N with trader T" gate on a quest. A table rather than a column on
+    /// Quests because 1.1 gates five quests on a trader other than the one giving them, one of
+    /// them on five traders at once, which a single column would silently drop.
+    /// </summary>
+    public class DbQuestTraderRequirement
+    {
+        public string Id { get; set; } = "";
+        public string QuestId { get; set; } = "";
+        public string TraderId { get; set; } = "";
+        public string TraderName { get; set; } = "";
+        public int RequiredLevel { get; set; }
+
+        public string ComputeId()
+        {
+            var raw = $"QTR|{QuestId}|{TraderId}";
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
+            return Convert.ToBase64String(hash).Substring(0, 22).Replace('+', '-').Replace('/', '_');
+        }
+
+        public string ComputeContentHash()
+        {
+            var raw = $"{QuestId}|{TraderId}|{TraderName}|{RequiredLevel}";
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
+            return Convert.ToBase64String(hash).Substring(0, 16);
+        }
     }
 
     public class DbTrader

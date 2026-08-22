@@ -56,15 +56,19 @@ namespace TarkovDBEditor.Services
 
             try
             {
-                // 1. tarkov.dev에서 Hideout 데이터 가져오기 (캐시 또는 API)
-                progress?.Invoke("Loading hideout data from tarkov.dev...");
+                // 1. tarkov.dev 캐시에서 Hideout 데이터 로드 (네트워크 요청 없음).
+                // The live fallback that used to sit here is gone: the JSON endpoint names a
+                // level's items and traders by id only, so filling it needs the item and trader
+                // caches too, which is exactly what 'Cache Tarkov Dev Data' does in one pass.
+                // Fetching a second copy here would also be a second answer to "how old is this
+                // data", which the refresh guards read.
+                progress?.Invoke("Loading hideout data from the tarkov.dev cache...");
                 var stations = await _tarkovDevService.LoadCachedHideoutAsync(cancellationToken);
 
                 if (stations == null || stations.Count == 0)
                 {
-                    progress?.Invoke("No cached hideout data found, fetching from API...");
-                    stations = await _tarkovDevService.FetchAllHideoutAsync(progress, cancellationToken);
-                    await _tarkovDevService.SaveHideoutCacheAsync(stations, cancellationToken);
+                    throw new InvalidOperationException(
+                        "tarkov.dev hideout cache is empty or missing. Run 'Debug > Cache Tarkov Dev Data' first.");
                 }
 
                 logBuilder.AppendLine($"Hideout stations loaded: {stations.Count}");

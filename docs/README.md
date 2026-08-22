@@ -95,6 +95,9 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
 - [assessments/2026-08-seasonal-profile-adjacent-issues.md](assessments/2026-08-seasonal-profile-adjacent-issues.md):
   Seasonal Profile 분석에서 확인했지만 영향이 특별히 커지지 않는 인접 문제
   (4개 finding)
+- [assessments/2026-08-quest-data-1-1-refresh-grounds.md](assessments/2026-08-quest-data-1-1-refresh-grounds.md):
+  EFT 1.1 로드맵 3단계(퀘스트 데이터 리프레시) 결정 문서가 근거로 삼는 검증된
+  사실과 증거, 리뷰에서 반박된 주장 목록 (26개 finding)
 
 ## 관례
 

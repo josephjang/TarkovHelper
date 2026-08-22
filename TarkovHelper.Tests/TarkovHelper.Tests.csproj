@@ -23,6 +23,10 @@
   <ItemGroup>
     <ProjectReference Include="..\TarkovHelper\TarkovHelper.csproj" />
     <ProjectReference Include="..\TarkovDBEditor\TarkovDBEditor.csproj" />
+    <!-- The diff report is the artefact a regeneration is reviewed against, so its comparison
+         core is unit-tested here rather than trusted. Referencing the console project is
+         deliberate: the tool has no separate library assembly to keep in step. -->
+    <ProjectReference Include="..\tools\DataDiff\DataDiff.csproj" />
   </ItemGroup>
 
   <!-- Seed database under test. Nothing here copies or includes it: the app project already

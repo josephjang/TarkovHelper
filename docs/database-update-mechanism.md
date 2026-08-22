@@ -63,36 +63,41 @@ TarkovHelper는 두 가지 자동 업데이트 채널을 가집니다:
 
 TarkovDBEditor는 다음 소스에서 데이터를 수집합니다:
 
-#### tarkov.dev GraphQL API
-```graphql
-# 아이템 데이터
-query Items($lang: LanguageCode!) {
-  items(lang: $lang) {
-    id, name, normalizedName, shortName
-    iconLink, wikiLink, category { ... }
-  }
-}
+#### tarkov.dev JSON API (json.tarkov.dev)
 
-# 퀘스트 데이터
-query Tasks($lang: LanguageCode!) {
-  tasks(lang: $lang) {
-    id, name, normalizedName, trader { ... }
-    objectives { ... }, requirements { ... }
-  }
-}
+`TarkovDBEditor/Services/TarkovDevJsonClient.cs`가 읽습니다. GraphQL 엔드포인트는
+2026-07-22경부터 "GraphQL server unavailable"만 돌려주며, 관리자들이 가리키는 대체
+경로가 이 JSON API입니다(tarkov.dev 프론트엔드도 같은 것을 씁니다).
 
-# 하이드아웃 데이터
-query HideoutStations($lang: LanguageCode!) {
-  hideoutStations(lang: $lang) {
-    id, name, levels { ... }
-  }
-}
+```text
+GET https://json.tarkov.dev/regular/tasks      # 게임 규칙 (레벨, 카파, 진영, 선행, 충성도)
+GET https://json.tarkov.dev/regular/tasks_en   # 번역 파일 (tasks_ko, tasks_ja도 동일)
+GET https://json.tarkov.dev/regular/items      # 아이템 카탈로그
+GET https://json.tarkov.dev/regular/traders    # 트레이더 목록
+GET https://json.tarkov.dev/regular/hideout    # 하이드아웃 스테이션
 ```
+
+두 가지가 GraphQL과 다릅니다. 컬렉션이 배열이 아니라 **id를 키로 하는 객체**로 오고,
+번역 대상 문자열은 데이터 파일에 `"<taskId> name"` 같은 **키**로만 들어 있어 옆의
+로케일 파일에서 찾아야 합니다.
+
+캐시 파일은 `wiki_data/cache/tarkov_dev_*.json`이며, `wiki_data/cache/tarkov_dev_etags.json`에
+저장된 ETag로 조건부 요청을 보냅니다. 데이터 파일과 로케일 파일이 모두 304면 기존
+캐시를 그대로 두고, 하나라도 바뀌면 그룹 전체를 다시 읽습니다(304에는 본문이 없으므로).
+
+빈 응답은 성공이 아니라 **실패**입니다. 200에 오류 본문이 실려 와 빈 집합으로 파싱되고
+그것이 캐시를 `{}`로 덮어쓴 것이 2026년 1월 재생성의 원인이었고, 그 뒤 7개월 동안
+퍼블리시된 모든 퀘스트와 아이템의 `BsgId`가 NULL이었습니다.
 
 #### Wiki 데이터 캐싱
 - `TarkovDBEditor/Services/WikiCacheService.cs`: Wiki 페이지 캐싱
 - `TarkovDBEditor/Services/WikiQuestService.cs`: Wiki 퀘스트 파싱
 - 캐시 위치: `TarkovDBEditor/wiki_data/`
+
+Wiki는 페이지 정체성, 목표 텍스트, 필요 아이템, 위치, 에디션, 프레스티지를 담당하고,
+게임 규칙(레벨, 카파, 진영, 선행 퀘스트, 트레이더 충성도)과 외부 ID는 JSON API가
+담당합니다. 어느 쪽이 이기는지는
+`docs/decisions/feature-quest-data-1-1-refresh.spec.md`의 필드별 우선순위 표에 있습니다.
 
 ### 2. DB 파일 생성/업데이트
 
@@ -107,11 +112,35 @@ public async Task<RefreshResult> RefreshDataFromCacheAsync(
     CancellationToken cancellationToken = default)
 {
     // 1. 기존 DB에서 Items 로드
-    // 2. 캐시된 Quests 로드
-    // 3. DB 업데이트 (Quests, Requirements, Objectives 등)
-    // 4. Traders 업데이트
+    // 2. 기존 Quests 행 로드 (정체성 승계의 근거)
+    // 3. 캐시된 Quests 로드 + QuestIdentityResolver로 정체성 결정
+    // 4. DB 업데이트 (Quests, Requirements, TraderRequirements, Objectives 등)
+    // 5. Traders 업데이트
 }
 ```
+
+#### 재생성 절차 (운영자 런북)
+
+전체 절차와 각 단계의 기대값은
+`docs/decisions/feature-quest-data-1-1-refresh.spec.md`의 "Regeneration procedure
+(operator runbook)"에 있습니다. 요약:
+
+1. 퍼블리시된 `data/v1/tarkov_data.db`를 편집기 작업 DB로 복사한다(승계와 승인 상태는
+   현재 배포본 기준으로 계산되어야 하므로).
+2. `Debug > Backfill external IDs from snapshot...`로 1.0.7 스냅샷의 `BsgId`를 채운다.
+   **이 단계를 건너뛰면 새로고침이 시작을 거부합니다.** 외부 ID가 없으면 1.1에서
+   이름이 바뀐 퀘스트 91개가 새 키를 받고, 설치된 모든 빌드에서 그 진행 상황이
+   떨어져 나갑니다.
+3. `Debug > Cache Tarkov Dev Data` (tasks, items, traders, hideout).
+4. `Debug > Export Wiki Quests` (위키 크롤; `Special:Export`).
+5. `Debug > Fetch Wiki Data` (아이템 + 아이콘 + 퀘스트 + 트레이더, 한 트랜잭션).
+6. `Debug > Refresh Hideout Data`.
+7. `dotnet run --project tools/DataDiff -- data/v1/tarkov_data.db <후보.db>
+   --icons TarkovHelper/Assets/icons --log wiki_data/logs/refresh_<ts>.json > report.md`
+   로 비교 리포트를 만들고 검토한다. 이 리포트가 퍼블리시 전에 읽는 산출물이며,
+   퍼블리시 PR에 첨부합니다.
+8. 레거시 스모크(`LegacySmokeE2ETests`)와 테스트 스위트를 후보 DB로 돌린다.
+9. `Tools > Publish DB Update`.
 
 ### 3. 앱 릴리즈 패키징
 

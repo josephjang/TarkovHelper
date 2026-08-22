@@ -44,9 +44,20 @@ internal sealed class AppDriver : IDisposable
         _uiaRoot = AutomationElement.FromHandle(hwnd);
     }
 
-    public static AppDriver Launch(string configDir)
+    public static AppDriver Launch(string configDir) => Launch(AppUnderTest.DllPath!, configDir);
+
+    /// <summary>
+    /// Launches a specific build rather than the one this test run produced.
+    /// <para>
+    /// Used by the legacy smoke, which drives the release already installed in the field
+    /// against a candidate database. That build honours TARKOVHELPER_CONFIG_PATH and no other
+    /// harness variable; the rest are set anyway because they are inert to a build that does
+    /// not read them.
+    /// </para>
+    /// </summary>
+    public static AppDriver Launch(string dllPath, string configDir)
     {
-        var dll = AppUnderTest.DllPath!;
+        var dll = dllPath;
         var appDir = Path.GetDirectoryName(dll)!;
         RemoveLegacyLanguageOverride(appDir);
         var psi = new ProcessStartInfo
