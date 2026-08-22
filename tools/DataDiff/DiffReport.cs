@@ -61,18 +61,47 @@ public static class DiffReport
     {
         report.AppendLine("## Schema delta");
         report.AppendLine();
-        // Marked rather than pattern-matched on the text: a "no schema change" line decided by
-        // comparing against a literal with \r\n in it would silently stop appearing anywhere the
-        // newline is one character.
-        var lengthBeforeFindings = report.Length;
 
-        var addedTables = candidate.Schema.Keys.Except(previous.Schema.Keys, StringComparer.Ordinal).ToList();
-        var removedTables = previous.Schema.Keys.Except(candidate.Schema.Keys, StringComparer.Ordinal).ToList();
+        var changes = ComputeSchemaChanges(previous, candidate);
+        foreach (var change in changes)
+        {
+            report.AppendLine(change.Kind switch
+            {
+                SchemaChangeKind.AddedTable =>
+                    $"- Added table `{change.Table}` ({change.ColumnCount} columns)",
+                SchemaChangeKind.RemovedTable =>
+                    $"- **Removed table** `{change.Table}` (breaks every build reading this data format)",
+                SchemaChangeKind.AddedColumn =>
+                    $"- Added column `{change.Table}.{change.Column}` ({change.CandidateType})",
+                SchemaChangeKind.RemovedColumn =>
+                    $"- **Removed column** `{change.Table}.{change.Column}` (breaks every build reading this data format)",
+                SchemaChangeKind.RetypedColumn =>
+                    $"- **Retyped column** `{change.Table}.{change.Column}`: {change.PreviousType} -> {change.CandidateType}",
+                _ => throw new InvalidOperationException($"Unhandled schema change kind: {change.Kind}"),
+            });
+        }
 
-        foreach (var table in addedTables)
-            report.AppendLine($"- Added table `{table}` ({candidate.Schema[table].Columns.Count} columns)");
-        foreach (var table in removedTables)
-            report.AppendLine($"- **Removed table** `{table}` (breaks every build reading this data format)");
+        // Decided from the empty list, not from the text already written. Reading the report back
+        // to work out whether anything was found would make the markdown stand in for a result
+        // this method already has.
+        if (changes.Count == 0)
+            report.AppendLine("No schema change.");
+
+        report.AppendLine();
+    }
+
+    /// <summary>
+    /// Every difference between the two schemas, in the order the section prints them: added
+    /// tables, removed tables, then each shared table's added, removed and retyped columns.
+    /// </summary>
+    public static List<SchemaChange> ComputeSchemaChanges(DataSnapshot previous, DataSnapshot candidate)
+    {
+        var changes = new List<SchemaChange>();
+
+        foreach (var table in candidate.Schema.Keys.Except(previous.Schema.Keys, StringComparer.Ordinal))
+            changes.Add(new SchemaChange(SchemaChangeKind.AddedTable, table, ColumnCount: candidate.Schema[table].Columns.Count));
+        foreach (var table in previous.Schema.Keys.Except(candidate.Schema.Keys, StringComparer.Ordinal))
+            changes.Add(new SchemaChange(SchemaChangeKind.RemovedTable, table));
 
         foreach (var table in previous.Schema.Keys.Intersect(candidate.Schema.Keys, StringComparer.Ordinal))
         {
@@ -80,20 +109,17 @@ public static class DiffReport
             var after = candidate.Schema[table].Columns;
 
             foreach (var column in after.Keys.Except(before.Keys, StringComparer.Ordinal))
-                report.AppendLine($"- Added column `{table}.{column}` ({after[column]})");
+                changes.Add(new SchemaChange(SchemaChangeKind.AddedColumn, table, column, CandidateType: after[column]));
             foreach (var column in before.Keys.Except(after.Keys, StringComparer.Ordinal))
-                report.AppendLine($"- **Removed column** `{table}.{column}` (breaks every build reading this data format)");
+                changes.Add(new SchemaChange(SchemaChangeKind.RemovedColumn, table, column));
             foreach (var column in before.Keys.Intersect(after.Keys, StringComparer.Ordinal))
             {
                 if (before[column] != after[column])
-                    report.AppendLine($"- **Retyped column** `{table}.{column}`: {before[column]} -> {after[column]}");
+                    changes.Add(new SchemaChange(SchemaChangeKind.RetypedColumn, table, column, before[column], after[column]));
             }
         }
 
-        if (report.Length == lengthBeforeFindings)
-            report.AppendLine("No schema change.");
-
-        report.AppendLine();
+        return changes;
     }
 
     private static void RenderRowCounts(StringBuilder report, DataSnapshot previous, DataSnapshot candidate)
@@ -225,13 +251,35 @@ public static class DiffReport
         report.AppendLine("## Prerequisite edges");
         report.AppendLine();
 
+        var changes = ComputePrerequisiteChanges(previous, candidate);
+
+        report.AppendLine($"- Edges added: {changes.Sum(c => c.Added.Count)}");
+        report.AppendLine($"- Edges removed: {changes.Sum(c => c.Removed.Count)}");
+        report.AppendLine($"- Quests whose prerequisite list changed: {changes.Count}");
+        report.AppendLine();
+
+        if (changes.Count > 0)
+        {
+            report.AppendLine("| Quest | Added | Removed |");
+            report.AppendLine("|---|---|---|");
+            foreach (var change in changes)
+                report.AppendLine($"| {change.Quest} | {Join(change.Added)} | {Join(change.Removed)} |");
+            report.AppendLine();
+        }
+    }
+
+    /// <summary>
+    /// Every quest whose prerequisite list differs, in quest name order, with the edges gained
+    /// and lost. A quest with no difference is left out, so the totals the section prints above
+    /// the table are the sums over this list.
+    /// </summary>
+    public static List<PrerequisiteChange> ComputePrerequisiteChanges(DataSnapshot previous, DataSnapshot candidate)
+    {
         var before = EdgesByQuestName(previous);
         var after = EdgesByQuestName(candidate);
 
         var names = before.Keys.Union(after.Keys, StringComparer.Ordinal).OrderBy(n => n, StringComparer.Ordinal).ToList();
-        var added = 0;
-        var removed = 0;
-        var rows = new List<string>();
+        var changes = new List<PrerequisiteChange>();
 
         foreach (var name in names)
         {
@@ -243,24 +291,10 @@ public static class DiffReport
             if (gained.Count == 0 && lost.Count == 0)
                 continue;
 
-            added += gained.Count;
-            removed += lost.Count;
-            rows.Add($"| {name} | {Join(gained)} | {Join(lost)} |");
+            changes.Add(new PrerequisiteChange(name, gained, lost));
         }
 
-        report.AppendLine($"- Edges added: {added}");
-        report.AppendLine($"- Edges removed: {removed}");
-        report.AppendLine($"- Quests whose prerequisite list changed: {rows.Count}");
-        report.AppendLine();
-
-        if (rows.Count > 0)
-        {
-            report.AppendLine("| Quest | Added | Removed |");
-            report.AppendLine("|---|---|---|");
-            foreach (var row in rows)
-                report.AppendLine(row);
-            report.AppendLine();
-        }
+        return changes;
     }
 
     private static void RenderTraderGates(StringBuilder report, DataSnapshot previous, DataSnapshot candidate)
@@ -299,6 +333,29 @@ public static class DiffReport
             + "count or order may show a tick on the wrong line until the user corrects it.");
         report.AppendLine();
 
+        var changes = ComputeObjectiveShapeChanges(previous, candidate, join);
+
+        report.AppendLine($"- Quests affected: {changes.Count}");
+        report.AppendLine();
+
+        if (changes.Count > 0)
+        {
+            report.AppendLine("| Quest | Previous objectives | Candidate objectives |");
+            report.AppendLine("|---|---:|---:|");
+            foreach (var change in changes)
+                report.AppendLine($"| {change.Quest} | {change.PreviousCount} | {change.CandidateCount} |");
+            report.AppendLine();
+        }
+    }
+
+    /// <summary>
+    /// Every matched quest whose objective list changed count or order, in quest name order.
+    /// A pair whose descriptions match position for position is left out, which is why a row can
+    /// carry two equal counts: the wording or the order moved, not the length.
+    /// </summary>
+    public static List<ObjectiveShapeChange> ComputeObjectiveShapeChanges(
+        DataSnapshot previous, DataSnapshot candidate, QuestJoin join)
+    {
         var before = previous.Objectives
             .GroupBy(o => o.QuestId, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.OrderBy(o => o.SortOrder).Select(o => o.Description).ToList(), StringComparer.Ordinal);
@@ -306,7 +363,7 @@ public static class DiffReport
             .GroupBy(o => o.QuestId, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.OrderBy(o => o.SortOrder).Select(o => o.Description).ToList(), StringComparer.Ordinal);
 
-        var rows = new List<string>();
+        var changes = new List<ObjectiveShapeChange>();
         foreach (var pair in join.Pairs.OrderBy(p => p.Candidate.Name, StringComparer.Ordinal))
         {
             var beforeList = before.TryGetValue(pair.Previous.Id, out var b) ? b : new List<string>();
@@ -315,20 +372,10 @@ public static class DiffReport
             if (beforeList.Count == afterList.Count && beforeList.SequenceEqual(afterList, StringComparer.Ordinal))
                 continue;
 
-            rows.Add($"| {pair.Candidate.Name} | {beforeList.Count} | {afterList.Count} |");
+            changes.Add(new ObjectiveShapeChange(pair.Candidate.Name, beforeList.Count, afterList.Count));
         }
 
-        report.AppendLine($"- Quests affected: {rows.Count}");
-        report.AppendLine();
-
-        if (rows.Count > 0)
-        {
-            report.AppendLine("| Quest | Previous objectives | Candidate objectives |");
-            report.AppendLine("|---|---:|---:|");
-            foreach (var row in rows)
-                report.AppendLine(row);
-            report.AppendLine();
-        }
+        return changes;
     }
 
     private static void RenderItems(StringBuilder report, DataSnapshot previous, DataSnapshot candidate)
@@ -388,6 +435,18 @@ public static class DiffReport
 
         var coverage = IconCoverage.Measure(candidate.Items, iconDirectory);
         report.AppendLine($"- Icon folder: `{iconDirectory}`");
+
+        // Distinguished from a real coverage of zero, which this section would otherwise render
+        // identically: the reviewer would be reading a mistyped path as every icon having gone.
+        if (!coverage.DirectoryExists)
+        {
+            report.AppendLine();
+            report.AppendLine("**Not measured**: that folder does not exist, so this section says nothing about "
+                + "icon coverage either way. Check the path passed to `--icons`.");
+            report.AppendLine();
+            return;
+        }
+
         report.AppendLine($"- Items with a PNG: {coverage.ItemsWithIcon}/{candidate.Items.Count}");
         report.AppendLine($"- Items without a PNG: {coverage.ItemsWithoutIcon.Count}");
         report.AppendLine($"- PNG files with no item: {coverage.OrphanFiles.Count}");
@@ -526,6 +585,38 @@ public enum QuestMatchKind
     ExternalId,
     RowKey,
 }
+
+/// <summary>Which kind of schema difference a <see cref="SchemaChange"/> records.</summary>
+public enum SchemaChangeKind
+{
+    AddedTable,
+    RemovedTable,
+    AddedColumn,
+    RemovedColumn,
+    RetypedColumn,
+}
+
+/// <summary>
+/// One difference between the two schemas. <paramref name="ColumnCount"/> belongs to
+/// <see cref="SchemaChangeKind.AddedTable"/> alone, and the two type names to the column kinds,
+/// so every other member is left at its default for the kinds that do not carry it.
+/// </summary>
+public sealed record SchemaChange(
+    SchemaChangeKind Kind,
+    string Table,
+    string? Column = null,
+    string? PreviousType = null,
+    string? CandidateType = null,
+    int ColumnCount = 0);
+
+/// <summary>
+/// One quest whose prerequisite list differs, with the edges it gained and the ones it lost.
+/// Each edge is rendered as it will be read: "quest name (requirement type)".
+/// </summary>
+public sealed record PrerequisiteChange(string Quest, IReadOnlyList<string> Added, IReadOnlyList<string> Removed);
+
+/// <summary>One matched quest whose objective list changed count or order.</summary>
+public sealed record ObjectiveShapeChange(string Quest, int PreviousCount, int CandidateCount);
 
 public sealed record QuestPair(QuestRow Previous, QuestRow Candidate, QuestMatchKind MatchedBy);
 

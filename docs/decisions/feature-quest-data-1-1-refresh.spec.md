@@ -255,10 +255,14 @@ upstream probes on 2026-08-21.
 - `TarkovDevQuestCacheItem` grows by `minPlayerLevel`, `kappaRequired`,
   `factionName`, `traderLevelRequirements` (`[{traderId, traderName, level}]`,
   only `requirementType == "level"`), `taskRequirements` (`[{taskId, status[]}]`),
+  `failConditions` (`[{type, taskId, status[]}]`, every kind carried, `taskId`
+  only on the `taskStatus` kind; section 3 derives the exclusive pairs from it),
   `availableDelaySecondsMin`; `cachedAt` and the source `Last-Modified` are
   recorded so the refresh log states the data's age. The cache file keeps its
   name and location (`wiki_data/cache/tarkov_dev_quests.json`); the second,
   debug-only file of the same name written by `ExportQuestsAsync` is removed.
+  Every field added here is additive on the cache file: one written by an
+  earlier build simply lacks the key and reads back as the field's empty value.
 - The cache is no longer a dictionary keyed by `wikiLink` that drops
   collisions: it is a list, and matching (section 2) is one to one.
 - Cache Tarkov Dev Data keeps its per-part isolation (a failed part keeps its
@@ -291,17 +295,20 @@ makes that database the published one.
 - **One page, several tasks.** A task may be claimed by one page only. When
   several tasks share a page, the page takes one of them by this order of
   evidence, and the report prints every candidate with its required-by list:
-  (1) a BEAR/USEC pair (Drip-Out 1 and 2, Textile 1 and 2) takes the lowest id
+  (1) a BEAR/USEC pair (Drip-Out 1 and 2, Textile 1 and 2) takes the BEAR side
   and its `Faction` stays NULL, because the page serves both factions as those
-  four rows do today; (2) otherwise the candidate that some other task lists in
-  its `taskRequirements` wins, which is what decides The Tarkov Shooter - Part 5
-  in favour of 5bc4836986f7740c0152911c (the record Part 6 requires) over
-  5bc4826c86f774106d22d88b (required by nothing); (3) otherwise the candidate
-  whose id the previous row for that page already holds, which keeps Battery
-  Change, Make Amends, The Price of Independence and The Huntsman Path -
-  Administrator on the record the user's log events already matched; (4)
-  otherwise the newest id (the first eight hex digits of a game id are its
-  creation time). `BsgId` holds one id, so for every such page only one
+  four rows do today, and pinning the side keeps every part of a chain on one
+  faction's records (among that side, a record another task requires wins, and
+  lowest id only breaks what is left); (2) otherwise the candidate that some
+  other task lists in its `taskRequirements` wins, which is what decides The
+  Tarkov Shooter - Part 5 in favour of 5bc4836986f7740c0152911c (the record
+  Part 6 requires) over 5bc4826c86f774106d22d88b (required by nothing);
+  (3) otherwise the candidate whose id a previous row already holds (the newest
+  of them if several do), found by the game id and never by the page title,
+  which keeps Battery Change, Make Amends, The Price of Independence and The
+  Huntsman Path - Administrator on the record the user's log events already
+  matched; (4) otherwise the newest id (the first eight hex digits of a game id
+  are its creation time). `BsgId` holds one id, so for every such page only one
   record's log events match; the report says so per page, and a
   `QuestExternalIds` side table stays in the backlog for the day the app
   indexes several ids per quest. Pages with no task and tasks with no page are
@@ -350,8 +357,11 @@ makes that database the published one.
   rename has no snapshot id to copy: No Questions Asked (now Special Order,
   task 68ee1c18b4e5bc9a68018cd7, confirmed by the API's `wikiLink` and the wiki
   move log) never carried a `BsgId`; the runbook sets it by hand in the same
-  step, and a content guard pins the row. After that run every later
-  regeneration bridges through the `BsgId`s it wrote.
+  step, and a content guard pins the row. (As built, `BsgIdBackfillService`
+  carries that id itself rather than the operator typing it, and it and the
+  guard find the row by name or by that id, because the refresh renames it. See
+  the notes under section 7.) After that run every later regeneration bridges
+  through the `BsgId`s it wrote.
 - Items get the same carry-over rule (`ItemIdentityResolver` inside the same
   class family): an item page matched by `wikiLink` to an item whose id the
   previous database holds keeps its `Id`, so its icon file keeps resolving.
@@ -375,7 +385,7 @@ For a matched quest:
 | `Faction` | `factionName` | Any -> NULL, BEAR -> Bear, USEC -> Usec; a BEAR/USEC pair behind one page -> NULL; any other value fails the run |
 | `RequiredEdition`, `ExcludedEdition`, `RequiredPrestigeLevel`, `RequiredDecodeCount` | wiki | unchanged |
 | `NormalizedName` (new) | identity resolver | `SqlForm` of the title the `Id` was minted from |
-| `QuestRequirements` | `taskRequirements` | one row per entry, GroupId 0 on every row (the app's AND set, as the Collector synthesis already writes; the wiki parser's 1..n numbering was equivalent because the app reads a singleton group as AND); status complete -> Complete, active -> Accept, failed -> Fail; `DelayMinutes` from `availableDelaySecondsMin` / 60 when non-zero; any other status fails the run |
+| `QuestRequirements` | `taskRequirements` | one row per entry, GroupId 0 (the app's AND set, as the Collector synthesis already writes; the wiki parser's 1..n numbering was equivalent because the app reads a singleton group as AND), except for the exclusive pairs below; status complete -> Complete, active -> Accept, failed -> Fail, and an entry naming several statuses takes the most permissive as `RequirementType` and whatever that one does not already cover as `AltRequirementType`; `DelayMinutes` from `availableDelaySecondsMin` / 60 when non-zero; any other status fails the run |
 | `QuestTraderRequirements` (new) | `traderLevelRequirements` | one row per entry |
 | `QuestObjectives`, `QuestRequiredItems`, `OptionalQuests` | wiki | unchanged parsers; `ParseObjectiveLine`'s map list is extended with The Labyrinth and any map name present in the API's objectives |
 
@@ -384,13 +394,63 @@ For a wiki-only seasonal quest (no task): `BsgId` NULL, `Trader`, `MinLevel`,
 `KappaRequired` 0, `Faction` from the wiki parser, no `QuestTraderRequirements`
 rows, names English only.
 
+Fourteen 1.1 prerequisites name more than one satisfying status and a row holds
+one type, so the mapping above splits them across the two type columns. Ten are
+"active or complete", which `Accept` already covers on its own (the app's
+`IsStatusSatisfied` treats an Accept row as satisfied by an active *and* by a
+completed prerequisite), so those leave `AltRequirementType` NULL. The other
+four are "complete or failed", which no single type covers: they publish
+`Complete` with `AltRequirementType = 'Fail'`.
+
+That column reaches only builds that update, and the installs already in the
+field cannot be fixed after the fact, so the same fact is written a second time
+wherever the published schema can already express it. When upstream's own
+`failConditions` say a prerequisite is failed by completing one specific other
+quest, "prerequisite failed" and "that quest complete" are the same state, so
+the pair becomes an OR group naming both at `Complete`
+(`RefreshDataService.ExpandExclusiveAlternatives`). Two of the four qualify, and
+both are OR groups the published database already ships, restored rather than
+replaced by a single AND row:
+
+| Quest | Prerequisite (complete or failed) | Failed by completing |
+|---|---|---|
+| Building Foundations | Swift Retribution | Inevitable Response |
+| Dangerous Road | Supply Plans | Kind of Sabotage |
+
+The other two get `AltRequirementType` alone and nothing else, because neither
+has a second quest to name: Getting Acquainted (prerequisite of Make Amends -
+Buyout) is failed by a Lightkeeper trader standing rather than by a quest, and
+Battery Change (prerequisite of Protect the Sky) is failed by a second Battery
+Change record that shares its wiki page and so never becomes a row of its own. A
+build that predates the column still over-locks those two for a player who
+failed the prerequisite.
+
+The pairs are **derived, not transcribed**. `TarkovDevJsonClient` carries the
+`failConditions` of every task into the task cache
+(`TarkovDevQuestCacheItem.FailConditions`), and
+`RefreshDataService.ReadExclusiveTwin` reads the exclusive twin off the
+prerequisite's own record: the single `taskStatus` condition whose `status`
+includes `complete`. Exactly one, never the first of several - twelve 1.1 tasks
+are failed by two different quests each, and an OR group naming one of them
+would say something the game does not. All four outcomes above fall out of that
+rule against the live payload, with no table to keep in step. The run still
+names every multi-status prerequisite and says which became an OR group and
+which did not, now with the reason: "failed by traderStanding", "the quest that
+fails it was not imported by this run".
+
+The cache file shape changes with the field. A cache written by an earlier build
+has no `failConditions` key, which reads back as an empty list rather than
+throwing (the property's setter also absorbs an explicit null); the run then
+publishes the bare AND row it always did and names the prerequisite it could not
+expand, and `Debug > Cache Tarkov Dev Data` refills the field.
+
 The wiki `|previous` parser stays in the code, writes rows only for wiki-only
 quests, and is otherwise consulted to compute the disagreement list for the
 report (wiki set vs task set per quest: agree, wiki superset, task superset,
 conflict; 310/111/60/17 at the time of writing). The 15 quests that had an OR
 group in the published data are a named review item: the API has no OR groups,
-so they collapse to the game's AND list, and the report shows before and after
-for each.
+so they collapse to the game's AND list except for the two exclusive pairs
+above, and the report shows before and after for each.
 
 `QuestNormalizedName.SqlForm` (new, in TarkovDBEditor) is the C# equivalent of
 the app's expression: ASCII lower-casing only, spaces to dashes, the ASCII
@@ -417,16 +477,42 @@ the C# function, so the two cannot drift.
   table-global diff as the other child tables, registered in `_schema_meta`.
   Rows carry only `requirementType == "level"`; level 1 entries do not occur in
   the source.
+- `QuestRequirements.AltRequirementType TEXT` (nullable, NULL on all but a
+  handful of rows), added through a PRAGMA-guarded `ALTER TABLE` block in
+  `CreateQuestRequirementsTableIfNotExistsAsync` (the same pattern
+  `Quests.NormalizedName` uses), registered in
+  `RegisterQuestRequirementsSchemaAsync`, carried by `DbQuestRequirement`, the
+  INSERT/UPDATE lists and `AddRequirementParameters`, and read by
+  `QuestDbService.LoadQuestRequirementsAsync` behind `ColumnExistsAsync`. It
+  holds the second type a row is also satisfied by (section 3); the empty string
+  is stored as NULL, because the app would read it as a status it has no arm
+  for. `ComputeId` does not change: the row key is the (quest, prerequisite,
+  group) triple and neither type column is part of it, so no published row moves
+  and no approval is dropped when the column arrives. `ComputeContentHash` does
+  cover it, so a row that starts being satisfied by a failure reads as changed.
+  The editor's own requirement validator
+  (`ViewModels/QuestRequirementsViewModel.cs`) does not display the column yet;
+  it lists its columns explicitly and is unaffected by the addition.
 - Nothing is removed or retyped; `user_version` stays 1. `DataFormatDriftTests`
   reports Widened; the proposed `DataFormatBaseline.v1.json` is adopted in the
-  publish commit.
-- Five constraints the run enforces before writing (each a thrown
-  `InvalidOperationException` naming the offending rows): `RequirementType` in
-  {Complete, Accept, Fail}; `Faction` in {NULL, Bear, Usec}; every
-  `NormalizedName` equals `SqlForm(TitleOf(Id))` and is unique; no hard-required
-  column of the app (the ten on Quests, the twelve on Items) is NULL where it
-  was not NULL before, except `MinLevel` by design; `Trader` non-NULL on every
-  row.
+  publish commit. The baseline records the *published* schema, so it moves when
+  the regenerated database is published, not when the pipeline learns to write
+  the column.
+- Seven constraints the run enforces before writing and the publish path
+  enforces again over the candidate file (section 6; each a thrown
+  `InvalidOperationException` naming the offending rows, and a refused
+  comparison on the publish side): `RequirementType` in
+  {Complete, Accept, Fail}; `AltRequirementType` in {NULL, Complete, Accept,
+  Fail} and never a repeat of `RequirementType`; at most one row per (quest,
+  prerequisite) pair; no quest its own prerequisite; `Faction` in
+  {NULL, Bear, Usec}; every
+  `NormalizedName` non-empty, equal to `SqlForm(TitleOf(Id))` and unique, as is
+  every `Id`; `Trader` NULL on at most 5 percent of quests (the run cannot tell
+  a trader the wiki never named from one the cache failed to resolve, so the
+  share is the guard and `Trader` NULL on none is a content test on the
+  published database). Whether a hard-required column became NULL where it was
+  not NULL before is read off the diff report's NULL-rate table (section 8)
+  rather than enforced by the run.
 - `docs/database-schema.md` gains both additions.
 
 ### 5. Collector synthesis and stale rows
@@ -442,33 +528,192 @@ cascade; `QuestTraderRequirements` declares
 after Quests inside the same transaction, and the resolver emits requirement
 rows only for quests it imports.
 
+**Collector's rows are built in memory, not written after the main write.**
+Section 5 keeps `AddCollectorKappaRequirementsAsync` and has it rebuild
+Collector's list against the database once the write is done.
+`RefreshDataService.SynthesizeCollectorRequirements` builds the same rows from
+the quest list before the write instead, and appends them to the requirement
+set, so they reach `QuestRequirements` through `UpsertQuestRequirementsAsync`
+with every other prerequisite; the old function is deleted. The rows are
+identical (`QuestId` Collector, `RequiredQuestId` the flagged quest, `Complete`,
+GroupId 0). What changes is everything that happens to them on the way in: one
+row key from `RowHash` rather than the old `<collectorId>_<questId>`
+concatenation, one content hash and so the ordinary approval carry-over, the
+delete loop, the duplicate-pair collapse, `AssertPublishConstraints` and
+`AssertDeleteBudgetHeld`. A post-write insert reaches none of those by
+construction, because it runs after the constraint checks have read the built
+rows and its own rows are absent from the list the delete budget measures
+against.
+
+Three things follow, and they are why the deviation is an improvement rather
+than a shortcut. The stale row this section expects to disappear disappears
+because the delete loop removes it, not because a second function remembers to:
+the published database ships 248 Collector rows for 247 flagged quests, the
+extra being Grenadier, and the old function only ever inserted. Section 5's own
+shape would have dropped every Collector approval on every later run, because
+the delete loop runs first and the post-write step then reads its approvals out
+of rows deleted a moment earlier. And Collector's 248 published edges, 31
+percent of the table, now count in the delete budget instead of reading as
+losses it cannot interpret.
+
+The costs are smaller and both bounded. The budget's headroom on the first 1.1
+run narrows, since Collector's edges are most of what that run legitimately
+drops; crossing the limit aborts inside the transaction the caller rolls back,
+so the direction is safe. And the two `IsCollector` overloads have to agree, or
+the API's own list and the synthesized one are both skipped and Collector
+publishes with no prerequisites at all: they do agree, because `BuildQuestRow`
+sets `Name` to the page title, `NameEN` to the task's English name or the title,
+and `BsgId` to the task id, so both read the same three values.
+
 ### 6. Pipeline guards (silent failures closed)
 
-- Refresh Data (from Cache) and Fetch Wiki Data fail, not succeed, when the
-  wiki cache has zero pages with content (`WikiQuestService.GetCacheStats().withContent == 0`),
-  when `Special:Export` returned a failure for any batch (the per-batch catch
-  now aggregates and throws after the loop), when the tarkov.dev quest cache is
-  older than the wiki cache by more than seven days, and when the item cache is
-  missing on the full path (today it continues with `BsgId` NULL everywhere).
+Every threshold below is a constant on `RefreshGuards` in
+`RefreshDataService.cs` with a comment naming this spec (the trader-NULL share
+on `PublishConstraints`, in the same file, beside the rule it bounds), and
+`RefreshGuardTests` drives a run against throwaway caches to pin every one of
+them but that share. Crossing one is a source problem, never something to
+publish.
+
+- Refresh Data (from Cache) and Fetch Wiki Data fail, not succeed, when no
+  cached wiki page has content, when `Special:Export` returned a failure for any
+  batch (the per-batch catch now aggregates and throws after the loop), when the
+  tarkov.dev task cache or trader cache is missing or empty, when the task cache
+  was last written more than seven days ago (`MaxTaskCacheLag`, so the crawl and
+  the game rules still describe one moment in the game), and when the item cache
+  is missing on the full path (today it continues with `BsgId` NULL everywhere).
 - The refresh refuses to start when the previous database has `BsgId` NULL on
-  more than 10 percent of quests; the message names
-  `Debug > Backfill external IDs from snapshot...`. This is the guard the
+  more than 10 percent of quests (`MaxPreviousQuestsWithoutBsgId`); the message
+  names `Debug > Backfill external IDs from snapshot...`. This is the guard the
   carry-over depends on: a run from an unbackfilled database would mint fresh
   identities for every renamed quest while every page still matches.
 - The refresh aborts when more than 5 percent of previously published quests
-  would lose their task match, when any imported quest other than a wiki-only
-  seasonal page would end with `BsgId` NULL, or when more than 5 percent of
-  imported quests would end with `Trader` NULL. The thresholds are constants
-  with a comment naming this spec.
-- `OptionalQuests` and `QuestRequiredItems` skip an empty list like the other
-  three tables.
-- The refresh aborts when the crawl contains pages whose Requirements section
-  mentions a seasonal mode but `ExtractIsSeasonal` marked none of them: the
-  marker's spelling has moved, and importing zero seasonal quests silently is
-  the failure the exception exists to prevent.
+  would lose their task match (`MaxLostMatches`), or when more than 5 percent of
+  imported quests would end with `Trader` NULL (`MaxTradersMissing`). No
+  imported quest other than a wiki-only seasonal page can end with `BsgId` NULL,
+  so no guard measures that: the liveness rule holds back every page that has
+  neither a task nor the seasonal line.
+- The loss is measured a second time by row key, because the two measurements
+  miss different rows: the refresh aborts when more than 5 percent of previously
+  published quests keep no row key in the new set (`MaxLostRowKeys`) and names
+  the rows. The task-match measure can only see rows that carry an external ID;
+  the row key is what recorded progress is filed under and what the write
+  deletes a row by, so this one also covers the rows the backfill left without
+  an ID, which the guard above deliberately tolerates a tenth of.
+- Two quests can never be published under one row key or one normalized name.
+  `QuestIdentityResolver` refuses the resolve itself, naming both pages, and
+  `AssertQuestIdentitiesAreUnique` restates both checks over the resolver's
+  output before anything indexes a quest by its key. The reachable collision is
+  a title changing owner: the quest that held the title carries its old key
+  while the quest that took the title mints that same key for itself, which
+  patch 1.1 sets up eight times.
+- Each child-table write refuses to lose more than 80 percent of what the table
+  describes (`MaxRowsDeletedShare`), and reports the share it does lose.
+  Measured over each row's **natural identity**, never over its computed row
+  key: a prerequisite is its `(QuestId, RequiredQuestId)` pair, a loyalty gate
+  its `(QuestId, TraderId)` pair, an item requirement its
+  `(QuestId, ItemName, RequirementType)`. `Items` and `Traders` pass the row id,
+  which is already upstream's own identity; `Quests` and `QuestObjectives` pass
+  theirs as the honest fallback (a quest's external ID is NULL on all 488
+  published rows until the backfill runs, and an objective has nothing but its
+  position in the quest's list).
+
+  The distinction is not academic. Every one of the 794 rows in the published
+  `QuestRequirements` table is keyed by a scheme this pipeline no longer
+  produces: 546 by `RowHash` over the wiki's GroupId of 1 or more against the
+  game-derived pipeline's 0, and 248 by Collector's old
+  `<collectorId>_<questId>` concatenation against the `RowHash` the synthesis
+  now goes through. A key measure reads 794 of 794 deleted and aborts the first
+  1.1 regeneration outright, on a run that deletes no prerequisite edge for that
+  reason at all.
+
+  Still loose at 80 percent, because 1.1 does genuinely drop a lot of edges: it
+  replaces the wiki's chains with the game's and takes the Kappa flag off all
+  but 13 quests, which shortens Collector's synthesized list from 248 rows to
+  12. Simulated against `data/v1/tarkov_data.db` and the live task set (474 of
+  517 tasks carried onto a published row key by the backfilled external ID), the
+  run loses 596 of the 794 published pairs, 75 percent. It still catches what
+  the empty-list skip below cannot see, because one row is not zero rows: a list
+  that came back with a single prerequisite passes the emptiness check and then
+  deletes every other row through the foreign keys, and that reads as 793 of
+  794, 99.9 percent. What it does not catch on its own is the Kappa set
+  collapsing while the game's chains arrive intact, 620 of 794 or 78 percent;
+  that has its own guards. Tables holding fewer than 10 identities
+  (`MinRowsForDeleteBudget`) are exempt, because a share that small says
+  nothing. The check runs inside the write transaction, which the caller rolls
+  back, so the file on disk is untouched either way.
+
+  The re-key does reset `IsApproved` to 0 on all 794 rows, which are all 1
+  today. That column is the editor's own review state: nothing under
+  `TarkovHelper/` reads it, so no install can see it.
+- The refresh aborts when more than 25 percent of the pages whose Requirements
+  section mentions a seasonal mode fail to match the marker `ExtractIsSeasonal`
+  reads (`MaxSeasonalPagesMissingTheMarker`): the marker's spelling has moved,
+  and importing zero seasonal quests silently is the failure the exception
+  exists to prevent. A share rather than "not one matched", because a wiki edit
+  that rewords seventeen of the eighteen KORD BREACH pages leaves one matching
+  and the other seventeen would be held back and deleted with their objectives
+  and prerequisites. None of them carries a `BsgId`, so no other guard can see
+  them.
+- The Kappa set is reported before and after every run, and a run that would
+  leave it empty while the previous database flags any quest is refused. Not a
+  proportional threshold on purpose: 1.1 itself takes the set from 248 quests to
+  13, so any share tight enough to catch a bad collapse would refuse the
+  regeneration this pipeline was rebuilt for. The collapse that is a defect
+  rather than a patch is caught by shape instead, in the guard below.
+- Every quest Collector's own game record requires, directly or through the
+  chain, must be in the Kappa set. That is the assumption the synthesis rests on
+  when it skips Collector's API prerequisites as duplicates of the rows it
+  builds itself (section 5): a chain member that is not flagged is dropped by
+  the skip and no other row replaces it, so Collector would publish unlocked by
+  a prerequisite the game still enforces. A patch that genuinely shortens
+  Collector's chain moves both together and passes.
+- The value vocabularies the fielded build reads are checked over the built
+  rows before the write, every failure collected and named together:
+  `RequirementType` in {Complete, Accept, Fail}, `AltRequirementType` in {NULL,
+  Complete, Accept, Fail} and never a repeat of `RequirementType`, `Faction` in
+  {NULL, Bear, Usec}, no quest its own prerequisite, and `NormalizedName`
+  non-empty and equal to `SqlForm(TitleOf(Id))` and unique on every row.
+- Those rules are declared once, on `PublishConstraints` in
+  `RefreshDataService.cs`, and evaluated over two sources: the rows a refresh
+  just built (`RefreshGuards.AssertPublishConstraints`, which fails earlier and
+  inside the run that produced them) and the candidate `tarkov_data.db` a
+  publish is about to copy (`DataPublishService`, in the comparison and again
+  against the file it is actually copying). The build phase alone is not enough,
+  because it is not the only way a row reaches the file: a hand edit in the
+  editor's DataGrid, a `BsgIdBackfillService` run and any correction made after
+  a refresh all write straight to the database, and `DatabaseService`'s generic
+  UPDATE can rewrite `Quests.Name` without `NormalizedName` and desynchronize
+  the two. That desynchronization un-keys the quest's recorded progress in every
+  install, silently, and cannot be repaired afterwards, so the publish path is a
+  hard block: no override flag, no warning-only mode. The trader-NULL share
+  (`MaxTradersMissing`) moves onto `PublishConstraints` with the rule it bounds;
+  every other threshold stays on `RefreshGuards`.
+- The file side reads through the same feature detection the app uses
+  (`QuestDbService.ColumnExistsAsync`), so a candidate published before a column
+  existed is checked rather than refused for lacking it: with no
+  `Quests.NormalizedName` the key a build will file progress under is the one it
+  derives from `Name`, and that derived value is what the equality and
+  uniqueness rules read, exactly as `LoadBaseQuestsAsync` does.
+  `AltRequirementType` is read only where the column exists.
+  `data/v1/tarkov_data.db` is in that older shape and passes the gate as
+  published (488 quests, 794 prerequisite rows), which `PublishConstraintTests`
+  asserts against the file itself so the answer is read rather than assumed.
+- No quest may have two prerequisite rows naming the same prerequisite. The
+  fielded build keys incoming rows by prerequisite alone
+  (`QuestDbService.LoadQuestRequirementsAsync`) and drops every later row naming
+  the same one, `GroupId` and all, so a second row publishes as nothing and can
+  leave an OR group with one branch that nothing satisfies. This is the shape
+  the exclusive-pair expansion could otherwise create, which is why the
+  expansion refuses a twin the quest already requires and the guard restates it
+  over the finished set whatever produced the rows. The one remaining source is
+  a seasonal wiki page naming the same prerequisite twice.
+- `OptionalQuests`, `QuestRequiredItems` and `QuestTraderRequirements` skip an
+  empty list like the other child tables, and the skip is reported rather than
+  silent.
 - Every run writes `wiki_data/logs/refresh_<ts>.json` with the counts the diff
   report consumes: matches, collisions, held-back pages, disagreements, carried
-  identities, title reuses.
+  identities, title reuses, and the previous rows no new row carried, named one
+  by one rather than left to a count: they are the rows the write deletes.
 
 ### 7. Regeneration procedure (operator runbook)
 
@@ -491,6 +736,40 @@ rows only for quests it imports.
 9. `Tools > Publish DB Update` with token `1.1.0` (the suggestion is 1.0.11;
    the token is opaque to every client, and `1.1.x` marks the game patch the
    data describes), then adopt the proposed drift baseline.
+
+**The one id no snapshot can supply is code, not a grid edit.** Step 2 of the
+runbook has the operator type `BsgId = 68ee1c18b4e5bc9a68018cd7` onto the "No
+Questions Asked" row in the editor grid. `BsgIdBackfillService.HandBridgedQuestIds`
+carries it instead, applied in the same transaction as the snapshot copy and
+reported per bridge as Applied, AlreadyBridged, IdAlreadyDiffers or
+NoMatchingRow, with a bridge that needs attention turning the completion dialog
+into a warning. The grid edit was the weaker half of the step: it moves none of
+the counts the operator watches, so skipping it looks exactly like doing it, the
+backfill guard deliberately tolerates one missing id in 488, and the row then
+mints a fresh key under its new title and drops every recorded completion of that
+quest in every build in the field. A regeneration restarted mid-flight re-copies
+the published database and needs the edit again; code needs nothing remembered.
+
+The census behind the single entry holds. Of the 488 published rows, 15 carry no
+id the 1.0.7 snapshot can supply, and "No Questions Asked" is the only one of the
+15 whose wiki page title moved: the other 13 keep their titles, so their keys are
+recomputed to the same value with no external id at all, and New Beginning
+(Prestige 5) and (Prestige 6) leave for want of a game record either way. The
+reason first recorded for that row having no id was wrong and is corrected here:
+the row is in the 1.0.7 snapshot under the same key with `BsgId` NULL, one of 14
+rows the December tarkov.dev matching never resolved. The row published between
+the snapshot and the January regeneration is Setting Priorities, which needs no
+bridge.
+
+**The bridge is matched by external id as well as by name.** Matching on the name
+alone expires the moment this pipeline runs, because the row it names is renamed
+to "Special Order" by the very refresh the bridge enables: every later backfill
+would find no row of that name, report NoMatchingRow, and warn that a refresh is
+about to drop the quest's progress, which by then is the opposite of the truth.
+The content guard that pins the row reads the same way. Both therefore accept a
+row that is named "No Questions Asked" or that already carries
+`68ee1c18b4e5bc9a68018cd7`, so the bridge, its report and its guard all survive
+the rename they exist for.
 
 ### 8. Diff report tool
 
@@ -592,6 +871,9 @@ detail status text. The fixture log folder is seeded through the
   item),
   `ViewModels/QuestRequirementsViewModel.cs` (select list),
   `TarkovDBEditor/CLAUDE.md`.
+- `TarkovHelper/Services/QuestDbService.cs`
+  (`LoadQuestRequirementsAsync` reads `AltRequirementType` behind
+  `ColumnExistsAsync`; the only app-side change in this phase).
 - `tools/DataDiff/` (new), `TarkovHelper.sln`, `CheckDb/` (deleted), root
   `CLAUDE.md` (solution table).
 - `TarkovHelper.Tests/`: `TarkovDevJsonClientTests`, `QuestIdentityResolverTests`,
@@ -606,6 +888,25 @@ detail status text. The fixture log folder is seeded through the
 - `docs/database-schema.md`, `docs/database-update-mechanism.md` (runbook
   pointer), `feature-eft-1-1-roadmap.md` and `feature-eft-1-1-roadmap.spec.md`
   (superseded notes).
+
+**`QuestDataCoverageTests` runs from PR A instead of staying skipped until PR B
+deletes it.** Files touched schedules the file for deletion in PR B, with its
+Korean-coverage assertion moving into `PublishedDataContentTests` at 50 percent;
+that instruction stands unchanged. What changes is the state it is deleted from:
+the test's skip reason named a branch that never existed, so it has guarded
+nothing since it was written, and it now runs against the bundled seed at its
+existing 30 percent floor, where the shipped database reads 59 percent.
+
+It is worth running in the meantime because nothing else measures the fact. A
+`tasks_ko` locale file that comes back empty yields an empty locale table, every
+lookup resolves to nothing, and `NameKO` is NULL on every quest; an empty task
+set is a failed fetch, but an empty locale file is not, and no guard in the
+client or in `RefreshGuards` looks at localized-name coverage. That is the
+January 2026 failure in another column, and this assertion is the only automated
+thing that would catch it. Its input is the published asset, so it can only fail
+in a publish PR, which is exactly where it is wanted: it fires in PR B whether or
+not the content guards are written on schedule. PR B still deletes it when the 50
+percent assertion lands, so the two floors never run side by side.
 
 ## Technical Decisions
 
@@ -702,7 +1003,9 @@ objective identity remains backlog.
 - **Unit (TarkovDBEditor, first tests for the pipeline)**:
   `TarkovDevJsonClientTests` parse a trimmed real capture (tasks, locale files,
   items, hideout, traders) into the cache models, resolve names through the
-  locale fallback chain, refuse an empty task set and a missing `wikiLink`;
+  locale fallback chain, refuse an empty task set and a missing `wikiLink`, and
+  carry fail conditions (a `taskStatus` one with its task and statuses, a
+  `traderStanding` one by kind alone, and none at all as an empty list);
   `QuestIdentityResolverTests` cover match by link, match by normalized name,
   one-to-one claiming through the four-step order (the BEAR/USEC pair keeping
   `Faction` NULL; the required-by step with the two Tarkov Shooter - Part 5
@@ -718,9 +1021,18 @@ objective identity remains backlog.
   expression over every name in the published database; mapping tests for
   faction, zero level, status vocabulary, delay; `RefreshGuardTests` drive
   `RefreshDataFromCacheAsync` against throwaway caches and assert the
-  unbackfilled previous database, the empty wiki cache, the export batch
-  failure, the stale task cache, the match-rate collapse and the NULL-rate
-  collapse each fail the run before any write; Collector synthesis
+  unbackfilled previous database, the empty wiki cache, the missing and the
+  stale task cache, the match-rate collapse, the published rows losing their row
+  key, the two identity collisions, the seasonal marker that stopped matching,
+  the emptied Kappa set, a quest Collector requires that is not in the set, the
+  child table most of whose rows would be deleted, and the faction and
+  prerequisite-status values the fielded build cannot read, each failing the run
+  before any write; the delete budget measured over the published
+  `QuestRequirements` table itself (no published row keeps its key under the new
+  scheme; the same edges under new keys pass while the key measure refuses them,
+  a collapse to one edge still refuses, and half the edges gone reports half);
+  a prerequisite table seeded under the wiki's GroupId and under Collector's old
+  concatenation is re-keyed rather than emptied; Collector synthesis
   removes a stale row; `BsgIdBackfillTests` fill only NULLs and report counts;
   `DataDiffTests` produce the expected sections from two fixture databases.
 - **Content guards on the published database (`PublishedDataContentTests`, CI,
@@ -792,8 +1104,10 @@ objective identity remains backlog.
   working database whose `BsgId`s are still NULL mints fresh identities for
   every renamed quest; the match-rate guard (more than 5 percent of published
   quests losing their task match) does not catch this case because the pages
-  still match. Mitigated by the first guard in Design 6 (the refresh refuses to
-  start on an unbackfilled database), pinned by `RefreshGuardTests`.
+  still match. Mitigated by the backfill guard in Design 6 (the refresh refuses
+  to start on an unbackfilled database) and caught a second time by the row-key
+  measure, which sees every renamed quest's old row go, both pinned by
+  `RefreshGuardTests`.
 - **Seasonal quests imported wiki-only** carry no `BsgId` until the API adds
   them; when it does, the page matches by `wikiLink`, the `Id` is unchanged
   (same page), and the next publish fills `BsgId`, names and

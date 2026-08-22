@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Windows.Automation;
 using Microsoft.Data.Sqlite;
 using TarkovHelper.Pages;
 using TarkovHelper.Services;
+using QuestNormalizedName = TarkovDBEditor.Services.QuestNormalizedName;
 
 namespace TarkovHelper.Tests;
 
@@ -53,6 +55,13 @@ internal sealed class AppDriver : IDisposable
     /// against a candidate database. That build honours TARKOVHELPER_CONFIG_PATH and no other
     /// harness variable; the rest are set anyway because they are inert to a build that does
     /// not read them.
+    /// </para>
+    /// <para>
+    /// Inert specifically includes TARKOVHELPER_DISABLE_DB_UPDATE: the commit that taught
+    /// DatabaseUpdateService to read it postdates tag v2026.7.0, so setting it here does not
+    /// stop an older build from downloading the published database over the one the caller
+    /// staged. A caller launching a pre-tag build has to neutralise that check itself and
+    /// prove afterwards that it held (see LegacySmokeE2ETests).
     /// </para>
     /// </summary>
     public static AppDriver Launch(string dllPath, string configDir)
@@ -1099,5 +1108,170 @@ internal static class E2EDb
             // Table not created yet.
             return null;
         }
+    }
+}
+
+/// <summary>
+/// Reads the quests a tarkov_data.db offers as e2e fixtures: the shipped seed for
+/// <c>ProgressCarryOverE2ETests</c>, the regenerated candidate for <c>LegacySmokeE2ETests</c>.
+/// <para>
+/// Both need the same two judgements, so they are made once here. Which quests are usable at
+/// all: the quest tab's search is a substring match, so a name that is a substring of another
+/// quest's name never filters the list down to one row and every wait on it would time out.
+/// And which of those are <em>carried renames</em>: a quest whose stored
+/// <c>Quests.NormalizedName</c> no longer matches what its current title would produce, which
+/// is exactly the identity carry-over the 1.1 refresh exists to guarantee.
+/// </para>
+/// <para>
+/// The title-to-key rule comes from <see cref="QuestNormalizedName.SqlForm"/>, the pipeline's
+/// own pinned reproduction of the app's SQL expression, rather than a copy spelled out here.
+/// A copy would not detect drift, it would BE drift: <c>ToLowerInvariant</c> lowers 1,146 BMP
+/// code points that the bundled ICU-less SQLite <c>LOWER</c> leaves alone, so a title carrying
+/// a cased non-ASCII letter would be misread as a carried rename and preferred over the real
+/// ones, quietly retiring the very case these tests exist for. The pinned rule is the thing
+/// with a drift guard: <c>QuestNormalizedNameTests</c> evaluates the app's actual SQL over
+/// every published name and compares.
+/// </para>
+/// </summary>
+internal static class E2EQuests
+{
+    /// <param name="IsCarriedRename">
+    /// True when the stored key no longer matches the current title, i.e. a rename whose row key
+    /// and progress key were carried across a refresh.
+    /// </param>
+    internal sealed record Quest(string Id, string Name, string NormalizedName, bool IsCarriedRename);
+
+    /// <param name="UniquelySearchable">
+    /// Quests whose name is a unique search substring across the whole table, in title order.
+    /// </param>
+    /// <param name="HasNormalizedNameColumn">
+    /// False for a database published before the column existed. There are no carried renames in
+    /// such a database by definition, because the app derives the key from the title itself.
+    /// </param>
+    internal sealed record Catalogue(IReadOnlyList<Quest> UniquelySearchable, bool HasNormalizedNameColumn);
+
+    public static Catalogue Read(string databasePath)
+    {
+        Assert.True(File.Exists(databasePath), $"quest database not found at {databasePath}");
+
+        var quests = new List<Quest>();
+        // Every title in the table, including rows rejected as fixtures below: the quest tab
+        // lists them too, so they are what a search has to stay unambiguous against.
+        var allNames = new List<string>();
+        bool hasNormalizedName;
+
+        using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly"))
+        {
+            connection.Open();
+
+            hasNormalizedName = ColumnExists(connection, "Quests", "NormalizedName");
+            // Without the column both app builds compute the key from the title with this very
+            // expression, so the fallback reads back exactly what they would use, and reports no
+            // carried renames, which is the truth for data published before the refresh.
+            var expression = hasNormalizedName
+                ? "NormalizedName"
+                : "LOWER(REPLACE(REPLACE(REPLACE(Name, ' ', '-'), '''', ''), '.', ''))";
+
+            using var cmd = new SqliteCommand(
+                $"SELECT Id, Name, {expression} FROM Quests " +
+                "WHERE Id IS NOT NULL AND Id <> '' AND Name IS NOT NULL AND Name <> '' ORDER BY Name",
+                connection);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var name = reader.GetString(1);
+                allNames.Add(name);
+
+                var normalizedName = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                if (normalizedName.Length == 0)
+                    continue;
+
+                quests.Add(new Quest(
+                    reader.GetString(0),
+                    name,
+                    normalizedName,
+                    IsCarriedRename: normalizedName != QuestNormalizedName.SqlForm(name)));
+            }
+        }
+
+        SqliteConnection.ClearAllPools();
+
+        var unique = quests
+            .Where(q => allNames.Count(n => n.Contains(q.Name, StringComparison.OrdinalIgnoreCase)) == 1)
+            .ToList();
+
+        return new Catalogue(unique, hasNormalizedName);
+    }
+
+    private static bool ColumnExists(SqliteConnection connection, string table, string column)
+    {
+        using var cmd = new SqliteCommand($"PRAGMA table_info({table})", connection);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+}
+
+/// <summary>
+/// Proves that a database a test staged into a build's Assets folder is still the one that build
+/// read, for builds that predate TARKOVHELPER_DISABLE_DB_UPDATE and therefore run their data
+/// check no matter what the harness sets.
+/// <para>
+/// Nothing in such a build reports which database it loaded, so this reads the evidence its
+/// DatabaseUpdateService leaves on disk instead. A download stages <c>tarkov_data.db.tmp</c>,
+/// moves the live file aside as <c>tarkov_data.db.bak</c>, moves the download into place and
+/// rewrites <c>db_version.txt</c>; it deliberately clears the SQLite connection pools and retries
+/// the move so it CAN overwrite the file while the app has it open. So an unchanged hash, no
+/// leftover .tmp/.bak from a download that failed halfway or is still running, and the pinned
+/// version token still in place together say the check stayed neutralised for the whole run.
+/// </para>
+/// <para>
+/// Extracted from LegacySmokeE2ETests so the failure paths can be exercised by ordinary unit
+/// tests: this guard only ever runs on a machine holding a real extracted release, and a guard
+/// nobody can run is exactly the kind that silently stops guarding.
+/// </para>
+/// </summary>
+internal static class StagedDatabase
+{
+    /// <summary>The file name a build's data check keeps its version token in, beside the database.</summary>
+    public const string VersionFileName = "db_version.txt";
+
+    /// <summary>Hex SHA-256 of a file, opened share-read so it also works while the app has it open.</summary>
+    public static string Sha256(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
+
+    /// <param name="databasePath">The staged tarkov_data.db inside the build's Assets folder.</param>
+    /// <param name="expectedHash">Its <see cref="Sha256"/> as staged.</param>
+    /// <param name="expectedVersionToken">
+    /// The token the data check was pinned to, or null when the build's folder holds no version
+    /// file at all (which is itself a state a completed download would end).
+    /// </param>
+    public static void AssertStillStaged(string databasePath, string expectedHash, string? expectedVersionToken)
+    {
+        foreach (var artefact in new[] { databasePath + ".tmp", databasePath + ".bak" })
+        {
+            Assert.False(File.Exists(artefact),
+                $"{artefact} exists, so the build ran its data check and downloaded the published " +
+                "database over the staged one. This run proved nothing about the staged database.");
+        }
+
+        var versionFile = Path.Combine(Path.GetDirectoryName(databasePath)!, VersionFileName);
+        var token = File.Exists(versionFile) ? File.ReadAllText(versionFile).Trim() : null;
+        Assert.True(token == expectedVersionToken,
+            $"{versionFile} now reads '{token}' but was pinned to '{expectedVersionToken}'. Only a " +
+            "completed database download rewrites it, so the build replaced the staged database.");
+
+        var hash = Sha256(databasePath);
+        Assert.True(hash == expectedHash,
+            $"{databasePath} now hashes to {hash} but was staged as {expectedHash}. The build replaced " +
+            "it mid-run, so what it rendered was not the staged database.");
     }
 }
