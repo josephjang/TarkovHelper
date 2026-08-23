@@ -13,8 +13,9 @@ namespace TarkovDBEditor.Services
     /// <c>Quests.BsgId</c> and <c>Items.BsgId</c> have been NULL on every published row since
     /// the 2026-01-14 regeneration, which is why log sync has matched no quest event for seven
     /// months and why hideout item requirements resolve nothing. The 1.0.7 snapshot (commit
-    /// ebbc60c, 2025-12-19) still holds 473 quest and 2648 item ids under the same row keys,
-    /// and every one of those quest ids is a live task today.
+    /// ebbc60c, 2025-12-19) still holds 473 quest and 2648 item ids, and every one of those
+    /// quest ids is a live task today. All 473 quest ids land; 2644 of the item ids do, the
+    /// other four being keyed to rows the published database no longer has.
     /// </para>
     /// <para>
     /// Restoring them is also what makes the 1.1 rename carry-over possible: the resolver
@@ -57,6 +58,49 @@ namespace TarkovDBEditor.Services
         public static readonly IReadOnlyList<HandBridge> HandBridgedQuestIds = new[]
         {
             new HandBridge("No Questions Asked", "68ee1c18b4e5bc9a68018cd7"),
+        };
+
+        /// <summary>
+        /// External ids the snapshot recorded against the wrong row, corrected in place.
+        /// <para>
+        /// The December 2025 matching gave the plain "Army cap" row the id of "Army cap
+        /// (CADPAT)", a separate item with a page and a row of its own, and left CADPAT's row
+        /// with no id at all. Both rows are in the published database that way. Copied forward
+        /// untouched, the CADPAT page matches the Army cap row by that id and carries its key,
+        /// which is the key the Army cap page mints for itself, so the two items collapse onto
+        /// one primary key and <see cref="RefreshDataService"/> refuses the whole run.
+        /// </para>
+        /// <para>
+        /// An audit of all 2644 backfilled item ids against today's tarkov.dev catalogue found
+        /// seven whose page no longer matches the row's own. Six are ordinary wiki renames,
+        /// which is what identity carry-over exists for (Radian to Radian Weapons, Ops-Core
+        /// SLAAP to Velocity Systems SLAAP, the two Chiappa sights dropping "Red", and the two
+        /// Arena posters). This is the seventh and the only one where the row's own page still
+        /// exists as a separate item, which is what makes it a mis-assignment rather than a
+        /// rename, and what makes it collide.
+        /// </para>
+        /// <para>
+        /// Correcting rather than deleting: the id is real and belongs to CADPAT, so both rows
+        /// end up with the id they should always have had, both keep the row key they have
+        /// always had, and both keep their icon files. Entries are applied in order, so a
+        /// correction that frees an id runs before the one that claims it.
+        /// </para>
+        /// </summary>
+        public static readonly IReadOnlyList<SnapshotIdCorrection> MisrecordedItemIds = new[]
+        {
+            // https://escapefromtarkov.fandom.com/wiki/Army_cap
+            new SnapshotIdCorrection(
+                "Army cap",
+                "aHR0cHM6Ly9lc2NhcGVmcm9tdGFya292LmZhbmRvbS5jb20vd2lraS9Bcm15X2NhcA",
+                RecordedBsgId: "6040de02647ad86262233012",
+                CorrectBsgId: "59e770f986f7742cbe3164ef"),
+
+            // https://escapefromtarkov.fandom.com/wiki/Army_cap_%28CADPAT%29
+            new SnapshotIdCorrection(
+                "Army cap (CADPAT)",
+                "aHR0cHM6Ly9lc2NhcGVmcm9tdGFya292LmZhbmRvbS5jb20vd2lraS9Bcm15X2NhcF8lMjhDQURQQVQlMjk",
+                RecordedBsgId: null,
+                CorrectBsgId: "6040de02647ad86262233012"),
         };
 
         /// <summary>
@@ -113,6 +157,18 @@ namespace TarkovDBEditor.Services
                     // should have saved this row's progress is otherwise indistinguishable in
                     // the report from one that did, because the bridge does not move the
                     // QuestsFilled count the operator watches.
+                    if (report.NeedsAttention)
+                        progress?.Invoke(report.Summary);
+                }
+
+                foreach (var correction in MisrecordedItemIds)
+                {
+                    var report = await ApplyItemIdCorrectionAsync(connection, transaction, correction, cancellationToken);
+                    result.ItemIdCorrections.Add(report);
+
+                    // Like a hand bridge, a correction moves none of the counts above, so one
+                    // that found nothing to correct has to say so or it reads as success. An
+                    // uncorrected row stops the next refresh outright.
                     if (report.NeedsAttention)
                         progress?.Invoke(report.Summary);
                 }
@@ -209,6 +265,52 @@ namespace TarkovDBEditor.Services
             return new HandBridgeReport(bridge, HandBridgeOutcome.IdAlreadyDiffers, idsOfNamedRows[0]);
         }
 
+        /// <summary>
+        /// Corrects one item's external id and reports what the row actually held.
+        /// <para>
+        /// The row is found by its key, not its name: the key is what the collision is about,
+        /// and a name can be reused by another item exactly as it can for a quest. The write
+        /// only happens when the row still holds the value the snapshot recorded, so a value an
+        /// operator has already corrected in the editor is reported rather than overwritten,
+        /// and a re-run of the backfill is a no-op instead of a second correction.
+        /// </para>
+        /// </summary>
+        private static async Task<SnapshotIdCorrectionReport> ApplyItemIdCorrectionAsync(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            SnapshotIdCorrection correction,
+            CancellationToken cancellationToken)
+        {
+            string? currentId;
+            await using (var read = new SqliteCommand(
+                "SELECT BsgId FROM Items WHERE Id = @Id", connection, transaction))
+            {
+                read.Parameters.AddWithValue("@Id", correction.RowKey);
+                await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+                if (!await reader.ReadAsync(cancellationToken))
+                    return new SnapshotIdCorrectionReport(correction, SnapshotIdCorrectionOutcome.NoMatchingRow, null);
+
+                currentId = reader.IsDBNull(0) ? null : reader.GetString(0);
+            }
+
+            if (string.Equals(currentId, correction.CorrectBsgId, StringComparison.Ordinal))
+                return new SnapshotIdCorrectionReport(correction, SnapshotIdCorrectionOutcome.AlreadyCorrect, currentId);
+
+            // Empty string and NULL are the same "no id" to every reader of this column.
+            var recorded = string.IsNullOrEmpty(correction.RecordedBsgId) ? null : correction.RecordedBsgId;
+            var current = string.IsNullOrEmpty(currentId) ? null : currentId;
+            if (!string.Equals(current, recorded, StringComparison.Ordinal))
+                return new SnapshotIdCorrectionReport(correction, SnapshotIdCorrectionOutcome.CarriesAnotherId, currentId);
+
+            await using var update = new SqliteCommand(
+                "UPDATE Items SET BsgId = @BsgId WHERE Id = @Id", connection, transaction);
+            update.Parameters.AddWithValue("@BsgId", correction.CorrectBsgId);
+            update.Parameters.AddWithValue("@Id", correction.RowKey);
+            await update.ExecuteNonQueryAsync(cancellationToken);
+
+            return new SnapshotIdCorrectionReport(correction, SnapshotIdCorrectionOutcome.Applied, correction.CorrectBsgId);
+        }
+
         private static async Task<Dictionary<string, string>> ReadSnapshotIdsAsync(
             string snapshotPath, string table, CancellationToken cancellationToken)
         {
@@ -293,6 +395,78 @@ namespace TarkovDBEditor.Services
         /// <summary>The bridges an operator has to act on before publishing.</summary>
         public IReadOnlyList<HandBridgeReport> HandBridgesNeedingAttention =>
             HandBridges.FindAll(b => b.NeedsAttention);
+
+        /// <summary>
+        /// One entry per snapshot id correction, whether or not it changed anything, for the
+        /// same reason the bridges are all reported: a correction moves none of the counts.
+        /// </summary>
+        public List<SnapshotIdCorrectionReport> ItemIdCorrections { get; } = new();
+
+        /// <summary>The corrections an operator has to act on before refreshing.</summary>
+        public IReadOnlyList<SnapshotIdCorrectionReport> ItemIdCorrectionsNeedingAttention =>
+            ItemIdCorrections.FindAll(c => c.NeedsAttention);
+    }
+
+    /// <summary>
+    /// An external game ID the snapshot recorded against the wrong row.
+    /// </summary>
+    /// <param name="ItemName">The row's name, for the report. Not how the row is found.</param>
+    /// <param name="RowKey">The row's primary key, which is how it is found.</param>
+    /// <param name="RecordedBsgId">
+    /// What the snapshot put there, or null where it left the row empty. The correction only
+    /// writes over exactly this, so a value corrected by hand since is reported, not clobbered.
+    /// </param>
+    /// <param name="CorrectBsgId">The id that row should have.</param>
+    public sealed record SnapshotIdCorrection(
+        string ItemName,
+        string RowKey,
+        string? RecordedBsgId,
+        string CorrectBsgId);
+
+    /// <summary>What one snapshot id correction did to the database.</summary>
+    public enum SnapshotIdCorrectionOutcome
+    {
+        /// <summary>The row held the recorded id (or none) and now holds the correct one.</summary>
+        Applied,
+
+        /// <summary>The row already held the correct id, so the run was a repeat.</summary>
+        AlreadyCorrect,
+
+        /// <summary>
+        /// The row holds neither the recorded id nor the correct one, so it was left alone.
+        /// Someone has changed it since, and whoever did should say which value is right.
+        /// </summary>
+        CarriesAnotherId,
+
+        /// <summary>
+        /// No row carries that key. The correction is dead, and the collision it prevents will
+        /// stop the next refresh instead.
+        /// </summary>
+        NoMatchingRow,
+    }
+
+    /// <summary>What one correction did, in a form the completion dialog can print.</summary>
+    public sealed record SnapshotIdCorrectionReport(
+        SnapshotIdCorrection Correction,
+        SnapshotIdCorrectionOutcome Outcome,
+        string? BsgId)
+    {
+        /// <summary>True when an operator has to look at this row before refreshing.</summary>
+        public bool NeedsAttention =>
+            Outcome is SnapshotIdCorrectionOutcome.CarriesAnotherId or SnapshotIdCorrectionOutcome.NoMatchingRow;
+
+        public string Summary => Outcome switch
+        {
+            SnapshotIdCorrectionOutcome.Applied =>
+                $"{Correction.ItemName}: external ID corrected to {Correction.CorrectBsgId}",
+            SnapshotIdCorrectionOutcome.AlreadyCorrect =>
+                $"{Correction.ItemName}: already carries {Correction.CorrectBsgId}",
+            SnapshotIdCorrectionOutcome.CarriesAnotherId =>
+                $"{Correction.ItemName}: carries {BsgId ?? "no ID"}, expected {Correction.RecordedBsgId ?? "no ID"} "
+                + $"or the corrected {Correction.CorrectBsgId}; left alone",
+            _ =>
+                $"{Correction.ItemName}: no row under that key, so the ID was not corrected",
+        };
     }
 
     /// <summary>An external game ID no snapshot can supply, carried by hand.</summary>

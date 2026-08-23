@@ -1,4 +1,7 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using TarkovDBEditor.Services;
@@ -292,6 +295,166 @@ public sealed class BsgIdBackfillTests : IDisposable
     /// A row literal whose external ID is nullable. Spelling it out here rather than inline:
     /// an array of plain string tuples infers a non-nullable element type and will not convert.
     /// </summary>
+    #region Snapshot IDs recorded against the wrong row
+
+    [Fact]
+    public async Task Corrects_the_item_ids_the_snapshot_put_on_the_wrong_row()
+    {
+        // The published pair, exactly as the December 2025 matching left it: the plain Army cap
+        // row carries the CADPAT item's id, and CADPAT's own row carries none. Copied forward,
+        // the CADPAT page matches the Army cap row by that id, carries its key, and the two
+        // items collapse onto one primary key.
+        var armyCap = CorrectionFor("Army cap");
+        var cadpat = CorrectionFor("Army cap (CADPAT)");
+        var snapshot = CreateDatabase("snapshot.db");
+        var working = CreateDatabase("working.db", items: new[]
+        {
+            Row(armyCap.RowKey, "Army cap", armyCap.RecordedBsgId),
+            Row(cadpat.RowKey, "Army cap (CADPAT)", cadpat.RecordedBsgId),
+        });
+
+        var result = await new BsgIdBackfillService().BackfillAsync(working, snapshot);
+
+        Assert.All(result.ItemIdCorrections, c => Assert.Equal(SnapshotIdCorrectionOutcome.Applied, c.Outcome));
+        Assert.Empty(result.ItemIdCorrectionsNeedingAttention);
+        Assert.Equal(armyCap.CorrectBsgId, ReadScalar(working, $"SELECT BsgId FROM Items WHERE Id = '{armyCap.RowKey}'"));
+        Assert.Equal(cadpat.CorrectBsgId, ReadScalar(working, $"SELECT BsgId FROM Items WHERE Id = '{cadpat.RowKey}'"));
+    }
+
+    [Fact]
+    public void The_uncorrected_pair_collapses_two_items_onto_one_row_key()
+    {
+        // The failure this correction exists for, reproduced at the resolver: with the id the
+        // snapshot recorded, the CADPAT page matches the Army cap row and carries its key,
+        // which is the key the Army cap page mints for itself.
+        var resolution = ResolveArmyCapPair(armyCapRecordedId: CorrectionFor("Army cap").RecordedBsgId);
+
+        var carried = Assert.Single(resolution.CarriedIds);
+        Assert.Equal(CadpatPage, carried.Key);
+        Assert.Equal(ArmyCapPage, carried.Value);
+
+        // Both items now answer to the Army cap key, which is the collapse the refresh refuses.
+        var keysAfterCarryOver = new[] { ArmyCapPage, CadpatPage }
+            .Select(mintedKey => resolution.CarriedIds.TryGetValue(mintedKey, out var c) ? c : mintedKey);
+        Assert.Single(keysAfterCarryOver.Distinct());
+    }
+
+    [Fact]
+    public void The_corrected_pair_leaves_each_item_on_its_own_row_key()
+    {
+        var resolution = ResolveArmyCapPair(armyCapRecordedId: CorrectionFor("Army cap").CorrectBsgId);
+
+        // Each page matches the row that already carries its own key, so nothing is carried.
+        Assert.Empty(resolution.CarriedIds);
+
+        var keysAfterCarryOver = new[] { ArmyCapPage, CadpatPage }
+            .Select(mintedKey => resolution.CarriedIds.TryGetValue(mintedKey, out var c) ? c : mintedKey);
+        Assert.Equal(2, keysAfterCarryOver.Distinct().Count());
+    }
+
+    /// <summary>
+    /// The two Army cap pages against the two published rows, with the Army cap row's recorded
+    /// id as the variable: the CADPAT id reproduces the collision, the correct one clears it.
+    /// </summary>
+    private static ItemIdentityResolution ResolveArmyCapPair(string? armyCapRecordedId)
+    {
+        const string armyCapUrl = "https://escapefromtarkov.fandom.com/wiki/Army_cap";
+        const string cadpatUrl = "https://escapefromtarkov.fandom.com/wiki/Army_cap_(CADPAT)";
+        var cadpatId = CorrectionFor("Army cap (CADPAT)").CorrectBsgId;
+        var armyCapId = CorrectionFor("Army cap").CorrectBsgId;
+
+        var devItems = new Dictionary<string, TarkovDevMultiLangItem>(StringComparer.OrdinalIgnoreCase)
+        {
+            [armyCapUrl] = new() { BsgId = armyCapId, NameEN = "Army cap" },
+            [cadpatUrl] = new() { BsgId = cadpatId, NameEN = "Army cap (CADPAT)" },
+        };
+        var wikiItems = new[]
+        {
+            new WikiItemIdentity { Id = ArmyCapPage, Name = "Army cap", WikiPageLink = armyCapUrl },
+            new WikiItemIdentity { Id = CadpatPage, Name = "Army cap (CADPAT)", WikiPageLink = cadpatUrl },
+        };
+        var previous = new[]
+        {
+            new PreviousItemRow { Id = ArmyCapPage, Name = "Army cap", BsgId = armyCapRecordedId },
+            new PreviousItemRow { Id = CadpatPage, Name = "Army cap (CADPAT)", BsgId = null },
+        };
+
+        return ItemIdentityResolver.Resolve(wikiItems, devItems, previous);
+    }
+
+    private const string ArmyCapPage = "aHR0cHM6Ly9lc2NhcGVmcm9tdGFya292LmZhbmRvbS5jb20vd2lraS9Bcm15X2NhcA";
+    private const string CadpatPage = "aHR0cHM6Ly9lc2NhcGVmcm9tdGFya292LmZhbmRvbS5jb20vd2lraS9Bcm15X2NhcF8lMjhDQURQQVQlMjk";
+
+    [Fact]
+    public async Task Correcting_twice_changes_nothing_the_second_time()
+    {
+        var armyCap = CorrectionFor("Army cap");
+        var working = CreateDatabase("working.db", items: new[]
+        {
+            Row(armyCap.RowKey, "Army cap", armyCap.RecordedBsgId),
+        });
+        var snapshot = CreateDatabase("snapshot.db");
+
+        await new BsgIdBackfillService().BackfillAsync(working, snapshot);
+        var second = await new BsgIdBackfillService().BackfillAsync(working, snapshot);
+
+        var report = second.ItemIdCorrections.Single(c => c.Correction.RowKey == armyCap.RowKey);
+        Assert.Equal(SnapshotIdCorrectionOutcome.AlreadyCorrect, report.Outcome);
+        Assert.False(report.NeedsAttention);
+        Assert.Equal(armyCap.CorrectBsgId, ReadScalar(working, $"SELECT BsgId FROM Items WHERE Id = '{armyCap.RowKey}'"));
+    }
+
+    [Fact]
+    public async Task Reports_rather_than_overwrites_an_id_someone_has_since_changed()
+    {
+        // The working database is the newer source everywhere else in this service, so a third
+        // value is a decision someone made and this is not the place to silently undo it.
+        var armyCap = CorrectionFor("Army cap");
+        var working = CreateDatabase("working.db", items: new[]
+        {
+            Row(armyCap.RowKey, "Army cap", "0000000000000000000000ff"),
+        });
+
+        var result = await new BsgIdBackfillService().BackfillAsync(working, CreateDatabase("snapshot.db"));
+
+        var report = result.ItemIdCorrections.Single(c => c.Correction.RowKey == armyCap.RowKey);
+        Assert.Equal(SnapshotIdCorrectionOutcome.CarriesAnotherId, report.Outcome);
+        Assert.True(report.NeedsAttention);
+        Assert.Equal("0000000000000000000000ff", ReadScalar(working, $"SELECT BsgId FROM Items WHERE Id = '{armyCap.RowKey}'"));
+    }
+
+    [Fact]
+    public async Task Flags_a_correction_whose_row_is_gone()
+    {
+        // A dead correction has to be loud: it moves none of the counts the operator watches,
+        // and the collision it prevents would stop the refresh instead.
+        var working = CreateDatabase("working.db", items: new[] { Row("i1", "Roubles") });
+
+        var result = await new BsgIdBackfillService().BackfillAsync(working, CreateDatabase("snapshot.db"));
+
+        Assert.NotEmpty(result.ItemIdCorrectionsNeedingAttention);
+        Assert.All(result.ItemIdCorrections, c => Assert.Equal(SnapshotIdCorrectionOutcome.NoMatchingRow, c.Outcome));
+    }
+
+    [Fact]
+    public void Every_correction_names_a_distinct_row_and_a_real_id()
+    {
+        // A malformed entry should fail the build's tests, not the operator's run.
+        Assert.NotEmpty(BsgIdBackfillService.MisrecordedItemIds);
+        Assert.Distinct(BsgIdBackfillService.MisrecordedItemIds.Select(c => c.RowKey));
+        Assert.All(BsgIdBackfillService.MisrecordedItemIds, c =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(c.ItemName));
+            Assert.Equal(24, c.CorrectBsgId.Length);
+            Assert.NotEqual(c.RecordedBsgId, c.CorrectBsgId);
+        });
+    }
+
+    private static SnapshotIdCorrection CorrectionFor(string itemName) =>
+        BsgIdBackfillService.MisrecordedItemIds.Single(c => c.ItemName == itemName);
+
+    #endregion
+
     private static (string Id, string Name, string? BsgId) Row(string id, string name, string? bsgId = null) =>
         (id, name, bsgId);
 

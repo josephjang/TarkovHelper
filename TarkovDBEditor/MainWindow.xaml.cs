@@ -992,6 +992,17 @@ public partial class MainWindow : Window
             foreach (var bridge in result.HandBridges)
                 message.AppendLine($"- {bridge.Summary}");
 
+            // Reported for the same reason as the bridges: a correction changes none of the
+            // counts, and a row left uncorrected stops the next refresh rather than this one.
+            var uncorrectedIds = result.ItemIdCorrectionsNeedingAttention;
+            if (result.ItemIdCorrections.Count > 0)
+            {
+                message.AppendLine();
+                message.AppendLine("Snapshot IDs recorded against the wrong row:");
+                foreach (var correction in result.ItemIdCorrections)
+                    message.AppendLine($"- {correction.Summary}");
+            }
+
             message.AppendLine();
             message.AppendLine($"Still without an ID: {result.QuestsStillMissing}/{result.QuestsTotal} quests, "
                 + $"{result.ItemsStillMissing}/{result.ItemsTotal} items");
@@ -1004,16 +1015,25 @@ public partial class MainWindow : Window
                     + "a refresh cannot carry a rename whose row has no external ID.");
             }
 
-            ViewModel.StatusMessage = unappliedBridges.Count > 0
-                ? $"Backfill complete with {unappliedBridges.Count} unapplied hand bridge(s): "
+            if (uncorrectedIds.Count > 0)
+            {
+                message.AppendLine();
+                message.AppendLine(
+                    $"{uncorrectedIds.Count} snapshot ID(s) were not corrected. Check them before refreshing: "
+                    + "the refresh refuses to run while two items would share one row key.");
+            }
+
+            var needsAttention = unappliedBridges.Count + uncorrectedIds.Count;
+            ViewModel.StatusMessage = needsAttention > 0
+                ? $"Backfill complete with {needsAttention} row(s) needing attention: "
                     + $"{result.QuestsFilled} quests, {result.ItemsFilled} items"
                 : $"Backfill complete: {result.QuestsFilled} quests, {result.ItemsFilled} items";
 
             MessageBox.Show(
                 message.ToString(),
-                unappliedBridges.Count > 0 ? "Backfill Complete - Check Hand Bridges" : "Backfill Complete",
+                needsAttention > 0 ? "Backfill Complete - Check Flagged Rows" : "Backfill Complete",
                 MessageBoxButton.OK,
-                unappliedBridges.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+                needsAttention > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
