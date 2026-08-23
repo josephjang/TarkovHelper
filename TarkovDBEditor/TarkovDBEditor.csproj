@@ -19,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The refresh guards are internal and are most of what the pipeline tests assert. -->
+    <InternalsVisibleTo Include="TarkovHelper.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="Resources\Maps\*.svg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

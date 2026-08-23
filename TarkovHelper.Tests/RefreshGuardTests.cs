@@ -312,6 +312,108 @@ public sealed class RefreshGuardTests
         Assert.Contains("would lose their row key", result.ErrorMessage);
     }
 
+    #region Dogtag requirements
+
+    [Fact]
+    public void A_dogtag_requirement_with_no_item_behind_it_fails_the_run()
+    {
+        // What the first full 1.1 refresh actually published: the dogtag synthesis lived only on
+        // the from-cache path, so six requirement rows and six objectives named "BEAR Dogtag" or
+        // "USEC Dogtag" with no ItemId and no item to point at. Both tables are perfectly well
+        // formed in that state, which is why nothing else in the pipeline could see it.
+        var result = new QuestsFetchResult();
+        result.RequiredItems.Add(new DbQuestRequiredItem { QuestId = "q1", ItemName = "BEAR Dogtag", DogtagFaction = "BEAR" });
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            RefreshDataService.RefreshGuards.AssertDogtagRequirementsHaveTheirItems(
+                result, Array.Empty<DbItem>(), null));
+
+        Assert.Contains("BEAR", error.Message);
+        Assert.Contains("no item to point at", error.Message);
+    }
+
+    [Fact]
+    public void An_objective_naming_a_dogtag_counts_as_much_as_a_required_item()
+    {
+        var result = new QuestsFetchResult();
+        result.Objectives.Add(new DbQuestObjective { QuestId = "q1", Description = "Hand over USEC dogtags", DogtagFaction = "USEC" });
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            RefreshDataService.RefreshGuards.AssertDogtagRequirementsHaveTheirItems(
+                result, Array.Empty<DbItem>(), null));
+
+        Assert.Contains("USEC", error.Message);
+    }
+
+    [Fact]
+    public void A_dogtag_requirement_whose_item_exists_passes()
+    {
+        var result = new QuestsFetchResult();
+        result.RequiredItems.Add(new DbQuestRequiredItem { QuestId = "q1", ItemName = "BEAR Dogtag", DogtagFaction = "BEAR" });
+        result.Objectives.Add(new DbQuestObjective { QuestId = "q1", Description = "Hand over USEC dogtags", DogtagFaction = "USEC" });
+
+        var items = new[]
+        {
+            new DbItem { Id = "dogtag-bear", Name = "BEAR Dogtag", IsDogtagItem = true, DogtagFaction = "BEAR" },
+            new DbItem { Id = "dogtag-usec", Name = "USEC Dogtag", IsDogtagItem = true, DogtagFaction = "USEC" },
+        };
+
+        var progress = new List<string>();
+        RefreshDataService.RefreshGuards.AssertDogtagRequirementsHaveTheirItems(result, items, progress.Add);
+
+        Assert.Contains(progress, line => line.Contains("BEAR") && line.Contains("USEC"));
+    }
+
+    [Fact]
+    public void One_faction_present_does_not_excuse_the_other()
+    {
+        // The pair is synthesized together, so a run holding only one is a partial synthesis
+        // rather than a quest set that happens to want one faction.
+        var result = new QuestsFetchResult();
+        result.RequiredItems.Add(new DbQuestRequiredItem { QuestId = "q1", ItemName = "BEAR Dogtag", DogtagFaction = "BEAR" });
+        result.RequiredItems.Add(new DbQuestRequiredItem { QuestId = "q2", ItemName = "USEC Dogtag", DogtagFaction = "USEC" });
+
+        var items = new[]
+        {
+            new DbItem { Id = "dogtag-bear", Name = "BEAR Dogtag", IsDogtagItem = true, DogtagFaction = "BEAR" },
+        };
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            RefreshDataService.RefreshGuards.AssertDogtagRequirementsHaveTheirItems(result, items, null));
+
+        Assert.Contains("USEC", error.Message);
+        Assert.DoesNotContain("BEAR,", error.Message);
+    }
+
+    [Fact]
+    public void A_quest_set_that_wants_no_dogtag_is_not_asked_for_one()
+    {
+        var result = new QuestsFetchResult();
+        result.RequiredItems.Add(new DbQuestRequiredItem { QuestId = "q1", ItemName = "Bolts", ItemId = "i1" });
+
+        RefreshDataService.RefreshGuards.AssertDogtagRequirementsHaveTheirItems(
+            result, Array.Empty<DbItem>(), null);
+    }
+
+    [Fact]
+    public async Task The_from_cache_path_synthesizes_the_dogtag_items_a_quest_asks_for()
+    {
+        // The path that always did this right, pinned so the guard added beside it cannot start
+        // refusing a run it should accept.
+        using var fixture = new RefreshPipelineFixture()
+            .WithWikiPages(("Trophies", RefreshPipelineFixture.Page(
+                extraRequirement: "* Must be level 5 to start this quest.")))
+            .WithTasks(RefreshPipelineFixture.Task(StirrupId, "Trophies"))
+            .WithTraders((PraporId, "Prapor"))
+            .WithDatabase(("Trophies", (string?)StirrupId));
+
+        var result = await fixture.RefreshAsync();
+
+        Assert.True(result.Success, result.ErrorMessage);
+    }
+
+    #endregion
+
     [Fact]
     public async Task A_crawl_whose_seasonal_marker_stopped_matching_fails_the_run()
     {
@@ -655,27 +757,27 @@ public sealed class RefreshGuardTests
     #region The delete budget measures identity, not keys
 
     /// <summary>
-    /// The published QuestRequirements table as it ships in <c>data/v1/tarkov_data.db</c>: the
-    /// row key, the prerequisite edge under it, and the OR group it was published in.
+    /// The QuestRequirements table as it stood in the database this refresh started from, read
+    /// from the 1.0.10 publish in git rather than from whatever <c>data/v1</c> ships today.
+    /// <para>
+    /// These tests exist for one migration: the 1.1 run replaces every key in that table while
+    /// the edges under them stand, and the delete budget has to pass it. Pointing them at the
+    /// shipped file made them assert the state of the current publish, so they broke the moment
+    /// the 1.1 data landed and would break again on every publish after. The scenario is
+    /// historical, so its fixture is too.
+    /// </para>
     /// </summary>
     private static List<(string Id, string QuestId, string RequiredQuestId, int GroupId)> PublishedPrerequisites()
     {
-        var path = Path.Combine(TestRepo.Root(), "data", "v1", "tarkov_data.db");
+        var path = Path.Combine(TestRepo.Root(), "TarkovHelper.Tests", "Fixtures", "prerequisites-1.0.10.tsv");
         Assert.True(File.Exists(path), $"{path} is missing, so there is no published table to measure against");
 
-        var rows = new List<(string, string, string, int)>();
-        using (var connection = new SqliteConnection($"Data Source={path};Mode=ReadOnly"))
-        {
-            connection.Open();
-            using var cmd = new SqliteCommand(
-                "SELECT Id, QuestId, RequiredQuestId, GroupId FROM QuestRequirements", connection);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-                rows.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3)));
-        }
-
-        SqliteConnection.ClearAllPools();
-        return rows;
+        return File.ReadAllLines(path)
+            .Skip(1)
+            .Where(line => line.Length > 0)
+            .Select(line => line.Split('\t'))
+            .Select(f => (f[0], f[1], f[2], int.Parse(f[3])))
+            .ToList();
     }
 
     [Fact]
