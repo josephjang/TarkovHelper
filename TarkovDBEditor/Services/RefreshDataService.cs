@@ -143,6 +143,10 @@ namespace TarkovDBEditor.Services
                 // QuestRequiredItems/Objectives의 ItemId를 Dogtag 아이템과 연결
                 LinkDogtagItemIds(questsResult, logBuilder);
 
+                // Asserted on both write paths, not only the one that got this wrong: the
+                // invariant belongs to the write, and the defect was a path that skipped it.
+                RefreshGuards.AssertDogtagRequirementsHaveTheirItems(questsResult, existingItems, progress);
+
                 // Dogtag 아이템이 있으면 전체 Items 리스트 전달 (기존 아이템 삭제 방지)
                 List<DbItem>? itemsToUpdate = dogtagItems.Count > 0 ? existingItems : null;
 
@@ -300,6 +304,22 @@ namespace TarkovDBEditor.Services
                 logBuilder.AppendLine();
                 logBuilder.AppendLine($"New Revision - Items: {newRevision.ItemsRevision}, Quests: {newRevision.QuestsRevision}");
                 logBuilder.AppendLine($"Items Changed: {itemsChanged}, Quests Changed: {questsChanged}");
+
+                // Dogtag items were synthesized only by the from-cache path, the same asymmetry
+                // the trader upsert below had. A quest that asks for a faction dogtag stores the
+                // requirement with a faction and no ItemId, and the synthesized item is what gives
+                // that row something to point at. Without this, the 1.1 publish shipped six
+                // requirement rows and six objectives naming "BEAR Dogtag" or "USEC Dogtag" with
+                // no item behind them: no icon, no name lookup, nothing to match in the inventory.
+                // EnsureDogtagItemsExist appends what it creates to the list written below.
+                var dogtagItems = EnsureDogtagItemsExist(itemsResult.Items, questsResult, logBuilder);
+                LinkDogtagItemIds(questsResult, logBuilder);
+                if (dogtagItems.Count > 0)
+                {
+                    logBuilder.AppendLine($"Dogtag items synthesized: {dogtagItems.Count}");
+                }
+
+                RefreshGuards.AssertDogtagRequirementsHaveTheirItems(questsResult, itemsResult.Items, progress);
 
                 // DB는 항상 초기화 및 업데이트 (Items, Quests, QuestRequirements, QuestTraderRequirements, QuestObjectives, OptionalQuests, QuestRequiredItems 테이블)
                 progress?.Invoke("Updating database (Items, Quests, QuestRequirements, QuestTraderRequirements, QuestObjectives, OptionalQuests & QuestRequiredItems tables)...");
@@ -1093,6 +1113,54 @@ namespace TarkovDBEditor.Services
                 }
 
                 progress?.Invoke(PublishConstraints.DescribeHeld(candidate));
+            }
+
+            /// <summary>
+            /// Refuses a run that would write a dogtag requirement with no item behind it.
+            /// <para>
+            /// A quest that asks for a faction dogtag stores the requirement with a
+            /// <c>DogtagFaction</c> and no <c>ItemId</c>, and the synthesized <c>dogtag-bear</c> /
+            /// <c>dogtag-usec</c> items are what those rows point at. The synthesis lived only on
+            /// the from-cache path, so the first full 1.1 refresh produced six requirement rows
+            /// and six objectives naming a dogtag with nothing behind them, and the publish
+            /// carried them: no icon, no name lookup, nothing to match in the inventory. Nothing
+            /// else in the pipeline can see that, because both tables are perfectly well formed.
+            /// </para>
+            /// </summary>
+            public static void AssertDogtagRequirementsHaveTheirItems(
+                QuestsFetchResult result,
+                IReadOnlyList<DbItem> items,
+                Action<string>? progress)
+            {
+                var factionsWanted = result.RequiredItems
+                    .Where(r => !string.IsNullOrEmpty(r.DogtagFaction))
+                    .Select(r => r.DogtagFaction!)
+                    .Concat(result.Objectives
+                        .Where(o => !string.IsNullOrEmpty(o.DogtagFaction))
+                        .Select(o => o.DogtagFaction!))
+                    .Select(f => f.ToUpperInvariant())
+                    .Distinct()
+                    .ToList();
+
+                if (factionsWanted.Count == 0)
+                    return;
+
+                var factionsHeld = new HashSet<string>(
+                    items.Where(i => i.IsDogtagItem && !string.IsNullOrEmpty(i.DogtagFaction))
+                        .Select(i => i.DogtagFaction!.ToUpperInvariant()),
+                    StringComparer.Ordinal);
+
+                var missing = factionsWanted.Where(f => !factionsHeld.Contains(f)).ToList();
+                if (missing.Count > 0)
+                {
+                    throw new InvalidOperationException(
+                        $"{missing.Count} dogtag faction(s) are required by a quest but have no item to point at: "
+                        + $"{string.Join(", ", missing)}. Those requirements would publish with a faction and no "
+                        + "ItemId, so the app shows a name with no icon and nothing to match in the inventory. "
+                        + "EnsureDogtagItemsExist has to run before the write.");
+                }
+
+                progress?.Invoke($"Dogtag items present for every faction a quest asks for ({string.Join(", ", factionsWanted)})");
             }
 
             /// <summary>
