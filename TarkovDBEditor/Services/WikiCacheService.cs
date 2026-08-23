@@ -22,8 +22,8 @@ namespace TarkovDBEditor.Services
     public class WikiCacheService : IDisposable
     {
         private readonly HttpClient _httpClient;
+        private readonly MediaWikiExportClient _exportClient;
         private const string MediaWikiApiUrl = "https://escapefromtarkov.fandom.com/api.php";
-        private const string SpecialExportUrl = "https://escapefromtarkov.fandom.com/wiki/Special:Export";
 
         private readonly string _cacheDir;
         private readonly string _iconDir;
@@ -40,6 +40,7 @@ namespace TarkovDBEditor.Services
             _httpClient = new HttpClient();
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "TarkovDBEditor/1.0");
             _httpClient.Timeout = TimeSpan.FromMinutes(5);
+            _exportClient = new MediaWikiExportClient(_httpClient);
 
             basePath ??= Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "wiki_data");
             _cacheDir = Path.Combine(basePath, "cache");
@@ -364,7 +365,7 @@ namespace TarkovDBEditor.Services
             }
 
             // 3. 업데이트가 필요한 페이지 콘텐츠 가져오기 (5개 병렬)
-            const int batchSize = 50;
+            const int batchSize = MediaWikiExportClient.MaxTitlesPerRequest;
             var batches = pagesToUpdate
                 .Select((page, idx) => new { page, idx })
                 .GroupBy(x => x.idx / batchSize)
@@ -449,7 +450,7 @@ namespace TarkovDBEditor.Services
         }
 
         /// <summary>
-        /// Special:Export를 사용하여 여러 페이지 소스와 리비전 ID를 가져옵니다
+        /// MediaWiki export API로 여러 페이지 소스와 리비전 ID를 가져옵니다
         /// </summary>
         private async Task<List<(string PageName, string Content, long RevisionId)>> ExportPagesWithRevisionAsync(
             List<string> pageNames,
@@ -460,19 +461,7 @@ namespace TarkovDBEditor.Services
             if (pageNames.Count == 0)
                 return result;
 
-            var postData = new Dictionary<string, string>
-            {
-                { "catname", "" },
-                { "pages", string.Join("\n", pageNames) },
-                { "curonly", "1" },
-                { "wpDownload", "1" }
-            };
-
-            var content = new FormUrlEncodedContent(postData);
-            var response = await _httpClient.PostAsync(SpecialExportUrl, content, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            var xmlContent = await response.Content.ReadAsStringAsync(cancellationToken);
+            var xmlContent = await _exportClient.ExportXmlAsync(pageNames, cancellationToken);
 
             // XML 파싱
             var doc = new System.Xml.XmlDocument();

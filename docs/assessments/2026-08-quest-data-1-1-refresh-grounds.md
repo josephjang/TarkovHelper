@@ -77,7 +77,7 @@ to `https://escapefromtarkov.fandom.com/api.php` and need a browser-like
 | QDR-23 | Publishing is a direct push today; CI runs after; drift baseline adoption is manual | publish via PR, baseline in the publish commit |
 | QDR-24 | The release skill tags its own bump commit | release sequence wording |
 | QDR-25 | No test guards the published content; the Korean guard is skipped | content guards, un-skipping |
-| QDR-26 | Special:Export and the wiki API block curl's default user agent; Export answered 403 in June | export guard, fetch notes |
+| QDR-26 | Special:Export and the wiki API block curl's default user agent; Export answered 403 in June, and from 2026-08-23 answers 403 to every user agent | export guard, fetch notes, MediaWikiExportClient |
 
 ## Upstream sources
 
@@ -841,8 +841,16 @@ returned page bodies.
 (challenge HTML) against the same call with `-A 'Mozilla/5.0'` (JSON); the
 QDR-17 `Special:Export` probe; the June log named in QDR-9.
 
-**Bears on.** The export-failure guard (a 403 must fail the run, not count) and the
-fetch notes in the spec.
+**Superseded on 2026-08-23 for `Special:Export` only.** That path now answers 403
+with `cf-mitigated: challenge` to every user agent tried, the editor's and a
+current Chrome string alike, so no user agent is served any more. `api.php` is
+still served, including its own export
+(`action=query&export=1&exportnowrap=1&titles=...`), which returns the
+same `export-0.11` document. The crawl moved there; see the Technical Decisions
+entry in the spec.
+
+**Bears on.** The export-failure guard (a 403 must fail the run, not count), the
+fetch notes in the spec, and `MediaWikiExportClient`.
 
 ## Claims refuted during review
 

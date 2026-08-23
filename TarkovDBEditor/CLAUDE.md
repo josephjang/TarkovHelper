@@ -149,6 +149,11 @@ Important areas:
 - `Services/DatabaseService.cs`: dynamic tables, CRUD, and `_schema_meta`.
 - `Services/RefreshDataService.cs`: cached wiki/API data import, the publish guards.
 - `Services/TarkovDevJsonClient.cs`: json.tarkov.dev transport and its cache models.
+- `Services/MediaWikiExportClient.cs`: how the crawl asks the wiki for page bodies.
+  `/wiki/Special:Export` is behind a Cloudflare challenge since 2026-08-23 and answers
+  403 to every user agent; `api.php`'s export returns the same document but caps a
+  request at 50 titles and answers a longer list with a prefix, so the cap is enforced
+  rather than trusted. Pages that never arrive read downstream as deleted quests.
 - `Services/QuestIdentityResolver.cs`: which pages become quests, and what key each keeps.
 - `Services/BsgIdBackfillService.cs`: the one-time external-ID repair.
 - `Resources/Data/quest-match-overrides.json`: pages the API links to a title that is

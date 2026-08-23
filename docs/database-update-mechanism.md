@@ -92,7 +92,17 @@ GET https://json.tarkov.dev/regular/hideout    # 하이드아웃 스테이션
 #### Wiki 데이터 캐싱
 - `TarkovDBEditor/Services/WikiCacheService.cs`: Wiki 페이지 캐싱
 - `TarkovDBEditor/Services/WikiQuestService.cs`: Wiki 퀘스트 파싱
+- `TarkovDBEditor/Services/MediaWikiExportClient.cs`: 페이지 본문을 가져오는 요청
 - 캐시 위치: `TarkovDBEditor/wiki_data/`
+
+페이지 본문은 `api.php`의 export
+(`action=query&export=1&exportnowrap=1&titles=...`)로 받아옵니다.
+`/wiki/Special:Export`는 2026-08-23부터 Cloudflare 챌린지 뒤에 있어
+User-Agent를 무엇으로 바꾸든 403(`cf-mitigated: challenge`)만 돌아옵니다.
+`api.php`는 챌린지 대상이 아니고 같은 `export-0.11` 문서를 돌려주지만,
+요청 하나에 제목을 50개까지만 받고 그보다 긴 목록에는 앞부분만 답합니다.
+없는 페이지는 오류가 아니라 "삭제된 퀘스트"로 읽히므로,
+`MediaWikiExportClient`는 50개를 넘는 배치를 조용히 자르지 않고 거부합니다.
 
 Wiki는 페이지 정체성, 목표 텍스트, 필요 아이템, 위치, 에디션, 프레스티지를 담당하고,
 게임 규칙(레벨, 카파, 진영, 선행 퀘스트, 트레이더 충성도)과 외부 ID는 JSON API가
@@ -132,7 +142,7 @@ public async Task<RefreshResult> RefreshDataFromCacheAsync(
    이름이 바뀐 퀘스트 91개가 새 키를 받고, 설치된 모든 빌드에서 그 진행 상황이
    떨어져 나갑니다.
 3. `Debug > Cache Tarkov Dev Data` (tasks, items, traders, hideout).
-4. `Debug > Export Wiki Quests` (위키 크롤; `Special:Export`).
+4. `Debug > Export Wiki Quests` (위키 크롤; `api.php` export).
 5. `Debug > Fetch Wiki Data` (아이템 + 아이콘 + 퀘스트 + 트레이더, 한 트랜잭션).
 6. `Debug > Refresh Hideout Data`.
 7. `dotnet run --project tools/DataDiff -- data/v1/tarkov_data.db <후보.db>

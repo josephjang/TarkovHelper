@@ -17,8 +17,8 @@ namespace TarkovDBEditor.Services
     public class WikiQuestService : IDisposable
     {
         private readonly HttpClient _httpClient;
+        private readonly MediaWikiExportClient _exportClient;
         private const string MediaWikiApiUrl = "https://escapefromtarkov.fandom.com/api.php";
-        private const string SpecialExportUrl = "https://escapefromtarkov.fandom.com/wiki/Special:Export";
 
         private readonly string _cacheDir;
         private readonly string _questCachePath;
@@ -63,6 +63,7 @@ namespace TarkovDBEditor.Services
             _httpClient = new HttpClient();
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "TarkovDBEditor/1.0");
             _httpClient.Timeout = TimeSpan.FromMinutes(5);
+            _exportClient = new MediaWikiExportClient(_httpClient);
 
             basePath ??= Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "wiki_data");
             _cacheDir = Path.Combine(basePath, "cache");
@@ -443,8 +444,8 @@ namespace TarkovDBEditor.Services
             if (questsToUpdate.Count == 0)
                 return result;
 
-            // 업데이트 필요한 퀘스트 콘텐츠 가져오기 (50개씩 5개 병렬)
-            const int batchSize = 50;
+            // 업데이트 필요한 퀘스트 콘텐츠 가져오기 (한 요청이 담을 수 있는 만큼씩, 5개 병렬)
+            const int batchSize = MediaWikiExportClient.MaxTitlesPerRequest;
             var batches = questsToUpdate
                 .Select((q, idx) => new { q, idx })
                 .GroupBy(x => x.idx / batchSize)
@@ -523,11 +524,11 @@ namespace TarkovDBEditor.Services
 
                 // A failed batch used to be counted and shrugged off, which is how the June
                 // run produced an empty cache out of 403s and still reported success. The wiki
-                // serves a Cloudflare challenge to some user agents and has answered 403 to
-                // Special:Export for a whole run before, so a partial crawl must not reach the
-                // database: quests whose pages never arrived would be deleted as stale.
+                // sits behind Cloudflare and has answered 403 to every export request for a
+                // whole run before, so a partial crawl must not reach the database: quests
+                // whose pages never arrived would be deleted as stale.
                 throw new InvalidOperationException(
-                    $"{batchFailures.Count} of {totalBatches} Special:Export batches failed "
+                    $"{batchFailures.Count} of {totalBatches} export batches failed "
                     + $"({result.Failed} pages). The quest cache is incomplete, so refreshing from it would "
                     + "drop every quest whose page did not arrive. Re-run the export.\n  "
                     + string.Join("\n  ", batchFailures.Take(10))
@@ -543,18 +544,8 @@ namespace TarkovDBEditor.Services
             CancellationToken cancellationToken)
         {
             var result = new List<(string, string, long)>();
-            var pages = string.Join("\n", pageNames);
 
-            var content = new FormUrlEncodedContent(new[]
-            {
-                new KeyValuePair<string, string>("pages", pages),
-                new KeyValuePair<string, string>("curonly", "1")
-            });
-
-            var response = await _httpClient.PostAsync(SpecialExportUrl, content, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            var xml = await response.Content.ReadAsStringAsync(cancellationToken);
+            var xml = await _exportClient.ExportXmlAsync(pageNames, cancellationToken);
             var doc = new System.Xml.XmlDocument();
             doc.LoadXml(xml);
 
