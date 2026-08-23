@@ -822,6 +822,13 @@ namespace TarkovDBEditor.Services
             /// speaking. That is the cost of admitting a patch the size of 1.1, and the run names
             /// every orphaned row so the share is never the only thing an operator sees.
             /// </para>
+            /// <para>
+            /// Both bounds are shares tuned against one expected publish, which is why the first
+            /// real patch argued with them instead of being measured by them. Whether to measure
+            /// explained against unexplained loss instead, so a threshold need not be retuned per
+            /// patch, is tracked in
+            /// <see href="https://github.com/josephjang/TarkovHelper/issues/52"/>.
+            /// </para>
             /// </summary>
             public static void AssertMatchRateHeld(
                 IReadOnlyList<PreviousQuestRow> previousQuests,

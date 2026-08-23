@@ -14,6 +14,15 @@ namespace TarkovDBEditor.Services
 {
     /// <summary>
     /// Hideout 데이터를 tarkov.dev API에서 가져와 DB에 저장하는 서비스
+    /// <para>
+    /// 이 경로에는 <see cref="RefreshDataService.RefreshGuards"/>가 하나도 걸려 있지
+    /// 않습니다. 퀘스트와 아이템 경로가 지키는 삭제 예산이 여기에는 없어서, 2026-08-23
+    /// 재생성에서 <c>HideoutTraderRequirements</c>가 26행에서 5행으로 (81%) 줄어드는 동안
+    /// 아무 경고도 나오지 않았습니다. 그 26행은 실제로 upstream에서 사라진 것이 맞았지만,
+    /// 예산이 돌았다면 사람이 확인하고 넘어갔을 일이 조용히 지나갔습니다.
+    /// 가드 커버리지를 호출부가 아니라 테이블 단위로 보장하는 방법은
+    /// <see href="https://github.com/josephjang/TarkovHelper/issues/52"/>에서 다룹니다.
+    /// </para>
     /// </summary>
     public class HideoutDataService : IDisposable
     {
