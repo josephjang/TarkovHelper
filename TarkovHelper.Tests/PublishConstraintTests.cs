@@ -605,10 +605,12 @@ public sealed class PublishConstraintTests : IDisposable
         // Not vacuous: the published file must actually have been read, or an empty problem
         // list would say nothing at all.
         Assert.Equal(488, candidate.Quests.Count);
-        Assert.Equal(794, candidate.Requirements.Count);
-        // And it is the older format, so this is also the pre-column tolerance exercised
-        // against the real thing rather than a fixture.
-        Assert.False(candidate.StoresNormalizedNames);
+        Assert.Equal(216, candidate.Requirements.Count);
+        // The 1.1 publish carries the column, so the pre-column tolerance this used to exercise
+        // here is covered by the fixtures above instead. Prerequisites dropped from 794 to 216
+        // in the same publish, because they now come from the game's own task records rather
+        // than from parsed wiki text.
+        Assert.True(candidate.StoresNormalizedNames);
 
         var problems = PublishConstraints.Problems(candidate);
 
