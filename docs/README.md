@@ -113,6 +113,11 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
 - [assessments/2026-08-quest-data-1-1-refresh-grounds.md](assessments/2026-08-quest-data-1-1-refresh-grounds.md):
   EFT 1.1 로드맵 3단계(퀘스트 데이터 리프레시) 결정 문서가 근거로 삼는 검증된
   사실과 증거, 리뷰에서 반박된 주장 목록 (26개 finding)
+- [assessments/2026-08-quest-data-1-1-refresh-handoff.md](assessments/2026-08-quest-data-1-1-refresh-handoff.md):
+  1.1 재생성과 퍼블리시를 실제로 실행한 뒤의 인수인계. 남은 릴리즈 게이트,
+  실행 중 발견한 결함 5건, 검토를 마친 손실 목록, 스펙이 틀렸던 지점
+- [assessments/2026-08-pr-34-deep-review-handoff.md](assessments/2026-08-pr-34-deep-review-handoff.md):
+  PR #34(Seasonal Profile) 심층 리뷰의 근거와 이어받기 문서 (16개 finding)
 
 ## 관례
 
