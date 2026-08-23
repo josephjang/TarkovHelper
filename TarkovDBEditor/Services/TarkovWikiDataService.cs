@@ -18,7 +18,7 @@ namespace TarkovDBEditor.Services
     public class TarkovWikiDataService : IDisposable
     {
         private readonly HttpClient _httpClient;
-        private const string SpecialExportUrl = "https://escapefromtarkov.fandom.com/wiki/Special:Export";
+        private readonly MediaWikiExportClient _exportClient;
         private const string MediaWikiApiUrl = "https://escapefromtarkov.fandom.com/api.php";
 
         // 루트 카테고리 (Category:Inventory 기준)
@@ -36,6 +36,7 @@ namespace TarkovDBEditor.Services
         {
             _httpClient = new HttpClient();
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "TarkovDBEditor/1.0");
+            _exportClient = new MediaWikiExportClient(_httpClient);
         }
 
         /// <summary>
@@ -339,7 +340,13 @@ namespace TarkovDBEditor.Services
         }
 
         /// <summary>
-        /// Special:Export를 사용하여 여러 페이지를 한번에 가져옵니다
+        /// MediaWiki export API로 여러 페이지를 가져옵니다.
+        /// <para>
+        /// 요청 하나가 담을 수 있는 제목 수에는 상한이 있으므로
+        /// (<see cref="MediaWikiExportClient.MaxTitlesPerRequest"/>) 목록을 그 크기로 나눠
+        /// 보냅니다. 호출자가 이미 나눠서 넘기더라도 한 번씩만 요청하게 되므로 손해가 없고,
+        /// 더 긴 목록을 넘기더라도 뒷부분이 조용히 사라지지 않습니다.
+        /// </para>
         /// </summary>
         public async Task<Dictionary<string, string>> ExportPagesAsync(
             IEnumerable<string> pageNames,
@@ -352,52 +359,46 @@ namespace TarkovDBEditor.Services
             if (pageList.Count == 0)
                 return result;
 
-            progress?.Invoke($"Exporting {pageList.Count} pages via Special:Export...");
+            progress?.Invoke($"Exporting {pageList.Count} pages via the MediaWiki API...");
 
-            var postData = new Dictionary<string, string>
+            foreach (var batch in MediaWikiExportClient.Batch(pageList))
             {
-                { "catname", "" },
-                { "pages", string.Join("\n", pageList) },
-                { "curonly", "1" },
-                { "wpDownload", "1" }
-            };
+                cancellationToken.ThrowIfCancellationRequested();
 
-            var content = new FormUrlEncodedContent(postData);
+                var xmlContent = await ExportBatchXmlAsync(batch, progress, cancellationToken);
 
+                progress?.Invoke($"Parsing XML ({xmlContent.Length / 1024}KB)...");
+                foreach (var (pageName, content) in ParseMediaWikiExportXml(xmlContent))
+                {
+                    result[pageName] = content;
+                }
+            }
+
+            progress?.Invoke($"Exported {result.Count} pages successfully");
+            return result;
+        }
+
+        /// <summary>
+        /// 한 배치의 export XML을 스트리밍으로 받아옵니다. 배치 하나에 10분을 줍니다.
+        /// </summary>
+        private async Task<string> ExportBatchXmlAsync(
+            List<string> batch,
+            Action<string>? progress,
+            CancellationToken cancellationToken)
+        {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromMinutes(10));
 
-            var request = new HttpRequestMessage(HttpMethod.Post, SpecialExportUrl) { Content = content };
-            var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            using var request = _exportClient.CreateRequest(batch);
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             response.EnsureSuccessStatusCode();
 
             var contentLength = response.Content.Headers.ContentLength;
             progress?.Invoke($"Downloading XML ({(contentLength.HasValue ? $"{contentLength.Value / 1024}KB" : "unknown size")})...");
 
-            string xmlContent;
-            using (var stream = await response.Content.ReadAsStreamAsync(cts.Token))
-            using (var memoryStream = new MemoryStream())
-            {
-                var buffer = new byte[81920];
-                int bytesRead;
-                long totalBytesRead = 0;
-
-                while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, cts.Token)) > 0)
-                {
-                    await memoryStream.WriteAsync(buffer, 0, bytesRead, cts.Token);
-                    totalBytesRead += bytesRead;
-                }
-
-                memoryStream.Position = 0;
-                using var reader = new StreamReader(memoryStream, Encoding.UTF8);
-                xmlContent = await reader.ReadToEndAsync();
-            }
-
-            progress?.Invoke($"Parsing XML ({xmlContent.Length / 1024}KB)...");
-            result = ParseMediaWikiExportXml(xmlContent);
-
-            progress?.Invoke($"Exported {result.Count} pages successfully");
-            return result;
+            using var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            return await reader.ReadToEndAsync(cts.Token);
         }
 
         /// <summary>
@@ -901,8 +902,9 @@ namespace TarkovDBEditor.Services
             if (pageList.Count == 0)
                 return pagesWithoutInfobox;
 
-            // Special:Export로 페이지 소스 가져오기 (배치 처리)
-            const int batchSize = 50;
+            // export API로 페이지 소스 가져오기. 배치 크기를 요청 상한에 맞춰 두었으므로
+            // 배치 하나가 요청 하나가 되고, 배치마다 진행 상황과 rate limit 간격이 붙는다.
+            const int batchSize = MediaWikiExportClient.MaxTitlesPerRequest;
             var totalBatches = (int)Math.Ceiling(pageList.Count / (double)batchSize);
 
             for (int i = 0; i < totalBatches; i++)

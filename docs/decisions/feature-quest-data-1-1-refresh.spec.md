@@ -102,8 +102,11 @@ upstream probes on 2026-08-21.
   the game still chains (Sew it Good - Part 4). The `Quests` and `Collector`
   pages are admin-locked indefinitely, the spot-check pages until 2026-09-14,
   with 179 edits on 78 quest pages in the week before writing. `Special:Export`
-  answers 200 again with the editor's user agent (it answered 403 throughout the
-  2026-06-13 run, which is why that run produced an empty cache).
+  answered 200 with the editor's user agent when this was written and stopped
+  again on 2026-08-23, this time behind a Cloudflare challenge no user agent
+  gets past; the crawl moves to `api.php`, which is not challenged (Technical
+  Decisions). It answered 403 throughout the 2026-06-13 run too, which is why
+  that run produced an empty cache.
 - Churn, measured against the published 488 quests: 127 names have no wiki page
   under that title; by external ID, 91 are renames to a page that still exists
   (e.g. A Shooter Born in Heaven -> Shooter Born in Heaven, Gunsmith - Part 7 ->
@@ -575,7 +578,7 @@ them but that share. Crossing one is a source problem, never something to
 publish.
 
 - Refresh Data (from Cache) and Fetch Wiki Data fail, not succeed, when no
-  cached wiki page has content, when `Special:Export` returned a failure for any
+  cached wiki page has content, when the page export returned a failure for any
   batch (the per-batch catch now aggregates and throws after the loop), when the
   tarkov.dev task cache or trader cache is missing or empty, when the task cache
   was last written more than seven days ago (`MaxTaskCacheLag`, so the crawl and
@@ -725,7 +728,7 @@ publish.
    one id the snapshot lacks in the editor grid: `BsgId =
    68ee1c18b4e5bc9a68018cd7` on the quest named "No Questions Asked".
 3. `Debug > Cache Tarkov Dev Data` (JSON API; tasks, items, traders, hideout).
-4. `Debug > Export Wiki Quests` (wiki crawl; `Special:Export`).
+4. `Debug > Export Wiki Quests` (wiki crawl; the `api.php` page export).
 5. `Debug > Fetch Wiki Data` (items with icons, quests, traders, one
    transaction; `RefreshDataAsync` gains the trader upsert that today only the
    from-cache path runs, so the Traders table reaches 16 rows in this step).
@@ -860,6 +863,8 @@ detail status text. The fixture log folder is seeded through the
 ### Files touched
 
 - `TarkovDBEditor/Services/TarkovDevJsonClient.cs` (new),
+  `MediaWikiExportClient.cs` (new; `WikiQuestService`, `WikiCacheService` and
+  `TarkovWikiDataService` fetch pages through it),
   `TarkovDevDataService.cs` (transport swap, cache models),
   `WikiQuestService.cs` (`FetchTarkovDevQuestsAsync` removed, export batch
   failures thrown, `ExtractIsSeasonal`, map list), `RefreshDataService.cs` (resolver use, schema,
@@ -876,7 +881,8 @@ detail status text. The fixture log folder is seeded through the
   `ColumnExistsAsync`; the only app-side change in this phase).
 - `tools/DataDiff/` (new), `TarkovHelper.sln`, `CheckDb/` (deleted), root
   `CLAUDE.md` (solution table).
-- `TarkovHelper.Tests/`: `TarkovDevJsonClientTests`, `QuestIdentityResolverTests`,
+- `TarkovHelper.Tests/`: `TarkovDevJsonClientTests`, `MediaWikiExportClientTests`,
+  `QuestIdentityResolverTests`,
   `QuestNormalizedNameTests`, `BsgIdBackfillTests`, `RefreshGuardTests`,
   `DataDiffTests`, `PublishedDataContentTests` (PR B), `LegacySmokeE2ETests`,
   `ProgressCarryOverE2ETests`, `E2ETestHarness` (launch overload);
@@ -915,6 +921,22 @@ GraphQL client as a fallback was considered and rejected: it cannot be tested
 against a live endpoint, its queries never requested the fields this phase
 needs, and the maintainers describe the JSON surface as the one tarkov.dev
 runs on. A second transport would be untested code on the critical path.
+
+**The wiki crawl fetches pages through `api.php`, not `Special:Export`.** On
+2026-08-23 Fandom put `/wiki/Special:Export` behind a Cloudflare challenge: every
+request answers 403 with `cf-mitigated: challenge`, for the editor's user agent
+and for a browser's alike, so the wiki step of the runbook could not run at all.
+`api.php` is not challenged, and
+`action=query&export=1&exportnowrap=1&titles=...` returns the same
+`export-0.11` document, revision id included, which is why the three services
+that fetched pages change only in how they ask. The one difference is a cap of
+50 titles per request, which is the batch size all three already used; a longer
+list is answered with a prefix of itself rather than an error, so
+`MediaWikiExportClient` refuses one instead of letting pages go missing, and
+missing pages are what the refresh reads as quests that no longer exist. Solving
+the challenge (a headless browser, a token cache) was rejected: it puts a
+browser on the critical path of a data pipeline to reach a document the
+supported API already serves.
 
 **Identity follows the external ID, with the page URL as the first-sight key.**
 `Quests.Id` stays base64 of a wiki URL, but of the URL the quest was first
@@ -1006,6 +1028,12 @@ objective identity remains backlog.
   locale fallback chain, refuse an empty task set and a missing `wikiLink`, and
   carry fail conditions (a `taskStatus` one with its task and statuses, a
   `traderStanding` one by kind alone, and none at all as an empty list);
+  `MediaWikiExportClientTests` pin the export request (the `api.php` endpoint,
+  `exportnowrap` without which the XML arrives inside a JSON envelope,
+  pipe-separated rather than newline-separated titles), the refusal of a batch
+  over the 50-title cap and of an empty one, a batch of exactly the cap, the
+  document returned unchanged, a 403 raising rather than parsing to zero pages,
+  and the batching of a long list;
   `QuestIdentityResolverTests` cover match by link, match by normalized name,
   one-to-one claiming through the four-step order (the BEAR/USEC pair keeping
   `Faction` NULL; the required-by step with the two Tarkov Shooter - Part 5
