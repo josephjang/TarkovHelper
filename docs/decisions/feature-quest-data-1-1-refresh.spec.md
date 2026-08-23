@@ -8,6 +8,10 @@
 > later change that reverses a decision here appends `Superseded by <doc>` below
 > this line, in the PR that reverses it.
 
+Superseded by `fix-freeze-v2026-7-data-endpoint.spec.md` for delivery to the
+legacy v2026.7.0 Assets endpoint only. The refresh design and versioned-channel
+publish remain in force.
+
 ## Summary
 
 Four ideas carry the design. First, a **json.tarkov.dev client** replaces the

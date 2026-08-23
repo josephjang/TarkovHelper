@@ -64,13 +64,14 @@
     </None>
     <!-- Seed data, sourced from this build's data-format endpoint rather than from
          Assets\, so the bundled database is by construction the one the build's own
-         channel serves. The Assets\ copies stay in the repo as the pre-channel endpoint
-         that fielded builds poll (they hardcode those URLs and cannot be repointed);
-         they are removed from the default None glob so exactly one item copies to
+         channel serves. The Assets\ copies stay frozen in the repo as the v2026.7.0
+         endpoint (that build hardcodes those URLs and cannot be repointed); they are
+         removed from the default None glob so exactly one item copies to
          Assets\ in the output. Link keeps the output layout unchanged: runtime paths,
          packaging, and e2e expectations all still find Assets\tarkov_data.db.
-         The version stamp must ship: without it a fresh install re-downloads the full
-         DB on its first check. -->
+         The version stamp is the installed database's local bookmark, not a second
+         remote manifest. It must ship or a fresh install re-downloads the full DB on
+         its first check. -->
     <None Remove="Assets\tarkov_data.db" />
     <None Remove="Assets\db_version.txt" />
     <None Include="..\data\v$(TarkovDataFormatVersion)\tarkov_data.db" Link="Assets\tarkov_data.db">

@@ -298,16 +298,23 @@ Confluent)은 **구조만** 비교하므로 필드의 의미나 허용 범위가
 │   └── v1/                        # format 1 엔드포인트 (앱이 폴링하는 곳)
 │       ├── manifest.json          # 새 빌드가 읽는 문서
 │       ├── tarkov_data.db
-│       └── db_version.txt         # 레거시 프로토콜용 + 설치본 북마크의 시드
+│       └── db_version.txt         # 릴리즈에 복사되는 로컬 북마크의 시드
 └── TarkovHelper/Assets/           # 채널 이전 빌드가 폴링하는 주소
-    ├── tarkov_data.db             # data/v1과 항상 바이트 단위로 동일
-    └── db_version.txt
+    ├── tarkov_data.db             # v2026.7.0에 포함된 1.0.10으로 동결
+    └── db_version.txt             # 1.0.10으로 동결
 ```
 
 `TarkovHelper/Assets/`는 이미 배포된 빌드가 URL을 하드코딩하고 있어 변경할 수 없으므로
-남겨 둡니다. 그 빌드들은 본문 전체를 문자열 비교하므로 여기에는 토큰만 담긴
-`db_version.txt`가 계속 있어야 하고, `DataChannelMirrorTests`가 `data/v1`과의 바이트
-동일성을 CI에서 강제합니다.
+남겨 둡니다. v2026.7.0이 새 앱 릴리즈보다 먼저 DB 1.1.0을 받지 않도록 이 엔드포인트는
+그 릴리즈가 포함했던 DB 1.0.10으로 동결합니다. 그 빌드들은 `db_version.txt` 본문 전체를
+문자열 비교하므로 파일도 1.0.10 토큰으로 함께 동결하며, 저장소 테스트가 토큰, DB 크기와
+digest를 정확히 고정합니다.
+
+`data/v1/db_version.txt`는 원격 체크 문서가 아닙니다. 새 빌드는 원격에서
+`manifest.json`만 읽습니다. 이 텍스트 파일은 csproj가 릴리즈 출력의
+`Assets/db_version.txt`로 복사하는 **로컬 북마크의 초기값**입니다. 앱은 검증된 DB를
+교체한 뒤 이 로컬 파일을 다시 씁니다. 매니페스트는 서버가 무엇을 제공하는지 말하고,
+북마크는 설치본이 무엇을 가지고 있는지 말합니다.
 
 ### 스키마 고정(pin)
 
@@ -371,8 +378,8 @@ Confluent)은 **구조만** 비교하므로 필드의 의미나 허용 범위가
   (잘린 다운로드, 200으로 온 오류 페이지), integrity 필드는 선택적이라 그걸 대신 걸러줄 검사가
   없습니다.
 
-발행 도구는 **복사하거나 해싱하기 전에 소스에 스탬프를 찍습니다.** 그래야 두 엔드포인트가 같은
-스탬프된 파일 하나를 받아 바이트 단위로 동일해집니다. 소스를 SQLite로 열 수 없으면 publish는
+발행 도구는 **복사하거나 해싱하기 전에 소스에 스탬프를 찍습니다.** 그래야 채널의 DB와
+매니페스트가 같은 파일을 설명합니다. 소스를 SQLite로 열 수 없으면 publish는
 거기서 실패합니다. DB가 아닌 파일이 채널에 올라가는 것을 막는 유일한 검사입니다.
 
 ### 거부 규칙
@@ -507,7 +514,7 @@ WHERE MapName = @MapName
    - DB, manifest.json, db_version.txt를 live format(`data/v<N>/`, 저장소에 있는 가장 높은
      v 디렉터리)에 씀
    - `data/index.json`의 currentDataFormat를 갱신
-   - format이 1이면 `TarkovHelper/Assets/`에도 DB와 db_version.txt를 미러링
+   - `TarkovHelper/Assets/`의 레거시 DB와 db_version.txt는 건드리지 않음
    - 아이콘/맵/설정은 기존대로 Assets/에만 (앱 릴리즈로 배포되는 자산)
 4. **복사된 엔드포인트 파일을 한 커밋에 함께** main에 커밋/push
    → 사용자 앱의 DatabaseUpdateService가 다음 체크(최대 1시간, 앱 재시작 시 즉시)에 자동 반영
@@ -568,8 +575,8 @@ WHERE MapName = @MapName
 - `update.xml` - AutoUpdater 설정
 - `data/index.json` - 지금 발행 중인 data format
 - `data/v<N>/manifest.json` - 그 스키마 엔드포인트가 서빙하는 것 (버전, 해시, 크기)
-- `data/v<N>/db_version.txt` - 레거시 프로토콜용 토큰 겸 설치본 북마크의 시드
-- `Assets/db_version.txt` - format 1 미러(저장소) 겸 로컬 버전 기록(설치본)
+- `data/v<N>/db_version.txt` - 릴리즈에 포함할 설치본 북마크의 시드 (원격 체크에는 사용하지 않음)
+- `Assets/db_version.txt` - 저장소에서는 v2026.7.0의 동결된 원격 토큰, 설치본에서는 로컬 버전 기록
 - `Assets/DB/Data/map_configs.json` - 맵 설정
 - `TarkovHelper.csproj`의 `<TarkovDataFormatVersion>` - 시드 DB와 폴링 URL을 함께 결정하는 pin
 

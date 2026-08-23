@@ -122,8 +122,8 @@ Databases (SQLite)
 - Quest, hideout, item, trader data from tarkov.dev API
 - Read-only during runtime
 - Located: `TarkovHelper/Assets/tarkov_data.db` in an install; served from
-  `data/v<N>/` in the repo, and `TarkovHelper/Assets/` there is the byte-identical
-  endpoint that pre-channel builds still poll (a guard test enforces the match)
+  `data/v<N>/` in the repo. `TarkovHelper/Assets/` in the repo is the frozen
+  v2026.7.0 endpoint; current builds do not package those committed legacy bytes.
 - Schema changes stay additive within a data format, feature-detected on read;
   `DataFormatDriftTests` fails a removal or retype
 

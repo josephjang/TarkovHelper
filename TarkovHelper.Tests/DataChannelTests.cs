@@ -35,8 +35,8 @@ public sealed class DataChannelTests
     [Fact]
     public void Seed_data_is_sourced_from_this_builds_channel_directory()
     {
-        // Assets\ must stop feeding the build: it is the pre-channel endpoint, kept as a
-        // mirror. Sourcing the seed from data/v$(TarkovDataFormatVersion) is what makes
+        // Assets\ must stop feeding the build: it is the frozen v2026.7.0 endpoint.
+        // Sourcing the seed from data/v$(TarkovDataFormatVersion) is what makes
         // "bundled data belongs to the polled channel" true by construction rather than
         // by discipline.
         var seeds = AppCsproj().Descendants("None")

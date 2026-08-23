@@ -12,11 +12,7 @@ namespace TarkovHelper.Tests;
 /// <summary>
 /// Covers the publish side of the versioned data channel
 /// (feature-versioned-data-channel.spec.md): which endpoint a publish writes, and the
-/// rule that both format-1 endpoints leave a publish byte-identical.
-///
-/// DataChannelMirrorTests guards the repository's committed state; these guard the tool
-/// that produces it, because a mirror the tool cannot repair is a red CI check with no
-/// in-app way out.
+/// rule that the pre-channel Assets endpoint is never rewritten.
 /// </summary>
 public sealed class DataPublishChannelTests : IDisposable
 {
@@ -218,7 +214,7 @@ public sealed class DataPublishChannelTests : IDisposable
     #region Publishing format 1
 
     [Fact]
-    public async Task Publishing_format_one_leaves_both_endpoints_identical()
+    public async Task Publishing_format_one_leaves_the_legacy_endpoint_frozen()
     {
         var repo = NewRepo();
         WriteEndpoint(ChannelDir(repo, 1), "1.0.10", OldDb);
@@ -229,16 +225,15 @@ public sealed class DataPublishChannelTests : IDisposable
         var comparison = await service.CompareAsync();
         Assert.True(comparison.Success);
         Assert.True(comparison.DbChanged);
-        Assert.True(comparison.MirrorsToAssets);
         Assert.Equal(1, comparison.LiveDataFormatVersion);
 
         var published = await service.PublishAsync(comparison, "1.0.11");
 
         Assert.True(published.Success, published.ErrorMessage);
-        TestFiles.AssertSameBytes(Path.Combine(ChannelDir(repo, 1), DatabaseFile), Path.Combine(AssetsDir(repo), DatabaseFile));
-        TestFiles.AssertSameBytes(Path.Combine(ChannelDir(repo, 1), VersionFile), Path.Combine(AssetsDir(repo), VersionFile));
         Assert.Equal(SourceBytes(source), await File.ReadAllBytesAsync(Path.Combine(ChannelDir(repo, 1), DatabaseFile)));
         Assert.Equal("1.0.11", await File.ReadAllTextAsync(Path.Combine(ChannelDir(repo, 1), VersionFile)));
+        Assert.Equal(OldDb, await File.ReadAllBytesAsync(Path.Combine(AssetsDir(repo), DatabaseFile)));
+        Assert.Equal("1.0.10", await File.ReadAllTextAsync(Path.Combine(AssetsDir(repo), VersionFile)));
     }
 
     [Fact]
@@ -284,68 +279,11 @@ public sealed class DataPublishChannelTests : IDisposable
     }
 
     [Fact]
-    public async Task A_database_only_mirror_drift_is_publishable_and_repaired()
+    public async Task A_complete_channel_with_no_new_data_has_nothing_to_publish()
     {
-        // The half-published commit: one endpoint moved, the other did not. The tool has
-        // to be able to fix it, which means treating it as a change even though the
-        // editor's own database is already what the channel holds.
         var repo = NewRepo();
         WritePublishedChannel(ChannelDir(repo, 1), 1, "1.0.10", PublishedNewDb);
-        WriteEndpoint(AssetsDir(repo), "1.0.10", OldDb);
-        using var service = new DataPublishService(NewSource(PublishedNewDb), repo);
-
-        var comparison = await service.CompareAsync();
-
-        Assert.False(comparison.DbChanged); // channel already holds these bytes
-        Assert.False(comparison.ManifestNeedsRepair); // and the manifest still describes them
-        Assert.Equal(MirrorSyncState.Drifted, comparison.Mirror);
-        Assert.True(comparison.MirrorNeedsRepair);
-        Assert.True(comparison.HasAnyChanges, "a drifted mirror must leave something to publish");
-
-        var published = await service.PublishAsync(comparison, "1.0.11");
-
-        Assert.True(published.Success, published.ErrorMessage);
-        TestFiles.AssertSameBytes(Path.Combine(ChannelDir(repo, 1), DatabaseFile), Path.Combine(AssetsDir(repo), DatabaseFile));
-        // Repairing a mirror republishes bytes the channel already served, so the token
-        // that identifies those bytes must not move.
-        Assert.Equal("1.0.10", published.NewVersion);
-        Assert.Equal("1.0.10", await File.ReadAllTextAsync(Path.Combine(ChannelDir(repo, 1), VersionFile)));
-    }
-
-    [Fact]
-    public async Task A_version_only_mirror_drift_is_publishable_and_repaired()
-    {
-        // Same failure, the other half: identical databases, disagreeing stamps, which
-        // would hand two builds different answers about the same bytes.
-        var repo = NewRepo();
-        WritePublishedChannel(ChannelDir(repo, 1), 1, "1.0.10", PublishedNewDb);
-        WriteEndpoint(AssetsDir(repo), "0.9.0", PublishedNewDb);
-        using var service = new DataPublishService(NewSource(PublishedNewDb), repo);
-
-        var comparison = await service.CompareAsync();
-
-        Assert.False(comparison.DbChanged);
-        Assert.True(comparison.MirrorNeedsRepair);
-
-        var published = await service.PublishAsync(comparison, "1.0.11");
-
-        Assert.True(published.Success, published.ErrorMessage);
-        TestFiles.AssertSameBytes(Path.Combine(ChannelDir(repo, 1), VersionFile), Path.Combine(AssetsDir(repo), VersionFile));
-        // The channel is the authority, and its data did not change: the drifted mirror is
-        // pulled back to the token the channel already published rather than both being
-        // bumped, which would make every install re-download an identical database.
-        Assert.Equal("1.0.10", await File.ReadAllTextAsync(Path.Combine(AssetsDir(repo), VersionFile)));
-        Assert.Equal("1.0.10", ReadManifest(ChannelDir(repo, 1)).Version);
-    }
-
-    [Fact]
-    public async Task An_in_sync_pair_with_no_new_data_has_nothing_to_publish()
-    {
-        // The assertion that keeps the two above honest: MirrorNeedsRepair must not be
-        // true by construction, or "a drifted mirror is publishable" would prove nothing.
-        var repo = NewRepo();
-        WritePublishedChannel(ChannelDir(repo, 1), 1, "1.0.10", PublishedNewDb);
-        WriteEndpoint(AssetsDir(repo), "1.0.10", PublishedNewDb);
+        WriteEndpoint(AssetsDir(repo), "0.9.0", OldDb);
         WriteIndex(repo, 1);
         using var service = new DataPublishService(NewSource(PublishedNewDb), repo);
 
@@ -353,8 +291,6 @@ public sealed class DataPublishChannelTests : IDisposable
 
         Assert.True(comparison.Success);
         Assert.False(comparison.DbChanged);
-        Assert.Equal(MirrorSyncState.InSync, comparison.Mirror);
-        Assert.False(comparison.MirrorNeedsRepair);
         Assert.False(comparison.ManifestNeedsRepair);
         Assert.False(comparison.DbWillPublish);
         Assert.False(comparison.HasAnyChanges);
@@ -483,7 +419,6 @@ public sealed class DataPublishChannelTests : IDisposable
 
         Assert.True(recomparison.Success);
         Assert.False(recomparison.DbChanged, "the database that was just published is not a pending change");
-        Assert.False(recomparison.MirrorNeedsRepair);
         Assert.False(recomparison.ManifestNeedsRepair);
         Assert.False(recomparison.HasAnyChanges);
         Assert.Equal("1.0.11", recomparison.CurrentVersion);
@@ -660,7 +595,6 @@ public sealed class DataPublishChannelTests : IDisposable
         var comparison = await service.CompareAsync();
 
         Assert.False(comparison.DbChanged);
-        Assert.False(comparison.MirrorNeedsRepair);
         Assert.True(comparison.ManifestNeedsRepair);
         Assert.Contains("digest", comparison.ManifestDriftReason);
         Assert.True(comparison.HasAnyChanges, "a manifest CI rejects must leave something to publish");
@@ -786,7 +720,6 @@ public sealed class DataPublishChannelTests : IDisposable
         // Nothing else in the channel drifted, so the index is what has to carry this
         // publish: without those three, HasAnyChanges below would prove nothing.
         Assert.False(comparison.DbChanged);
-        Assert.False(comparison.MirrorNeedsRepair);
         Assert.False(comparison.ManifestNeedsRepair, comparison.ManifestDriftReason);
         Assert.True(comparison.IndexNeedsRepair, $"{drift} drift went undetected");
         Assert.False(string.IsNullOrWhiteSpace(comparison.IndexDriftReason));
@@ -857,7 +790,6 @@ public sealed class DataPublishChannelTests : IDisposable
         var comparison = await service.CompareAsync();
 
         Assert.False(comparison.DbChanged);
-        Assert.False(comparison.MirrorNeedsRepair);
         Assert.True(comparison.ManifestNeedsRepair, "a token the app's own reader rejects must be publishable");
         Assert.Contains("no client can read", comparison.ManifestDriftReason);
         Assert.True(comparison.HasAnyChanges);
@@ -875,7 +807,7 @@ public sealed class DataPublishChannelTests : IDisposable
         Assert.Equal("1.0.11", published.NewVersion);
         Assert.Equal("1.0.11", ReadManifest(channel).Version);
         Assert.Equal("1.0.11", await File.ReadAllTextAsync(Path.Combine(channel, VersionFile)));
-        Assert.Equal("1.0.11", await File.ReadAllTextAsync(Path.Combine(AssetsDir(repo), VersionFile)));
+        Assert.Equal(token, await File.ReadAllTextAsync(Path.Combine(AssetsDir(repo), VersionFile)));
         Assert.False((await service.CompareAsync()).HasAnyChanges);
     }
 
@@ -978,7 +910,6 @@ public sealed class DataPublishChannelTests : IDisposable
             Success = true,
             LiveDataFormatVersion = 1,
             ChannelDirPath = ChannelDir(repo, 1),
-            MirrorsToAssets = true,
             DbExists = false,
             MapConfigsChanged = true,
         };
@@ -1013,11 +944,6 @@ public sealed class DataPublishChannelTests : IDisposable
         Assert.False(comparison.DbExists);
         Assert.False(comparison.DbChanged);
         Assert.True(comparison.ManifestNeedsRepair);
-        // Both files compared belong to the repository, so the pair is still judged with
-        // no build output present: here they genuinely hold the same bytes, and when they
-        // do not the publish repairs the mirror from the endpoint.
-        Assert.Equal(MirrorSyncState.InSync, comparison.Mirror);
-
         var published = await service.PublishAsync(comparison, "1.0.11");
 
         Assert.True(published.Success, published.ErrorMessage);
@@ -1059,65 +985,8 @@ public sealed class DataPublishChannelTests : IDisposable
         var publishedBytes = await File.ReadAllBytesAsync(channelDb);
         Assert.Equal(TestDigest.Sha256Digest(publishedBytes), ReadManifest(channel).Database.Digest);
         Assert.Equal(publishedBytes.LongLength, ReadManifest(channel).Database.Size);
-        // And the mirror still serves the same bytes, stamp included.
-        TestFiles.AssertSameBytes(channelDb, Path.Combine(AssetsDir(repo), DatabaseFile));
         Assert.Equal("1.0.10", published.NewVersion); // a repair, not a new release
         Assert.False((await service.CompareAsync()).HasAnyChanges, "the stamped endpoint is fully described");
-    }
-
-    [Fact]
-    public async Task A_database_mirror_drift_is_repaired_from_the_endpoint_without_a_source()
-    {
-        // A clone whose editor build output has no database still has to be able to clear
-        // a red mirror check: the channel endpoint holds the bytes the mirror is missing,
-        // so nothing about this repair needs the build output.
-        var repo = NewRepo();
-        var channel = ChannelDir(repo, 1);
-        WritePublishedChannel(channel, 1, "1.0.10", PublishedNewDb);
-        WriteEndpoint(AssetsDir(repo), "1.0.10", OldDb);
-        using var service = new DataPublishService(NewSource(null), repo);
-
-        var comparison = await service.CompareAsync();
-
-        Assert.False(comparison.DbExists);
-        Assert.Equal(MirrorSyncState.Drifted, comparison.Mirror);
-        Assert.True(comparison.MirrorNeedsRepair);
-        Assert.True(comparison.HasAnyChanges, "a drifted mirror the endpoint can repair must be publishable");
-
-        var published = await service.PublishAsync(comparison, "1.0.11");
-
-        Assert.True(published.Success, published.ErrorMessage);
-        // The version token must never be stamped onto bytes the publish did not put
-        // there: a fresh install seeded from Assets would then boot bookmarked as up to
-        // date on stale data and never download anything again.
-        TestFiles.AssertSameBytes(Path.Combine(channel, DatabaseFile), Path.Combine(AssetsDir(repo), DatabaseFile));
-        TestFiles.AssertSameBytes(Path.Combine(channel, VersionFile), Path.Combine(AssetsDir(repo), VersionFile));
-        Assert.Equal("1.0.10", await File.ReadAllTextAsync(Path.Combine(AssetsDir(repo), VersionFile)));
-        Assert.False((await service.CompareAsync()).HasAnyChanges, "the repaired pair has nothing left to publish");
-    }
-
-    [Fact]
-    public async Task A_version_only_mirror_drift_is_publishable_without_a_source()
-    {
-        // The other half of the same drift: identical bytes, disagreeing tokens, which
-        // would hand two builds different answers about the same database.
-        var repo = NewRepo();
-        var channel = ChannelDir(repo, 1);
-        WritePublishedChannel(channel, 1, "1.0.10", PublishedNewDb);
-        WriteEndpoint(AssetsDir(repo), "0.9.0", PublishedNewDb);
-        using var service = new DataPublishService(NewSource(null), repo);
-
-        var comparison = await service.CompareAsync();
-
-        Assert.False(comparison.DbExists);
-        Assert.Equal(MirrorSyncState.Drifted, comparison.Mirror);
-        Assert.True(comparison.HasAnyChanges, "a stamp-only drift CI rejects must leave something to publish");
-
-        var published = await service.PublishAsync(comparison, "1.0.11");
-
-        Assert.True(published.Success, published.ErrorMessage);
-        Assert.Equal("1.0.10", await File.ReadAllTextAsync(Path.Combine(AssetsDir(repo), VersionFile)));
-        Assert.False((await service.CompareAsync()).HasAnyChanges);
     }
 
     #endregion
@@ -1183,7 +1052,7 @@ public sealed class DataPublishChannelTests : IDisposable
     [Fact]
     public async Task Publishing_a_later_schema_leaves_the_superseded_endpoints_alone()
     {
-        // Once schema 2 is live, schema 1 and its Assets mirror are history: a publish
+        // Once schema 2 is live, schema 1 and the legacy Assets endpoint are history: a publish
         // must not touch either, or builds pinned to 1 would be handed data built for 2.
         var repo = NewRepo();
         WriteEndpoint(ChannelDir(repo, 1), "1.0.10", OldDb);
@@ -1194,8 +1063,6 @@ public sealed class DataPublishChannelTests : IDisposable
 
         var comparison = await service.CompareAsync();
         Assert.Equal(2, comparison.LiveDataFormatVersion);
-        Assert.False(comparison.MirrorsToAssets);
-        Assert.False(comparison.MirrorNeedsRepair);
 
         var published = await service.PublishAsync(comparison, "2.0.1");
 
@@ -1436,15 +1303,13 @@ public sealed class DataPublishChannelTests : IDisposable
 
         Assert.True(published.Success, published.ErrorMessage);
         Assert.Equal("1.0.10", published.NewVersion);
-        // The database IS rewritten, on both endpoints, so the repository stops carrying
-        // two answers about the same data.
+        // The channel database is rewritten while the legacy endpoint stays frozen.
         Assert.Equal(SourceBytes(source), await File.ReadAllBytesAsync(Path.Combine(channel, DatabaseFile)));
-        TestFiles.AssertSameBytes(
-            Path.Combine(channel, DatabaseFile), Path.Combine(AssetsDir(repo), DatabaseFile));
         // And the token every install decides on stays exactly where it was, which is the
         // whole point: no install downloads 6.89 MB of data it already has.
         Assert.Equal("1.0.10", await File.ReadAllTextAsync(Path.Combine(channel, VersionFile)));
         Assert.Equal("1.0.10", await File.ReadAllTextAsync(Path.Combine(AssetsDir(repo), VersionFile)));
+        Assert.Equal(PublishedNewDb, await File.ReadAllBytesAsync(Path.Combine(AssetsDir(repo), DatabaseFile)));
 
         var manifest = ReadManifest(channel);
         Assert.Equal("1.0.10", manifest.Version);

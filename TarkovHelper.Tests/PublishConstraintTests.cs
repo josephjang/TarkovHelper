@@ -536,19 +536,17 @@ public sealed class PublishConstraintTests : IDisposable
         Assert.Contains("NormalizedName does not match the value the app computes from the row key", published.ErrorMessage);
         Assert.Contains(published.Errors, e => e.Contains("Stirrup Reforged"));
         Assert.Empty(published.CopiedFiles);
-        // Nothing was written: the endpoint still holds the bytes it did, and the mirror was
-        // never created.
+        // Nothing was written: the endpoint still holds the bytes it did, and the frozen
+        // legacy endpoint was never created in this fixture.
         Assert.Equal(endpoint, File.ReadAllBytes(ChannelDatabase(repo)));
         Assert.False(File.Exists(MirrorDatabase(repo)));
         Assert.Equal("1.0.10", File.ReadAllText(Path.Combine(repo, "data", "v1", VersionFile)));
     }
 
     [Fact]
-    public async Task An_endpoint_that_fails_the_constraints_is_not_mirrored_into_assets()
+    public async Task An_endpoint_that_fails_the_constraints_is_not_published()
     {
-        // With no build output, the endpoint copy is what a publish stamps and mirrors. The
-        // mirror is an endpoint pre-channel builds poll, so this step can still be the moment
-        // unreadable data reaches an install.
+        // With no build output, the endpoint copy is what a repair would stamp and describe.
         var repo = NewRepo(File.ReadAllBytes(
             NewCandidate(CurrentSchema, Quest("Stirrup", faction: "BEAR"))));
 
@@ -581,7 +579,7 @@ public sealed class PublishConstraintTests : IDisposable
 
         Assert.True(published.Success, published.ErrorMessage);
         Assert.Contains("data/v1/tarkov_data.db", published.CopiedFiles);
-        Assert.True(File.Exists(MirrorDatabase(repo)));
+        Assert.False(File.Exists(MirrorDatabase(repo)));
     }
 
     #endregion

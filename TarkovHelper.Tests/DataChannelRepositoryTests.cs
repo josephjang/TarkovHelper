@@ -5,33 +5,25 @@ using TarkovHelper.Services;
 namespace TarkovHelper.Tests;
 
 /// <summary>
-/// Guards the format-1 mirror invariant: TarkovHelper/Assets and data/v1 serve the same
-/// bytes, forever. Both are endpoints for the same data format (Assets is the address
-/// builds already in the field hardcode and can never be repointed away from), so they
-/// advance together and freeze together.
-///
-/// This is also the tripwire for a half-published commit: the publish tool writes both
-/// copies in one go, and if a commit ever reaches main with only one of them updated,
-/// raw main serves two different version tokens for one format until someone notices.
-/// CI noticing is the point.
+/// Guards the repository state of both database endpoints. TarkovHelper/Assets is frozen
+/// at the seed shipped in v2026.7.0 because that release hardcodes those URLs. data/v1 is
+/// the independent channel used by builds that shipped with channel support.
 ///
 /// Runs offline against the working tree, the same repo-root walk UpdateXmlTests and
 /// DecisionDocsTests use.
 /// </summary>
-public sealed class DataChannelMirrorTests
+public sealed class DataChannelRepositoryTests
 {
     private const string DatabaseFile = "tarkov_data.db";
     private const string VersionFile = "db_version.txt";
 
-    /// <summary>
-    /// The mirrored format. Deliberately the literal 1, not DataFormatVersion: the
-    /// mirror is a property of format 1 specifically, and once the app moves to format 2
-    /// these files must keep matching each other while the app polls elsewhere.
-    /// </summary>
-    private const int MirroredFormatVersion = 1;
+    private const int ChannelFormatVersion = 1;
+    private const string LegacyVersion = "1.0.10";
+    private const string LegacyDatabaseDigest =
+        "sha256:e2854c6af84093f95d45e40cdada74d2cf82714a457d4f5a3f1e46f5255a22cc";
 
     private static string ChannelDir() =>
-        Path.Combine(TestRepo.Root(), "data", $"v{MirroredFormatVersion}");
+        Path.Combine(TestRepo.Root(), "data", $"v{ChannelFormatVersion}");
 
     private static string AssetsDir() =>
         Path.Combine(TestRepo.Root(), "TarkovHelper", "Assets");
@@ -40,29 +32,25 @@ public sealed class DataChannelMirrorTests
     public void The_channel_directory_holds_both_endpoint_files()
     {
         Assert.True(File.Exists(Path.Combine(ChannelDir(), DatabaseFile)),
-            $"data/v{MirroredFormatVersion}/{DatabaseFile} is missing: the endpoint every format-1 build polls.");
+            $"data/v{ChannelFormatVersion}/{DatabaseFile} is missing: the endpoint every channel-aware format-1 build polls.");
         Assert.True(File.Exists(Path.Combine(ChannelDir(), VersionFile)),
-            $"data/v{MirroredFormatVersion}/{VersionFile} is missing: without it no build can tell whether its data is current.");
+            $"data/v{ChannelFormatVersion}/{VersionFile} is missing: without it a release cannot seed its local bookmark.");
     }
 
     [Fact]
-    public void The_assets_mirror_matches_the_channel_database()
+    public void The_legacy_endpoint_stays_at_the_v2026_7_0_seed()
     {
-        TestFiles.AssertSameBytes(
-            Path.Combine(ChannelDir(), DatabaseFile),
-            Path.Combine(AssetsDir(), DatabaseFile),
-            $"TarkovHelper/Assets and data/v{MirroredFormatVersion} are two addresses for one data format "
-            + "and must serve identical bytes. A publish writes both; if only one moved, publish again.");
-    }
+        var versionPath = Path.Combine(AssetsDir(), VersionFile);
+        var databasePath = Path.Combine(AssetsDir(), DatabaseFile);
 
-    [Fact]
-    public void The_assets_mirror_matches_the_channel_version_stamp()
-    {
-        TestFiles.AssertSameBytes(
-            Path.Combine(ChannelDir(), VersionFile),
-            Path.Combine(AssetsDir(), VersionFile),
-            $"The version stamps of TarkovHelper/Assets and data/v{MirroredFormatVersion} disagree, so the two "
-            + "format-1 endpoints would hand different builds different answers about the same data.");
+        Assert.Equal(LegacyVersion, File.ReadAllText(versionPath).Trim());
+        Assert.Equal(LegacyDatabaseDigest, TestDigest.Sha256Digest(databasePath));
+        Assert.Equal(6_889_472, new FileInfo(databasePath).Length);
+
+        Assert.NotEqual(LegacyVersion, File.ReadAllText(Path.Combine(ChannelDir(), VersionFile)).Trim());
+        Assert.NotEqual(
+            File.ReadAllBytes(Path.Combine(ChannelDir(), DatabaseFile)),
+            File.ReadAllBytes(databasePath));
     }
 
     [Fact]

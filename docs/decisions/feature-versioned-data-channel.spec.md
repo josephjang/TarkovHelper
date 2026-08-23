@@ -8,6 +8,9 @@
 > later change that reverses a decision here appends `Superseded by <doc>` below
 > this line, in the PR that reverses it.
 
+Superseded by `fix-freeze-v2026-7-data-endpoint.spec.md` for the legacy Assets
+mirror only. The versioned-channel design remains in force.
+
 ## Summary
 
 Three ideas carry the design. First, an integer **data format version**
