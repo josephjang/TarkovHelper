@@ -9,6 +9,18 @@
 - Documents: `docs/decisions/feature-quest-data-1-1-refresh.{md,spec.md}`,
   evidence in `docs/assessments/2026-08-quest-data-1-1-refresh-grounds.md`
 
+## Post-handoff correction (2026-08-24)
+
+The release policy changed after this handoff was written. The legacy
+`TarkovHelper/Assets/` endpoint is restored to the exact v2026.7.0 seed,
+database 1.0.10, and the publisher no longer mirrors `data/v1` into it. Database
+1.1.0 remains published at `data/v1` for the next channel-aware release. See
+`fix-freeze-v2026-7-data-endpoint.md` and its sibling spec.
+
+As a result, the opening warning and "What remains" items 1 and 2 below are
+historical. They explain the state at handoff time, but v2026.7.0 is no longer an
+intended 1.1.0 reader and no 1.1.0 legacy hot-swap confirmation is required.
+
 **The 1.1 data is live on raw main.** `DatabaseUpdateService` polls the channel hourly,
 so fielded v2026.7.0 builds are already downloading `db_version` 1.1.0 and swapping it
 in without an app update. `update.xml` is still at `2026.7.0`, so no build is being
@@ -37,9 +49,9 @@ defects found on this run were invisible to every existing guard.
 
 ## State of the data
 
-`data/v1/tarkov_data.db` and the byte-identical `TarkovHelper/Assets/` mirror carry
-`db_version` **1.1.0**, digest `742ac3f6...`. `data/index.json` is unchanged, correctly:
-the data format is still 1 and this publish is additive.
+`data/v1/tarkov_data.db` carries `db_version` **1.1.0**, digest `742ac3f6...`.
+The legacy `TarkovHelper/Assets/` endpoint now carries 1.0.10. `data/index.json`
+is unchanged, correctly: the data format is still 1 and this publish is additive.
 
 Verified against the published file, not a fixture:
 

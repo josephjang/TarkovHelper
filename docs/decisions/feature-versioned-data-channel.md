@@ -8,6 +8,9 @@
 > change that reverses a decision here appends `Superseded by <doc>` below this
 > line, in the PR that reverses it.
 
+Superseded by `fix-freeze-v2026-7-data-endpoint.md` for the legacy Assets
+endpoint policy only. The versioned-channel decisions remain in force.
+
 ## Summary
 
 Phase 2 of the EFT 1.1 adaptation roadmap (`feature-eft-1-1-roadmap.md`). The

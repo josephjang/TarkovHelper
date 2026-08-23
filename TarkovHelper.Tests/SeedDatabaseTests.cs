@@ -36,9 +36,9 @@ public sealed class SeedDatabaseTests
     [Fact]
     public void The_test_project_does_not_restate_where_the_seed_lives()
     {
-        // TarkovHelper\Assets is the pre-channel endpoint, mirrored only while data format 1
-        // is live. Including anything from there ties this assembly to a directory that stops
-        // being republished at the next format bump, which is exactly the drift that reading
+        // TarkovHelper\Assets is the pre-channel endpoint, frozen at the v2026.7.0 seed.
+        // Including anything from there ties this assembly to data that is intentionally no
+        // longer republished, which is exactly the drift that reading
         // the app's own bundled seed (TestSeed.DatabasePath) avoids.
         var csproj = XDocument.Load(Path.Combine(
             TestRepo.Root(), "TarkovHelper.Tests", "TarkovHelper.Tests.csproj"));
@@ -46,7 +46,7 @@ public sealed class SeedDatabaseTests
         var frozenMirrorItems = FrozenMirrorIncludes(csproj);
 
         Assert.True(frozenMirrorItems.Count == 0,
-            "TarkovHelper.Tests.csproj takes files from the frozen Assets mirror: "
+            "TarkovHelper.Tests.csproj takes files from the frozen legacy Assets endpoint: "
             + string.Join(", ", frozenMirrorItems)
             + ". Take them from the app's build output (or from data/v<N>) instead.");
     }
@@ -56,7 +56,7 @@ public sealed class SeedDatabaseTests
     [InlineData("../TarkovHelper/Assets/tarkov_data.db")]
     [InlineData(@"..\TarkovHelper/Assets\db_version.txt")]
     [InlineData("../tarkovhelper/assets/db_version.txt")]
-    public void The_frozen_mirror_is_recognized_whichever_separator_spells_it(string include)
+    public void The_frozen_legacy_endpoint_is_recognized_whichever_separator_spells_it(string include)
     {
         // MSBuild takes '/' and '\' interchangeably and keeps whichever was written in the
         // item's Identity, so a forward-slash Include reaches the very same frozen mirror file
@@ -76,7 +76,7 @@ public sealed class SeedDatabaseTests
 
     /// <summary>
     /// Every Include attribute in the project that names the pre-channel TarkovHelper/Assets
-    /// mirror, in whichever separator style it was written.
+    /// endpoint, in whichever separator style it was written.
     /// </summary>
     private static List<string> FrozenMirrorIncludes(XDocument csproj) => csproj.Descendants()
         .Select(e => e.Attribute("Include")?.Value)

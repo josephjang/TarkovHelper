@@ -87,9 +87,8 @@ public partial class DataPublishWindow : Window
         ChkKeepVersion.IsChecked = false;
         ApplyVersionChoice();
 
-        // Database section. The publish target is the live data-channel endpoint, plus
-        // the Assets mirror while format 1 is live; both are named here so the operator
-        // can see exactly which endpoints a publish will write.
+        // Database section. The publish target is the live data-channel endpoint. The
+        // legacy database endpoint in Assets is frozen and never appears as a target.
         UpdateSectionStatus(
             DbStatusIcon, DbStatusText,
             _comparisonResult.DbWillPublish,
@@ -103,10 +102,7 @@ public partial class DataPublishWindow : Window
             var target = _comparisonResult.TargetDbHash != null
                 ? $"{FormatSize(_comparisonResult.TargetDbSize)} - Hash: {_comparisonResult.TargetDbHash[..8]}..."
                 : "Not found (will be created)";
-            var mirror = _comparisonResult.MirrorsToAssets
-                ? $" + Assets mirror ({DescribeMirror(_comparisonResult.Mirror)})"
-                : "";
-            TxtDbTargetInfo.Text = $"data/v{_comparisonResult.LiveDataFormatVersion}: {target}{mirror}";
+            TxtDbTargetInfo.Text = $"data/v{_comparisonResult.LiveDataFormatVersion}: {target}";
         }
         else
         {
@@ -162,9 +158,9 @@ public partial class DataPublishWindow : Window
     }
 
     /// <summary>
-    /// What a publish will do to the database endpoints, and why. A mirror repair, a
-    /// manifest repair and an index repair are each publishable on their own, so none can
-    /// be described as "no changes" and none may be swallowed by another.
+    /// What a publish will do to the database endpoint, and why. A manifest repair and
+    /// an index repair are each publishable on their own, so neither can be described as
+    /// "no changes" or swallowed by the other.
     /// </summary>
     private static string DescribeDbChange(DataPublishService.ComparisonResult comparison)
     {
@@ -173,21 +169,11 @@ public partial class DataPublishWindow : Window
         if (comparison.DbChanged) return "Changed";
 
         var reasons = new List<string>();
-        if (comparison.MirrorNeedsRepair) reasons.Add("Assets mirror out of sync - will be repaired");
         if (comparison.ManifestNeedsRepair) reasons.Add($"{comparison.ManifestDriftReason} - will be rewritten");
         if (comparison.IndexNeedsRepair) reasons.Add($"{comparison.IndexDriftReason} - will be rewritten");
 
         return reasons.Count > 0 ? string.Join("; ", reasons) : "No changes";
     }
-
-    private static string DescribeMirror(MirrorSyncState state) => state switch
-    {
-        MirrorSyncState.InSync => "in sync",
-        MirrorSyncState.Drifted => "OUT OF SYNC",
-        // Unreachable from here, since this line is only rendered while the live format
-        // mirrors to Assets. Present so the switch stays exhaustive.
-        _ => "no Assets mirror",
-    };
 
     /// <summary>
     /// The header line for one asset group, worded the same way for all four: what a
@@ -270,9 +256,7 @@ public partial class DataPublishWindow : Window
             return;
         }
 
-        var dbTargets = _comparisonResult.MirrorsToAssets
-            ? $"data/v{_comparisonResult.LiveDataFormatVersion}/ + Assets mirror"
-            : $"data/v{_comparisonResult.LiveDataFormatVersion}/";
+        var dbTargets = $"data/v{_comparisonResult.LiveDataFormatVersion}/";
 
         // The version token describes the database, so it is only bumped when the database
         // is being replaced, and the operator can keep it even then. Show what will
@@ -327,7 +311,7 @@ public partial class DataPublishWindow : Window
                     $"Data channel: {_comparisonResult.ChannelDirPath}\n" +
                     $"Assets: {_service.TargetBasePath}\n\n" +
                     "Commit every copied endpoint file together: raw main must never serve " +
-                    "a half-published mirror.",
+                    "a manifest that describes different database bytes.",
                     "Publish Complete",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);

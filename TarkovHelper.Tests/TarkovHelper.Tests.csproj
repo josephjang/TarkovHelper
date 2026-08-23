@@ -35,9 +35,9 @@
        very file in place through TestSeed.DatabasePath, so they describe exactly the database
        the app under test runs and no second copy can go stale against it.
        Restating a source path here is what went wrong before: it named
-       TarkovHelper\Assets\tarkov_data.db, the pre-channel mirror, which stops being
-       republished the moment the live data format leaves 1, and the fixtures would then be
-       derived from frozen format-1 data while driving an app shipping the newer format.
+       TarkovHelper\Assets\tarkov_data.db, the frozen v2026.7.0 endpoint, and the fixtures
+       would then be derived from legacy data while driving an app shipping the current
+       channel data.
        That reason still stands, so the guard below fails the build loudly if the app ever
        stops putting the seed where TestSeed reads it. -->
   <Target Name="RequireSeedDatabaseFromAppOutput" AfterTargets="CopyFilesToOutputDirectory">

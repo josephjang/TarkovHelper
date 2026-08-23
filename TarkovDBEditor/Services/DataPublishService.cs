@@ -12,10 +12,10 @@ namespace TarkovDBEditor.Services;
 /// Compares files using MD5 hash and copies changed files.
 ///
 /// The database and its version stamp go to the data channel (data/v&lt;N&gt;/), where N is
-/// the highest format directory present in the repo, and are mirrored into
-/// TarkovHelper/Assets while that format is 1 (the pre-channel endpoint fielded builds
-/// poll; the two must stay byte-identical). Everything else (map configs, SVGs, icons)
-/// ships inside app releases and keeps publishing to Assets only.
+/// the highest format directory present in the repo. TarkovHelper/Assets is the frozen
+/// endpoint for v2026.7.0 and is deliberately never changed by a database publish.
+/// Everything else (map configs, SVGs, icons) ships inside app releases and keeps
+/// publishing to Assets only.
 ///
 /// This tool never creates a format directory: bumping the format is a deliberate act in
 /// the same reviewed PR that teaches the app to read it, so a routine publish cannot bump
@@ -40,9 +40,6 @@ public class DataPublishService : IDisposable
     /// </summary>
     private const int ManifestSchemaVersion = 1;
     private const int IndexSchemaVersion = 1;
-
-    /// <summary>The only format that is also served from the pre-channel Assets endpoint.</summary>
-    private const int MirroredDataFormatVersion = 1;
 
     private readonly string _sourceBasePath;
     private readonly string _repoRootPath;
@@ -129,15 +126,6 @@ public class DataPublishService : IDisposable
         /// <summary>Format this publish writes, i.e. the highest data/v&lt;N&gt; in the repo.</summary>
         public int LiveDataFormatVersion { get; set; }
         public string? ChannelDirPath { get; set; }
-
-        /// <summary>
-        /// True while the live format is the one the pre-channel Assets endpoint also
-        /// serves, so a publish must write both copies.
-        /// </summary>
-        public bool MirrorsToAssets { get; set; }
-
-        /// <summary>State of the Assets mirror, written once by <c>CheckMirrorAsync</c>.</summary>
-        public MirrorSyncState Mirror { get; set; } = MirrorSyncState.NotApplicable;
 
         // Version
         /// <summary>
@@ -226,12 +214,6 @@ public class DataPublishService : IDisposable
             }
         }
 
-        /// <summary>
-        /// The Assets mirror must be rewritten even when the database itself is
-        /// unchanged, so a drifted mirror still counts as a publishable change.
-        /// </summary>
-        public bool MirrorNeedsRepair => Mirror == MirrorSyncState.Drifted;
-
         /// <summary>See <see cref="ManifestDriftReason"/>.</summary>
         public bool ManifestNeedsRepair => ManifestDriftReason != null;
 
@@ -240,8 +222,8 @@ public class DataPublishService : IDisposable
 
         /// <summary>
         /// Whether this publish has to rewrite the database endpoint documents: new data,
-        /// a drifted Assets mirror, a manifest that no longer describes the database
-        /// beside it, or a channel index that no longer names this endpoint. One
+        /// a manifest that no longer describes the database beside it, or a channel
+        /// index that no longer names this endpoint. One
         /// expression, because the publish gate, the change count and the window all have
         /// to agree about it.
         /// <para>
@@ -253,7 +235,7 @@ public class DataPublishService : IDisposable
         /// token while <see cref="DbChanged"/> is false.
         /// </para>
         /// </summary>
-        public bool DbWillPublish => DbChanged || MirrorNeedsRepair || ManifestNeedsRepair || IndexNeedsRepair;
+        public bool DbWillPublish => DbChanged || ManifestNeedsRepair || IndexNeedsRepair;
 
         public bool HasAnyChanges =>
             DbWillPublish || MapConfigsChanged || AssetGroups.Any(group => group.HasChanges);
@@ -397,8 +379,9 @@ public class DataPublishService : IDisposable
     /// <summary>
     /// Compare the source (TarkovDBEditor build output) against everything a publish
     /// would write: the live data-channel endpoint for the database, its manifest and
-    /// version stamp, and TarkovHelper/Assets for the mirror and for everything that
-    /// ships inside app releases.
+    /// version stamp, and TarkovHelper/Assets for everything that ships inside app
+    /// releases. The legacy database files in Assets are intentionally outside this
+    /// publish flow.
     ///
     /// This is a read-only survey. Nothing here writes to the repository or to the source
     /// database, so opening the publish window, or refreshing it, cannot itself become a
@@ -439,8 +422,6 @@ public class DataPublishService : IDisposable
                 return result;
             }
             result.ChannelDirPath = ChannelDirFor(result.LiveDataFormatVersion);
-            result.MirrorsToAssets = result.LiveDataFormatVersion == MirroredDataFormatVersion;
-
             // 1. Compare Database. Reads the source's data format stamp too: the publish
             //    rewrites that stamp, so it is part of what the endpoint will receive.
             progress?.Invoke("Comparing database...");
@@ -453,11 +434,9 @@ public class DataPublishService : IDisposable
             progress?.Invoke("Reading version info...");
             await ReadVersionInfo(result);
 
-            // 3. Check the endpoint pair, the manifest and the channel index. All three
-            //    are independent surveys of the repository, so none depends on the order
-            //    the others ran in.
+            // 3. Check the manifest and channel index. They are independent surveys of
+            //    the repository, so neither depends on the order they ran in.
             progress?.Invoke("Checking endpoints...");
-            await CheckMirrorAsync(result);
             await CheckManifestAsync(result);
             await CheckIndexAsync(result);
 
@@ -769,47 +748,6 @@ public class DataPublishService : IDisposable
         result.CurrentVersion = lines
             .Select(line => line.Trim())
             .FirstOrDefault(line => line.Length > 0);
-    }
-
-    /// <summary>
-    /// Compares both files the two format-1 endpoints serve, in one place. Owning the
-    /// whole answer matters: split across two steps, whichever ran last decided it, and
-    /// reordering them would silently report a drifted mirror as in sync.
-    /// </summary>
-    private async Task CheckMirrorAsync(ComparisonResult result)
-    {
-        // Not applicable only when this format has no mirror. Both files compared here
-        // belong to the repository, so the build output having no database of its own
-        // does not make the pair unjudgeable: a publish repairs the mirror from the
-        // channel endpoint in that case, which is why a drift found here is always
-        // something the tool can clear.
-        if (!result.MirrorsToAssets)
-        {
-            result.Mirror = MirrorSyncState.NotApplicable;
-            return;
-        }
-
-        var channelDir = result.ChannelDirPath!;
-        // The stamps count as much as the database: a version-only drift would otherwise
-        // leave the tool with nothing to publish while the two endpoints answered
-        // differently about the same bytes.
-        var inSync =
-            await FilesMatchAsync(
-                Path.Combine(channelDir, DatabaseFileName), Path.Combine(_targetBasePath, DatabaseFileName))
-            && await FilesMatchAsync(
-                Path.Combine(channelDir, VersionFileName), Path.Combine(_targetBasePath, VersionFileName));
-
-        result.Mirror = inSync
-            ? MirrorSyncState.InSync
-            : MirrorSyncState.Drifted;
-    }
-
-    /// <summary>Whether two files exist and hold the same bytes. A missing side is a mismatch.</summary>
-    private async Task<bool> FilesMatchAsync(string left, string right)
-    {
-        if (!File.Exists(left) || !File.Exists(right)) return false;
-
-        return await ComputeFileHashAsync(left) == await ComputeFileHashAsync(right);
     }
 
     /// <summary>
@@ -1155,8 +1093,8 @@ public class DataPublishService : IDisposable
 
     /// <summary>
     /// Publish the changes a comparison found: the database and its documents to the live
-    /// channel endpoint (mirrored into TarkovHelper/Assets while format 1 is live), and
-    /// everything that ships inside app releases to Assets.
+    /// channel endpoint, and everything that ships inside app releases to Assets. The
+    /// legacy database endpoint in Assets is never a publish target.
     ///
     /// <paramref name="requestedVersion"/> is the token the operator typed. It is used
     /// only when the database itself is being replaced; see
@@ -1192,8 +1130,7 @@ public class DataPublishService : IDisposable
                 return result;
             }
 
-            // 1. Put the stamped database on the channel endpoint, and the same bytes in
-            //    the Assets mirror while format 1 is live.
+            // 1. Put the stamped database on the channel endpoint.
             if (!await PublishDatabaseAsync(comparison, result, progress))
             {
                 return result;
@@ -1289,11 +1226,11 @@ public class DataPublishService : IDisposable
     }
 
     /// <summary>
-    /// Puts the stamped database on the channel endpoint, and the same bytes in the
-    /// Assets mirror while format 1 is live (streamed, to handle files open by other
-    /// processes). Whichever branch runs, this leaves the endpoint database stamped with
-    /// the live data format before the manifest hashes it: the app refuses a payload that
-    /// carries no stamp, on the stated grounds that every publish writes one.
+    /// Puts the stamped database on the channel endpoint (streamed, to handle files open
+    /// by other processes). Whichever branch runs, this leaves the endpoint database
+    /// stamped with the live data format before the manifest hashes it: the app refuses
+    /// a payload that carries no stamp, on the stated grounds that every publish writes
+    /// one.
     /// <para>
     /// Returns false when the publish must stop, having recorded why. Every refusal here
     /// happens before the first byte is written, so a tree that fails this step is exactly
@@ -1319,9 +1256,9 @@ public class DataPublishService : IDisposable
         var sourceExists = File.Exists(sourceDbPath);
         if (sourceExists && comparison.DbWillPublish)
         {
-            // New data, a drifted mirror or a drifted endpoint document, with a build
-            // output to publish from. Copied even when the bytes are unchanged, so one
-            // publish always leaves both endpoints byte-identical and described.
+            // New data or a drifted endpoint document, with a build output to publish
+            // from. Copied even when the bytes are unchanged, so one publish always
+            // leaves the endpoint and its documents consistent.
             //
             // Checked here as well as in the comparison, against the file this step is
             // actually about to copy: the comparison can be minutes old, and the editor can
@@ -1332,8 +1269,8 @@ public class DataPublishService : IDisposable
             if (unpublishable != null) return Fail(result, unpublishable);
 
             // Stamp here, not during the comparison: this is the last moment before the
-            // bytes are read, both endpoints receive the one stamped file, and a
-            // comparison stays a read-only survey of the repository.
+            // endpoint bytes are read, and a comparison stays a read-only survey of the
+            // repository.
             progress?.Invoke("Stamping data format...");
             var stampFailure = await StampDataFormatAsync(sourceDbPath, comparison.LiveDataFormatVersion);
             // Nothing has been copied yet, so the tree is exactly as it was.
@@ -1345,25 +1282,12 @@ public class DataPublishService : IDisposable
             result.CopiedFiles.Add($"{DataChannelDirName}/v{comparison.LiveDataFormatVersion}/{DatabaseFileName}");
             result.FilesCopied++;
 
-            if (comparison.MirrorsToAssets)
-            {
-                await CopyFileWithShareAsync(sourceDbPath, Path.Combine(_targetBasePath, DatabaseFileName));
-                result.CopiedFiles.Add(DatabaseFileName);
-                result.FilesCopied++;
-            }
         }
         else if (!sourceExists)
         {
             // No build output to publish from, so the endpoint copy is the database this
             // publish describes (the refusal above guarantees it is there): it is the one
-            // that has to be stamped, and the one the mirror is repaired from. The mirror
-            // is rewritten rather than only when it drifted, because stamping changes the
-            // endpoint's bytes and the documents go on to give both copies the same
-            // version token.
-            //
-            // Checked first even though these bytes are already on the channel: the Assets
-            // mirror is an endpoint pre-channel builds poll, so this step can still be the
-            // moment unreadable data reaches an install.
+            // that has to be stamped.
             progress?.Invoke("Checking publish constraints...");
             var unpublishableEndpoint = await DescribeUnpublishableDataAsync(channelDbPath);
             if (unpublishableEndpoint != null) return Fail(result, unpublishableEndpoint);
@@ -1372,13 +1296,6 @@ public class DataPublishService : IDisposable
             var stampFailure = await StampDataFormatAsync(channelDbPath, comparison.LiveDataFormatVersion);
             if (stampFailure != null) return Fail(result, stampFailure);
 
-            if (comparison.MirrorsToAssets)
-            {
-                progress?.Invoke("Copying database...");
-                await CopyFileWithShareAsync(channelDbPath, Path.Combine(_targetBasePath, DatabaseFileName));
-                result.CopiedFiles.Add(DatabaseFileName);
-                result.FilesCopied++;
-            }
         }
 
         return true;
@@ -1386,7 +1303,7 @@ public class DataPublishService : IDisposable
 
     /// <summary>
     /// Writes every document that describes the published database: the channel manifest,
-    /// the version stamp on both endpoints, and the channel index above them.
+    /// the seed bookmark, and the channel index above them.
     /// <para>
     /// <paramref name="newVersion"/> is the resolved token, so a publish that carried only
     /// icons or map configs rewrites these documents with the token they already had and
@@ -1402,18 +1319,6 @@ public class DataPublishService : IDisposable
         await File.WriteAllTextAsync(
             Path.Combine(comparison.ChannelDirPath!, VersionFileName), newVersion);
         result.CopiedFiles.Add($"{DataChannelDirName}/v{comparison.LiveDataFormatVersion}/{VersionFileName}");
-
-        if (comparison.MirrorsToAssets)
-        {
-            // Safe to stamp the mirror with the channel's token: the database step either
-            // put the channel's bytes there, or the comparison found the pair in sync and
-            // left them alone. Writing this token onto bytes no publish put there would
-            // leave a fresh install seeded from Assets bookmarked as up to date on a
-            // database it never received, and it would never download again.
-            await File.WriteAllTextAsync(
-                Path.Combine(_targetBasePath, VersionFileName), newVersion);
-            result.CopiedFiles.Add(VersionFileName);
-        }
 
         // The channel index names the data format currently published. Rewritten every
         // time so it cannot drift, and it is the only mutable part of the channel:
@@ -1522,24 +1427,4 @@ public class DataPublishService : IDisposable
     {
         // Nothing to dispose
     }
-}
-
-/// <summary>
-/// Whether the Assets mirror matches the channel endpoint, as one value rather than a
-/// boolean that cannot tell "checked and identical" from "never checked". Drifted means
-/// the repo is mid-skew (a half-published commit); publishing both copies fixes it,
-/// which is why it is surfaced rather than blocking.
-/// <para>
-/// A namespace-scope type rather than one nested in
-/// <see cref="DataPublishService.ComparisonResult"/>: every mention of a state is a
-/// four-segment name otherwise, and the state describes the channel, not one report
-/// about it.
-/// </para>
-/// </summary>
-public enum MirrorSyncState
-{
-    /// <summary>This format has no Assets mirror.</summary>
-    NotApplicable,
-    InSync,
-    Drifted,
 }
