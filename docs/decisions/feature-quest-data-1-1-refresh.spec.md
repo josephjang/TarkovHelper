@@ -724,9 +724,14 @@ publish.
    editor's working database (the carry-over and approvals are relative to what
    is in the field).
 2. `Debug > Backfill external IDs from snapshot...` with the 1.0.7 snapshot
-   extracted from git. Expected: 473 quests, 2648 items filled. Then set the
-   one id the snapshot lacks in the editor grid: `BsgId =
-   68ee1c18b4e5bc9a68018cd7` on the quest named "No Questions Asked".
+   extracted from git. Expected: 473 quests and 2644 items filled, and 14 of 488
+   quests still without an id. The snapshot holds 2648 item ids, but four of them
+   are keyed to rows the published database no longer has, so 2648 is what is
+   offered and 2644 is what lands. The completion dialog also reports the one hand
+   bridge ("No Questions Asked") and both snapshot id corrections (the two Army cap
+   rows); all three should read as applied, and the dialog turns into a warning if
+   any does not. Neither needs a grid edit: both are carried in code, for the
+   reason below.
 3. `Debug > Cache Tarkov Dev Data` (JSON API; tasks, items, traders, hideout).
 4. `Debug > Export Wiki Quests` (wiki crawl; the `api.php` page export).
 5. `Debug > Fetch Wiki Data` (items with icons, quests, traders, one
@@ -938,6 +943,25 @@ the challenge (a headless browser, a token cache) was rejected: it puts a
 browser on the critical path of a data pipeline to reach a document the
 supported API already serves.
 
+**Two item ids the snapshot recorded against the wrong row are corrected, not
+worked around.** The December 2025 matching gave the plain "Army cap" row the id
+of "Army cap (CADPAT)", a separate item with a page and a row of its own, and
+left CADPAT's row with no id; the published database carries both that way.
+Copied forward untouched, the CADPAT page matches the Army cap row by that id and
+carries its key, which is the key the Army cap page mints for itself, so the item
+collision guard refuses the run. An audit of all 2644 backfilled item ids against
+the current catalogue found seven rows whose page no longer matches their own: six
+are ordinary wiki renames, which is what carry-over exists for, and this is the
+only one where the row's own page still exists as a separate item. That is what
+makes it a mis-assignment rather than a rename, and it is why the collision guard
+is the thing that finds it. `BsgIdBackfillService.MisrecordedItemIds` corrects
+both rows in the same transaction as the snapshot copy, reported per row like the
+hand bridges, and writes only over the value the snapshot recorded so a re-run is
+a no-op and a value corrected by hand since is reported rather than clobbered.
+Loosening the guard to let a self-minted key win a collision was rejected: the
+collision is the only signal that separates a wrong id from a rename, and
+silencing it would publish one of the two items under the other's identity.
+
 **Identity follows the external ID, with the page URL as the first-sight key.**
 `Quests.Id` stays base64 of a wiki URL, but of the URL the quest was first
 published under; it is no longer recomputed from the current title. This is not
@@ -1061,7 +1085,12 @@ objective identity remains backlog.
   a collapse to one edge still refuses, and half the edges gone reports half);
   a prerequisite table seeded under the wiki's GroupId and under Collector's old
   concatenation is re-keyed rather than emptied; Collector synthesis
-  removes a stale row; `BsgIdBackfillTests` fill only NULLs and report counts;
+  removes a stale row; `BsgIdBackfillTests` fill only NULLs and report counts, and
+  cover the snapshot id corrections: the uncorrected Army cap pair reproduced at
+  the resolver as the key collapse it causes, the corrected pair leaving each item
+  on its own key, both rows corrected in place, a second run reported as already
+  correct, a value changed since reported rather than overwritten, a correction
+  whose row is gone flagged for attention, and the list itself well formed;
   `DataDiffTests` produce the expected sections from two fixture databases.
 - **Content guards on the published database (`PublishedDataContentTests`, CI,
   PR B)**: quest count at least 450; `KappaRequired = 1` count exactly 13,
