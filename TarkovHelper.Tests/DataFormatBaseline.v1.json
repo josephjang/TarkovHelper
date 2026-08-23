@@ -213,6 +213,7 @@
   },
   "QuestRequirements": {
     "Columns": {
+      "AltRequirementType": "TEXT",
       "ApprovedAt": "TEXT",
       "ContentHash": "TEXT",
       "DelayMinutes": "INTEGER",
@@ -222,6 +223,19 @@
       "QuestId": "TEXT",
       "RequiredQuestId": "TEXT",
       "RequirementType": "TEXT",
+      "UpdatedAt": "TEXT"
+    }
+  },
+  "QuestTraderRequirements": {
+    "Columns": {
+      "ApprovedAt": "TEXT",
+      "ContentHash": "TEXT",
+      "Id": "TEXT",
+      "IsApproved": "INTEGER",
+      "QuestId": "TEXT",
+      "RequiredLevel": "INTEGER",
+      "TraderId": "TEXT",
+      "TraderName": "TEXT",
       "UpdatedAt": "TEXT"
     }
   },
@@ -247,6 +261,7 @@
       "NameEN": "TEXT",
       "NameJA": "TEXT",
       "NameKO": "TEXT",
+      "NormalizedName": "TEXT",
       "RequiredDecodeCount": "INTEGER",
       "RequiredDecodeCountApproved": "INTEGER",
       "RequiredDecodeCountApprovedAt": "TEXT",

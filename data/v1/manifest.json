@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "dataFormatVersion": 1,
-  "version": "1.0.10",
+  "version": "1.1.0",
   "database": {
     "file": "tarkov_data.db",
-    "digest": "sha256:1fdb928c9e1c7912a491244bfd1b4dc5607aaa7c6dd6b4ec0eda5986e91313c7",
-    "size": 6889472
+    "digest": "sha256:742ac3f64a568582bf13074479406f490d6b2f6cc3c7e128ff767dee4ca9fc11",
+    "size": 7151616
   }
 }

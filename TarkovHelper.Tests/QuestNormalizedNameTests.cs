@@ -94,13 +94,24 @@ public sealed class QuestNormalizedNameTests
     }
 
     /// <summary>
-    /// The publish guard's invariant, checked against real data: for every published row, the
-    /// title decoded out of the row key normalizes to the same value the row's name does. It
-    /// holds because every published key was minted from that row's own title, and it is what
-    /// lets a renamed quest keep a normalized name that no longer matches its new title.
+    /// The invariant recorded progress actually rests on, checked against real data: for every
+    /// published row, <c>NormalizedName</c> is the normalized form of the title decoded out of
+    /// the row key.
+    /// <para>
+    /// This used to assert that the key decoded to the row's own <em>name</em>, which held only
+    /// because every key had been minted from the title its row still carried. Patch 1.1 renamed
+    /// 100 published quests, and each keeps the key it was first published under, so the key now
+    /// decodes to the old title on all of them: "Shooter Born in Heaven" answers to a key reading
+    /// "A Shooter Born in Heaven". That is the point of the identity change, not a defect.
+    /// </para>
+    /// <para>
+    /// What must not drift is this: the app computes the normalized name from the key when the
+    /// column is absent, so a row whose column disagrees with its own key is a row whose recorded
+    /// progress one of the two lookups will not find.
+    /// </para>
     /// </summary>
     [Fact]
-    public void Every_published_row_key_decodes_to_its_own_name()
+    public void Every_published_normalized_name_matches_the_title_in_its_row_key()
     {
         var databasePath = PublishedDatabasePath();
         Assert.True(File.Exists(databasePath), $"{databasePath} is missing");
@@ -111,12 +122,13 @@ public sealed class QuestNormalizedNameTests
         using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly"))
         {
             connection.Open();
-            using var cmd = new SqliteCommand("SELECT Id, Name FROM Quests", connection);
+            using var cmd = new SqliteCommand("SELECT Id, Name, NormalizedName FROM Quests", connection);
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
                 var id = reader.GetString(0);
                 var name = reader.GetString(1);
+                var stored = reader.IsDBNull(2) ? null : reader.GetString(2);
                 checkedRows++;
 
                 var decoded = WikiQuestIdentity.TitleOf(id);
@@ -126,8 +138,15 @@ public sealed class QuestNormalizedNameTests
                     continue;
                 }
 
-                if (QuestNormalizedName.SqlForm(decoded) != QuestNormalizedName.SqlForm(name))
-                    mismatches.Add($"{name}: row key decodes to '{decoded}'");
+                if (stored == null)
+                {
+                    mismatches.Add($"{name}: NormalizedName is NULL, so the column and the key cannot agree");
+                    continue;
+                }
+
+                var fromTheKey = QuestNormalizedName.SqlForm(decoded);
+                if (stored != fromTheKey)
+                    mismatches.Add($"{name}: NormalizedName is '{stored}' but its key reads '{fromTheKey}'");
             }
         }
 
@@ -135,8 +154,9 @@ public sealed class QuestNormalizedNameTests
 
         Assert.True(checkedRows > 0, "the published Quests table is empty");
         Assert.True(mismatches.Count == 0,
-            "Published rows whose key does not decode to their own name would fail the refresh's publish "
-            + $"constraint:\n  {string.Join("\n  ", mismatches.Take(20))}");
+            "Published rows whose NormalizedName disagrees with the title in their own row key. The app "
+            + "computes that value from the key when the column is absent, so these rows are found by one "
+            + $"lookup and not the other:\n  {string.Join("\n  ", mismatches.Take(20))}");
     }
 
     [Theory]
