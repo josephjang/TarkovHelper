@@ -226,7 +226,90 @@ public sealed class RefreshGuardTests
         var result = await fixture.RefreshAsync();
 
         Assert.False(result.Success);
-        Assert.Contains("would lose their game record", result.ErrorMessage);
+        Assert.Contains("the task set no longer carries at all", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Quests_losing_their_match_while_their_id_is_still_live_do_not_fail_the_run()
+    {
+        // Patch 1.1 moved 35 published quests into the wiki's Historical content category, which
+        // the crawl excludes. Their pages stop arriving, so they lose their match, but every one
+        // of their IDs is still in the task file. That is the game and the wiki moving on, not a
+        // partial fetch, and this guard is named for the partial fetch. Measuring every lost
+        // match would have refused a run whose task cache was provably complete.
+        var previous = Enumerable.Range(1, 10)
+            .Select(i => ($"Quest {i}", (string?)$"5c0be13186f7746309d759{i:00}"))
+            .ToArray();
+        var tasks = Enumerable.Range(1, 10)
+            .Select(i => RefreshPipelineFixture.Task($"5c0be13186f7746309d759{i:00}", $"Quest {i}"))
+            .ToArray();
+
+        using var fixture = new RefreshPipelineFixture()
+            // Only one page still arrives; the other nine tasks keep their records.
+            .WithWikiPages(("Quest 1", RefreshPipelineFixture.Page()))
+            .WithTasks(tasks)
+            .WithTraders((PraporId, "Prapor"))
+            .WithDatabase(previous);
+
+        var result = await fixture.RefreshAsync();
+
+        Assert.DoesNotContain("the task set no longer carries at all", result.ErrorMessage ?? "");
+    }
+
+    [Fact]
+    public async Task A_removal_the_size_of_the_one_one_patch_does_not_fail_the_run()
+    {
+        // 1.1 orphaned 38 of 488 published rows (7.8%): 35 quests removed from the game, the two
+        // prestige rows that leave for want of a game record, and one renumbered chain entry.
+        // MaxLostRowKeys admits a patch that size; it started at 5%, which this would refuse.
+        var previous = Enumerable.Range(1, 100)
+            .Select(i => ($"Quest {i}", (string?)$"5c0be13186f7746309d7{i:000}"))
+            .ToArray();
+        var tasks = Enumerable.Range(1, 100)
+            .Select(i => RefreshPipelineFixture.Task($"5c0be13186f7746309d7{i:000}", $"Quest {i}"))
+            .ToArray();
+
+        // Eight of the hundred lose their page, and so their row key, while their IDs stay live.
+        var pages = Enumerable.Range(9, 92)
+            .Select(i => ($"Quest {i}", RefreshPipelineFixture.Page()))
+            .ToArray();
+
+        using var fixture = new RefreshPipelineFixture()
+            .WithWikiPages(pages)
+            .WithTasks(tasks)
+            .WithTraders((PraporId, "Prapor"))
+            .WithDatabase(previous);
+
+        var result = await fixture.RefreshAsync();
+
+        Assert.True(result.Success, result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Orphaning_more_rows_than_a_patch_ever_would_still_fails_the_run()
+    {
+        // The bound still has to bite: a crawl that came back with a fraction of its pages
+        // orphans recorded progress wholesale, and every ID staying live does not excuse it.
+        var previous = Enumerable.Range(1, 100)
+            .Select(i => ($"Quest {i}", (string?)$"5c0be13186f7746309d7{i:000}"))
+            .ToArray();
+        var tasks = Enumerable.Range(1, 100)
+            .Select(i => RefreshPipelineFixture.Task($"5c0be13186f7746309d7{i:000}", $"Quest {i}"))
+            .ToArray();
+        var pages = Enumerable.Range(21, 80)
+            .Select(i => ($"Quest {i}", RefreshPipelineFixture.Page()))
+            .ToArray();
+
+        using var fixture = new RefreshPipelineFixture()
+            .WithWikiPages(pages)
+            .WithTasks(tasks)
+            .WithTraders((PraporId, "Prapor"))
+            .WithDatabase(previous);
+
+        var result = await fixture.RefreshAsync();
+
+        Assert.False(result.Success);
+        Assert.Contains("would lose their row key", result.ErrorMessage);
     }
 
     [Fact]
@@ -290,18 +373,30 @@ public sealed class RefreshGuardTests
     [Fact]
     public async Task Published_quests_losing_their_row_key_fail_the_run_even_with_no_external_id()
     {
-        // The match-rate guard measures only the rows that have an external ID, and the
-        // backfill guard tolerates a tenth of them without one. A row in that tenth cannot be
-        // carried, so when its page goes it is deleted and its recorded progress is orphaned,
-        // with both other guards reading green. Two of thirty here: 7% of the row keys.
-        var previous = Enumerable.Range(1, 28)
+        // The match-rate guard measures only the rows that have an external ID, and the backfill
+        // guard tolerates a tenth of them without one. A row in that tenth cannot be carried, so
+        // when its page goes it is deleted and its recorded progress is orphaned, and this is the
+        // only guard that counts it.
+        //
+        // Three ghosts of thirty sits exactly on the backfill tolerance, so that guard passes and
+        // this one is the only thing left; a fourth row that does carry an ID also loses its page,
+        // putting the orphaned share at 4 of 30 (13%) over MaxLostRowKeys. Since MaxLostRowKeys
+        // and the backfill tolerance are both a tenth, ghost rows alone can no longer carry a
+        // share past this guard without the backfill guard speaking first.
+        var previous = Enumerable.Range(1, 27)
             .Select(i => ($"Quest {i}", (string?)$"5c0be13186f7746309d7{i:0000}"))
-            .Concat(new[] { ("Ghost Quest 1", (string?)null), ("Ghost Quest 2", (string?)null) })
+            .Concat(new[]
+            {
+                ("Ghost Quest 1", (string?)null),
+                ("Ghost Quest 2", (string?)null),
+                ("Ghost Quest 3", (string?)null),
+            })
             .ToArray();
-        var pages = Enumerable.Range(1, 28)
+        // Quest 27 keeps its task but loses its page, so it is orphaned alongside the ghosts.
+        var pages = Enumerable.Range(1, 26)
             .Select(i => ($"Quest {i}", RefreshPipelineFixture.Page()))
             .ToArray();
-        var tasks = Enumerable.Range(1, 28)
+        var tasks = Enumerable.Range(1, 27)
             .Select(i => RefreshPipelineFixture.Task($"5c0be13186f7746309d7{i:0000}", $"Quest {i}"))
             .ToArray();
 

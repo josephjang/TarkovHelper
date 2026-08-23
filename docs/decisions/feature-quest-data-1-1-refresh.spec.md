@@ -943,6 +943,34 @@ the challenge (a headless browser, a token cache) was rejected: it puts a
 browser on the critical path of a data pipeline to reach a document the
 supported API already serves.
 
+**The match-rate guard measures the IDs the task file has lost, not every quest
+that ends without a match.** As first written it counted both, and the first real
+run refused itself: 42 of 474 published quests (9%) lost their game record
+against a 5% bound. Every one of those 42 IDs was still in the task file. Thirty
+five of them are quests the wiki moved into `Historical content`, which the crawl
+excludes, six are pages that several task records claim and where another record
+won, and one is the renumbered Tarkov Shooter chain. None of that is what the
+guard is named for, which is a partial file or a game mode with fewer tasks, and
+that failure has a direct test: the ID is simply gone from the file. So the bound
+now applies to the IDs the file no longer carries, which is 0 here, and the wider
+loss is reported instead. This is the guard being sharpened rather than loosened;
+counting the wider set made it fire on a run whose task cache was demonstrably
+complete, which is the same thing as not measuring the cache at all.
+
+**`MaxLostRowKeys` rises from 5 to 10 percent.** This is the bound that measures
+what a publish costs the people who have played: 38 of 488 published rows (7.8%)
+are orphaned by this refresh, and every one is accounted for. Thirty five quests
+patch 1.1 removed from the game, New Beginning (Prestige 5) and (Prestige 6),
+which leave for want of a game record, and the old Tarkov Shooter - Part 5, whose
+page now matches the task that was published as Part 6, so a player who finished
+Part 6 keeps that progress under the Part 5 title. A patch that removes quests is
+the case this bound has to survive, and at 5% it could not: the spec's own
+expectation of 35 removals already exceeded it, so the runbook as first written
+could never have completed. The cost is that this bound and the backfill guard's
+ID-less tolerance are now both a tenth, so a database sitting on that tolerance
+could lose every one of its ID-less rows without either guard speaking; the run
+names every orphaned row, so the share is never the only thing an operator reads.
+
 **Two item ids the snapshot recorded against the wrong row are corrected, not
 worked around.** The December 2025 matching gave the plain "Army cap" row the id
 of "Army cap (CADPAT)", a separate item with a page and a row of its own, and
@@ -1076,6 +1104,10 @@ objective identity remains backlog.
   unbackfilled previous database, the empty wiki cache, the missing and the
   stale task cache, the match-rate collapse, the published rows losing their row
   key, the two identity collisions, the seasonal marker that stopped matching,
+  and, for the two bounds this phase retuned, that quests losing their match while
+  their IDs stay live do not fail the run, that an orphaning the size of 1.1 passes
+  while one several times larger still fails, and that an ID-less row counts
+  against the row-key bound,
   the emptied Kappa set, a quest Collector requires that is not in the set, the
   child table most of whose rows would be deleted, and the faction and
   prerequisite-status values the fielded build cannot read, each failing the run
