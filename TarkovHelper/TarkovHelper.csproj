@@ -12,7 +12,7 @@
          to CalVer YYYY.M.N via /release. AssemblyVersion/FileVersion are intentionally
          omitted so the SDK derives both from Version — one knob the release can't leave
          half-bumped, and the value UpdateService reads at runtime. -->
-    <Version>2026.7.0</Version>
+    <Version>2026.8.0</Version>
     <ApplicationIcon>1764579946.ico</ApplicationIcon>
 
     <!-- App identity (fork of Zeliper/Tarkov-Item-Helper, maintained at josephjang/TarkovHelper) -->
