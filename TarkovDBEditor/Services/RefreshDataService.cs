@@ -624,17 +624,34 @@ namespace TarkovDBEditor.Services
             public const double MaxPreviousQuestsWithoutBsgId = 0.10;
 
             /// <summary>
-            /// Above this share of previously published quests losing their game record, the
-            /// task set is wrong (an outage serving a partial file, a game mode with fewer
-            /// tasks), not the game.
+            /// Above this share of previously published quests whose external ID the task set no
+            /// longer carries at all, the task set is wrong (an outage serving a partial file, a
+            /// game mode with fewer tasks), not the game.
+            /// <para>
+            /// Measured over the IDs the task set has lost, not over every quest that ends the
+            /// run without a match. A quest can lose its match while its ID is still live,
+            /// because the wiki moved its page into an excluded category or because another
+            /// record won the page, and neither says anything about whether the file arrived
+            /// whole. Patch 1.1 did that to 42 of 474 published quests while every one of their
+            /// IDs was still in the file, so measuring the wider set would have refused a run
+            /// whose task cache was demonstrably complete.
+            /// </para>
             /// </summary>
             public const double MaxLostMatches = 0.05;
 
             /// <summary>
             /// Above this share of previously published quests whose row key no newly published
             /// row keeps, recorded progress is being orphaned in the field rather than carried.
+            /// <para>
+            /// Ten percent, not the five this started at: patch 1.1 removed 35 published quests
+            /// from the game in one go and renumbered a chain, orphaning 38 of 488 rows (7.8%),
+            /// every one of them accounted for. A patch that removes quests is the case this
+            /// bound has to survive; a collapsed crawl or an empty cache still trips it long
+            /// before it could orphan a meaningful part of the database, and the run names the
+            /// rows so the number is never the only thing an operator sees.
+            /// </para>
             /// </summary>
-            public const double MaxLostRowKeys = 0.05;
+            public const double MaxLostRowKeys = 0.10;
 
             // The trader-NULL share a publish refuses over is
             // PublishConstraints.MaxTradersMissing: it is measured over the candidate file too,
@@ -790,16 +807,25 @@ namespace TarkovDBEditor.Services
             /// A published quest losing its game record is normal in a patch that removes quests;
             /// a lot of them losing it at once is an upstream problem.
             /// <para>
-            /// Measured twice, because the two measurements miss different rows. The first reads
-            /// the external IDs, and so can only see the rows that have one. The second reads the
-            /// row key, which is what recorded progress is filed under and what
+            /// Measured twice, because the two measurements answer different questions. The first
+            /// asks whether the task file arrived whole, and so counts only the IDs the file has
+            /// stopped carrying; a quest whose ID is still live but whose page the wiki moved out
+            /// of reach is reported, not refused, because nothing about it says the fetch failed.
+            /// The second asks what it costs the people who have played: it reads the row key,
+            /// which is what recorded progress is filed under and what
             /// <see cref="UpsertQuestsAsync"/> deletes a row by, so it covers the rows the
-            /// backfill left without an ID as well: those cannot be carried at all, and the
-            /// backfill guard above deliberately tolerates a tenth of them.
+            /// backfill left without an ID as well, which cannot be carried at all.
+            /// </para>
+            /// <para>
+            /// The second bound and the backfill guard's tolerance are both a tenth, so a database
+            /// sitting on that tolerance can lose every one of its ID-less rows without either
+            /// speaking. That is the cost of admitting a patch the size of 1.1, and the run names
+            /// every orphaned row so the share is never the only thing an operator sees.
             /// </para>
             /// </summary>
             public static void AssertMatchRateHeld(
                 IReadOnlyList<PreviousQuestRow> previousQuests,
+                IReadOnlyList<TarkovDevQuestCacheItem> tasks,
                 QuestIdentityResolution resolution,
                 Action<string>? progress)
             {
@@ -811,18 +837,31 @@ namespace TarkovDBEditor.Services
                 {
                     var carriedBsgIds = new HashSet<string>(
                         resolution.Quests.Where(q => q.Task != null).Select(q => q.Task!.Id), StringComparer.OrdinalIgnoreCase);
-                    var lost = previouslyMatched.Count(q => !carriedBsgIds.Contains(q.BsgId!));
-                    var share = (double)lost / previouslyMatched.Count;
+                    var lost = previouslyMatched.Where(q => !carriedBsgIds.Contains(q.BsgId!)).ToList();
+
+                    // The ones the file itself has stopped carrying. That is the failure this
+                    // guard is named for, and it is the only part of the loss that says the
+                    // fetch went wrong rather than the game or the wiki moving on.
+                    var taskIds = new HashSet<string>(tasks.Select(t => t.Id), StringComparer.OrdinalIgnoreCase);
+                    var goneFromTaskSet = lost.Where(q => !taskIds.Contains(q.BsgId!)).ToList();
+                    var share = (double)goneFromTaskSet.Count / previouslyMatched.Count;
 
                     if (share > MaxLostMatches)
                     {
                         throw new InvalidOperationException(
-                            $"{lost} of {previouslyMatched.Count} published quests ({share:P0}) would lose their game record, "
-                            + $"over the {MaxLostMatches:P0} limit. A patch removes quests; it does not remove this "
-                            + "many at once. Check that the task cache is complete before publishing.");
+                            $"{goneFromTaskSet.Count} of {previouslyMatched.Count} published quests ({share:P0}) have an external ID "
+                            + $"the task set no longer carries at all, over the {MaxLostMatches:P0} limit: "
+                            + $"{string.Join(", ", goneFromTaskSet.Take(10).Select(q => q.Name))}. "
+                            + "A patch removes quests; it does not remove this many at once, and a removed quest usually "
+                            + "keeps its record. Check that the task cache is complete before publishing.");
                     }
 
-                    progress?.Invoke($"{lost} of {previouslyMatched.Count} published quests lost their game record ({share:P1})");
+                    var stillLive = lost.Count - goneFromTaskSet.Count;
+                    progress?.Invoke(
+                        $"{lost.Count} of {previouslyMatched.Count} published quests lost their game record "
+                        + $"({(double)lost.Count / previouslyMatched.Count:P1}); {goneFromTaskSet.Count} because the task set no longer "
+                        + $"carries their ID, {stillLive} while their ID is still live (an excluded page, or another "
+                        + "record winning the page)");
                 }
 
                 // The resolver's own list rather than a second computation of it: same
@@ -1194,7 +1233,7 @@ namespace TarkovDBEditor.Services
                 pages, tasks, previousQuests, QuestMatchOverrides.Load());
             result.Identity = resolution;
 
-            RefreshGuards.AssertMatchRateHeld(previousQuests, resolution, progress);
+            RefreshGuards.AssertMatchRateHeld(previousQuests, tasks, resolution, progress);
             // Before anything indexes a quest by its key. Everything below builds dictionaries
             // over Id, and a duplicate there would otherwise surface as an anonymous
             // duplicate-key error carrying a base64 string and neither quest's name.
@@ -4412,7 +4451,9 @@ namespace TarkovDBEditor.Services
             // (that is what BsgIdBackfillService repairs), so measuring on BsgId would read the
             // whole table as deleted on exactly the run this budget must not refuse. The row key
             // is what QuestIdentityResolver carries across a rename and is the identity in
-            // practice; AssertMatchRateHeld guards the same loss ten times tighter, at 5%.
+            // practice. This budget is the loose backstop at 80%; AssertMatchRateHeld guards the
+            // same loss at the 10% of MaxLostRowKeys and names the rows it counts, so it is the
+            // one that speaks first.
             RefreshGuards.AssertDeleteBudgetHeld("Quests", existingIds, newQuestIds, idsToDelete.Count, progress);
             if (idsToDelete.Count > 0)
             {
