@@ -1,0 +1,2646 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quest Pipeline Deep Review - Code Guide</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Ground and structure, inherited from the earlier guides so the
+         interactive docs read as one set. */
+      --page: #101010;
+      --surface: #181818;
+      --surface-2: #222222;
+      --surface-3: #2d2d2d;
+      --line: #3d3d3d;
+      --line-soft: #2a2a2a;
+      --text: #e0e0e0;
+      --muted: #9e9e9e;
+      --dim: #737373;
+
+      /* Accent: the app's own AccentBrush. */
+      --gold: #c5a84a;
+      --gold-hover: #d4b85a;
+      --gold-ink: #19170f;
+
+      /* Profile hues. These are a LAW, not decoration: the same profile is the same
+         colour in every table, lane and timeline on this page. Nothing on this page is
+         a profile, so it spends none of them. */
+      --pvp: #5ea9e8;
+      --pve: #4caf50;
+      --season: #ff9800;
+
+      /* Reserved for data in the wrong place. */
+      --wrong: #ef5350;
+      --right: #4caf50;
+
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+
+      --body: "Segoe UI", "Noto Sans", system-ui, sans-serif;
+      --mono: Consolas, "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 14% -12%, rgba(197, 168, 74, .12), transparent 36rem),
+        var(--page);
+      color: var(--text);
+      font-family: var(--body);
+      line-height: 1.55;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    }
+
+    button, input, select { font: inherit; }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* ---------- shell ---------- */
+
+    .shell {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      gap: 44px;
+      width: min(1320px, calc(100% - 44px));
+      margin: 0 auto;
+      padding: 56px 0 96px;
+      align-items: start;
+    }
+
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .rail { position: static; margin-bottom: 40px; }
+    }
+
+    .rail {
+      position: sticky;
+      top: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 18px 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: rgba(24, 24, 24, .84);
+      backdrop-filter: blur(10px);
+    }
+
+    .rail-title {
+      margin: 0 0 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .rail a {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 13.5px;
+      text-decoration: none;
+      transition: background .15s, color .15s;
+    }
+
+    .rail a:hover { background: var(--surface-2); color: var(--text); }
+    .rail a .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+    .rail a.is-lab { color: var(--gold); }
+    .rail a.is-lab .n { color: var(--gold); }
+
+    .rail-gate {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line-soft);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    .rail-gate strong { display: block; color: var(--text); font-size: 13px; }
+
+    .gate-meter {
+      height: 5px;
+      margin-top: 8px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .gate-meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--gold);
+      transition: width .3s ease;
+    }
+
+    /* ---------- type ---------- */
+
+    main { max-width: 100%; }
+
+    .eyebrow {
+      margin: 0;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    h1 {
+      max-width: 18ch;
+      margin: 12px 0 18px;
+      font-size: clamp(38px, 5.6vw, 70px);
+      font-weight: 800;
+      line-height: 1.0;
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+
+    .lede {
+      max-width: 62ch;
+      margin: 0 0 14px;
+      font-size: 19px;
+      color: #c2c2c2;
+    }
+
+    h2 {
+      margin: 0 0 6px;
+      font-size: clamp(24px, 3vw, 33px);
+      font-weight: 800;
+      letter-spacing: -.03em;
+      line-height: 1.12;
+      text-wrap: balance;
+    }
+
+    h3 {
+      margin: 30px 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    p, li { max-width: 68ch; }
+    p { margin: 0 0 14px; }
+    ul, ol { margin: 0 0 14px; padding-left: 22px; }
+    li { margin-bottom: 7px; }
+
+    strong { color: #f0f0f0; }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: #ddc98a;
+      font-family: var(--mono);
+      font-size: .88em;
+    }
+
+    a { color: var(--gold); }
+
+    section { margin-bottom: 68px; scroll-margin-top: 24px; }
+
+    .chapter-head {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 16px;
+      align-items: baseline;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .chapter-num {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      color: var(--gold);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kicker {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 62ch;
+    }
+
+    /* ---------- callouts ---------- */
+
+    .note {
+      margin: 22px 0;
+      padding: 16px 18px;
+      border-left: 3px solid var(--gold);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: linear-gradient(100deg, rgba(197, 168, 74, .1), rgba(197, 168, 74, .02));
+    }
+
+    .note p:last-child { margin-bottom: 0; }
+
+    .note-label {
+      margin: 0 0 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .note.is-wrong { border-left-color: var(--wrong); background: linear-gradient(100deg, rgba(239, 83, 80, .1), transparent); }
+    .note.is-wrong .note-label { color: var(--wrong); }
+
+    /* ---------- code and logs ---------- */
+
+    .code {
+      margin: 18px 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #141414;
+      overflow: hidden;
+    }
+
+    .code-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .code pre {
+      margin: 0;
+      padding: 14px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.62;
+      tab-size: 2;
+    }
+
+    .code .del { display: block; background: rgba(239, 83, 80, .12); color: #f0b3b1; }
+    .code .add { display: block; background: rgba(76, 175, 80, .12); color: #b3e0b5; }
+    .code .cmt { color: var(--dim); }
+
+    /* ---------- labs ---------- */
+
+    .lab {
+      margin: 34px 0 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .lab-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      align-items: baseline;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line-soft);
+      background: linear-gradient(180deg, rgba(197, 168, 74, .07), transparent);
+    }
+
+    .lab-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .lab-head h3 { margin: 0; font-size: 19px; }
+    .lab-head .sub { width: 100%; margin: 2px 0 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
+
+    .lab-body { padding: 20px; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    .ctl-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .seg {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      background: var(--surface-2);
+      gap: 3px;
+    }
+
+    .seg button {
+      padding: 6px 14px;
+      border: 0;
+      border-radius: 99px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+
+    .seg button:hover { color: var(--text); }
+    .seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); }
+    .seg button[aria-pressed="true"][data-tone="bad"] { background: rgba(239, 83, 80, .2); color: var(--wrong); }
+    .seg button[aria-pressed="true"][data-tone="good"] { background: rgba(76, 175, 80, .2); color: var(--right); }
+
+    .btn {
+      padding: 8px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+
+    .btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--gold); }
+    .btn:disabled { opacity: .42; cursor: not-allowed; }
+    .btn.is-primary { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+    .btn.is-primary:hover:not(:disabled) { background: var(--gold-hover); }
+
+    .slider-wrap { display: flex; align-items: center; gap: 10px; }
+    .slider-wrap input[type="range"] { width: 210px; accent-color: var(--gold); }
+    .slider-read { font-family: var(--mono); font-size: 13px; color: var(--text); min-width: 15ch; }
+
+    .verdict {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: var(--surface-2);
+      font-size: 14.5px;
+    }
+
+    .verdict[data-tone="bad"] { border-color: rgba(239, 83, 80, .5); background: rgba(239, 83, 80, .08); }
+    .verdict[data-tone="good"] { border-color: rgba(76, 175, 80, .45); background: rgba(76, 175, 80, .07); }
+    .verdict b { display: block; margin-bottom: 3px; }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-top: 6px;
+    }
+
+    .stat {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .stat .k {
+      margin: 0 0 4px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .stat .v {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .v[data-tone="bad"] { color: var(--wrong); }
+    .v[data-tone="good"] { color: var(--right); }
+    .v[data-tone="season"] { color: var(--season); }
+    .v[data-tone="pve"] { color: var(--pve); }
+    .v[data-tone="pvp"] { color: var(--pvp); }
+
+    /* ---------- step chips, shared by labs A, B and D ---------- */
+
+    .lanes { display: grid; gap: 12px; }
+
+    .lane {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .lane[data-profile="pvp"] { border-left: 3px solid var(--pvp); }
+    .lane[data-profile="pve"] { border-left: 3px solid var(--pve); }
+    .lane[data-profile="season"] { border-left: 3px solid var(--season); }
+
+    .lane-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 12px;
+      align-items: baseline;
+      margin-bottom: 8px;
+      font-size: 13.5px;
+      font-weight: 700;
+    }
+
+    .lane-head .rev { font-family: var(--mono); font-size: 12px; color: var(--dim); font-weight: 600; }
+
+    .steps { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .step {
+      padding: 4px 9px;
+      border: 1px solid var(--line-soft);
+      border-radius: 99px;
+      background: #141414;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--dim);
+    }
+
+    .step.is-done { color: var(--text); border-color: var(--line); }
+    .step.is-now { color: var(--gold-ink); background: var(--gold); border-color: var(--gold); font-weight: 700; }
+    .step.is-kill { color: var(--wrong); border-color: rgba(239, 83, 80, .55); }
+    .step.is-win { color: var(--right); border-color: rgba(76, 175, 80, .55); }
+
+    /* ---------- labs C and D: the document rows ---------- */
+
+    .reads { border: 1px solid var(--line-soft); border-radius: var(--radius-sm); overflow: hidden; }
+
+    .read-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) 92px minmax(0, 1.9fr);
+      gap: 10px;
+      align-items: center;
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      background: var(--surface-2);
+    }
+
+    .read-row:last-child { border-bottom: 0; }
+    .read-row .rk { color: var(--text); overflow-wrap: anywhere; }
+    .read-row .rv { font-weight: 700; text-align: right; overflow-wrap: anywhere; }
+    .read-row .ro { font-size: 11.5px; color: var(--muted); font-family: var(--body); }
+    .read-row.is-dropped { opacity: .45; }
+    .read-row.is-dropped .rv { text-decoration: line-through; }
+    .read-row.is-boundary { box-shadow: inset 0 -2px 0 var(--wrong); }
+    .read-row .rv[data-tone="bad"] { color: var(--wrong); }
+    .read-row .rv[data-tone="good"] { color: var(--right); }
+
+    @media (max-width: 760px) {
+      .read-row { grid-template-columns: minmax(0, 1fr) 78px; }
+      .read-row .ro { display: none; }
+    }
+
+    /* ---------- lab-specific: the hourly meter in lab A ---------- */
+
+    .meter {
+      margin-top: 14px;
+      height: 10px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--wrong);
+      transition: width .25s ease;
+    }
+
+    .meter.is-good i { background: var(--right); }
+
+    /* ---------- quiz ---------- */
+
+    .quiz-intro {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 26px;
+      padding: 18px 20px;
+      border: 1px solid rgba(197, 168, 74, .35);
+      border-radius: var(--radius);
+      background: linear-gradient(110deg, rgba(197, 168, 74, .12), rgba(197, 168, 74, .02));
+    }
+
+    .quiz-score {
+      display: grid;
+      place-items: center;
+      min-width: 62px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      color: var(--gold);
+    }
+
+    .q {
+      margin-bottom: 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .q[data-state="right"] { border-color: rgba(76, 175, 80, .55); }
+    .q[data-state="wrong"] { border-color: rgba(239, 83, 80, .5); }
+
+    .q-head { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 16px 18px 10px; }
+
+    .q-num {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--gold);
+      padding-top: 3px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .q-text { margin: 0; font-size: 15.5px; font-weight: 600; max-width: 72ch; }
+
+    .q-opts { display: grid; gap: 7px; padding: 4px 18px 16px 44px; }
+
+    .opt {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      cursor: pointer;
+      font-size: 14px;
+      transition: border-color .15s, background .15s;
+    }
+
+    .opt:hover { border-color: var(--line); background: var(--surface-3); }
+    .opt input { margin: 3px 0 0; accent-color: var(--gold); }
+    .opt.is-right { border-color: rgba(76, 175, 80, .6); background: rgba(76, 175, 80, .1); }
+    .opt.is-wrong { border-color: rgba(239, 83, 80, .55); background: rgba(239, 83, 80, .1); }
+
+    .q-why {
+      display: none;
+      margin: 0 18px 16px 44px;
+      padding: 12px 14px;
+      border-left: 3px solid var(--line);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: var(--surface-2);
+      font-size: 13.5px;
+      color: #c4c4c4;
+    }
+
+    .q-why p { margin: 0; max-width: 74ch; }
+    .q[data-state] .q-why { display: block; }
+    .q[data-state="right"] .q-why { border-left-color: var(--right); }
+    .q[data-state="wrong"] .q-why { border-left-color: var(--wrong); }
+
+    .q-why .verdict-word { font-weight: 700; }
+    .q[data-state="right"] .verdict-word { color: var(--right); }
+    .q[data-state="wrong"] .verdict-word { color: var(--wrong); }
+
+    /* gate */
+
+    .gate {
+      margin-top: 30px;
+      padding: 22px 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .gate.is-locked { border-style: dashed; color: var(--muted); }
+    .gate.is-open { border-color: rgba(76, 175, 80, .55); background: linear-gradient(150deg, rgba(76, 175, 80, .1), transparent); }
+
+    .gate h3 { margin: 0 0 8px; }
+    .gate ul { margin-top: 10px; }
+
+    .approval {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: #141414;
+      border: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: #b9d8bb;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    footer {
+      margin-top: 22px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--dim);
+      font-size: 13px;
+    }
+
+    footer a { color: var(--muted); }
+
+    /* ---------- this guide: the row tables the labs print ---------- */
+
+    .tbl {
+      margin: 14px 0 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      overflow-x: auto;
+    }
+
+    .tbl table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
+
+    .tbl th {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      text-align: left;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+      white-space: nowrap;
+    }
+
+    .tbl td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      vertical-align: top;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      overflow-wrap: anywhere;
+    }
+
+    .tbl tr:last-child td { border-bottom: 0; }
+    .tbl td[data-tone="bad"] { color: var(--wrong); font-weight: 700; }
+    .tbl td[data-tone="good"] { color: var(--right); font-weight: 700; }
+    .tbl td[data-tone="dim"] { color: var(--dim); }
+    .tbl tr[data-row="wrong"] { background: rgba(239, 83, 80, .08); }
+    .tbl tr[data-row="kept"] { background: rgba(76, 175, 80, .06); }
+
+    .lane-note { font-size: 11.5px; color: var(--muted); font-family: var(--body); }
+
+    /* A test name is longer than a phone is wide, and .lab hides its overflow, so
+       inline code in a lab sub and in a stat tile has to break rather than be cut.
+       Nothing moves at desktop width. */
+    .lab-head .sub code, .stat .v { overflow-wrap: anywhere; }
+
+    /* ---------- this guide: the measure columns lab A compares ---------- */
+
+    .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+
+    .col {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .col.is-active { border-color: var(--gold); background: rgba(197, 168, 74, .07); }
+    .col h4 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+    .col p { margin: 0; font-size: 12.5px; color: var(--muted); max-width: none; }
+    .col .num { font-family: var(--mono); font-size: 20px; font-weight: 800; margin: 6px 0 2px; }
+    .col .num[data-tone="bad"] { color: var(--wrong); }
+    .col .num[data-tone="good"] { color: var(--right); }
+
+    /* This guide names the run each slider position stands for, which makes its
+       readouts longer than the shared 15ch minimum. .lab hides its overflow, so
+       they have to wrap at phone width. Nothing moves at desktop width. */
+    .slider-wrap { flex-wrap: wrap; }
+    .slider-read { overflow-wrap: anywhere; }
+
+    /* The ceiling mark on lab A's meter, so the boundary is visible and not only stated. */
+    .meter { position: relative; }
+    .meter .ceiling {
+      position: absolute;
+      top: -3px;
+      bottom: -3px;
+      width: 2px;
+      background: var(--gold);
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="rail" aria-label="Guide contents">
+      <p class="rail-title">Curriculum</p>
+      <a href="#ch1"><span class="n">01</span><span>A guard that says yes</span></a>
+      <a href="#ch2"><span class="n">02</span><span>The budget that counted keys</span></a>
+      <a href="#lab-a" class="is-lab"><span class="n">LAB</span><span>The first run that would not run</span></a>
+      <a href="#ch3"><span class="n">03</span><span>Asking by the thing that rotates</span></a>
+      <a href="#lab-b" class="is-lab"><span class="n">LAB</span><span>Which record the page takes</span></a>
+      <a href="#ch4"><span class="n">04</span><span>Blind to the rows it measured</span></a>
+      <a href="#lab-c" class="is-lab"><span class="n">LAB</span><span>A loss measured at zero</span></a>
+      <a href="#ch5"><span class="n">05</span><span>A receipt written too early</span></a>
+      <a href="#lab-d" class="is-lab"><span class="n">LAB</span><span>The 304 that certifies old data</span></a>
+      <a href="#ch6"><span class="n">06</span><span>Never reading the file that ships</span></a>
+      <a href="#ch7"><span class="n">07</span><span>One prerequisite, two statuses</span></a>
+      <a href="#ch8"><span class="n">08</span><span>One rule, four spellings</span></a>
+      <a href="#quiz"><span class="n">09</span><span>Comprehension gate</span></a>
+      <div class="rail-gate">
+        <strong id="railGateLabel">Gate locked</strong>
+        <span id="railGateHint">0 of 8 correct</span>
+        <div class="gate-meter"><i id="railGateBar"></i></div>
+      </div>
+    </nav>
+
+    <main>
+      <p class="eyebrow">PR #51 &middot; Code guide</p>
+      <h1>The pipeline that stops instead of publishing quietly</h1>
+      <p class="lede">
+        Part 2 of the quest pipeline guides. Part 1
+        (<code>docs/2026-08-quest-data-1-1-refresh-code-guide.html</code>) is the design of the
+        rebuild in PR #50. This part is the deep review of that design. Every defect here shares
+        one shape. The run does the wrong thing, and each guard reports success.
+      </p>
+      <p class="lede">
+        The decisions are recorded in
+        <code>docs/decisions/feature-quest-data-1-1-refresh.md</code> and in its specification
+        <code>docs/decisions/feature-quest-data-1-1-refresh.spec.md</code>. This PR extends the
+        specification. It records no new product decision.
+      </p>
+
+      <div class="note">
+        <p class="note-label">The whole change</p>
+        <p>
+          A deep review of the rebuilt quest pipeline. It found guards that pass over wrong
+          answers. It closes each one where the answer is still correctable.
+        </p>
+      </div>
+
+      <!-- ===================== 1 ===================== -->
+      <section id="ch1">
+        <div class="chapter-head">
+          <span class="chapter-num">01</span>
+          <div>
+            <h2>A guard that says yes</h2>
+            <p class="kicker">
+              What part 1 built, and why a defect in a guard is worse than an ordinary defect.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Part 1 moved quest identity off the wiki page address and onto the game record id. It
+          added a carry-over, so a renamed quest keeps the row key its recorded progress is
+          filed under. It put guards around the write: a match rate, a delete budget, a seasonal
+          marker canary, and a set of publish constraints.
+        </p>
+        <p>
+          The guards are what this review reads. A published database is a one way contract.
+          Installs poll every five minutes, download what the endpoint holds, and apply it
+          without checking it. Nothing recalls a bad publish. A quest whose row key changes
+          loses every recorded completion in every install at once.
+        </p>
+        <p>
+          So the only useful question about a guard is what it answers over a wrong result.
+          Several of them answered "pass". Each one is a chapter below, and each fix lands where
+          the invariant can still be enforced.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">The shape they share</p>
+          <p>
+            None of these defects produces an error, a red count, or an empty table. Each one
+            produces a plausible number. The delete budget reads 100 percent and refuses a run
+            that deletes nothing. The match rate reads 0 percent and passes a run that orphans
+            48 quests. A freshness check reads green over data from before the patch.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== 2 ===================== -->
+      <section id="ch2">
+        <div class="chapter-head">
+          <span class="chapter-num">02</span>
+          <div>
+            <h2>The budget that counted keys</h2>
+            <p class="kicker">
+              A guard that would have refused the first regeneration it was written for.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Every child table write refuses to lose more than 80 percent of the table in one run.
+          The published <code>QuestRequirements</code> table holds 794 prerequisite edges. Part
+          1 measured that loss over each row's computed key.
+        </p>
+        <p>
+          A row key is not what a row is about. The key of a prerequisite edge covers its
+          <code>GroupId</code>. Every published non-Collector row carries a
+          <code>GroupId</code> of 1 or more from the old wiki parser, and the new pipeline emits
+          0. Collector's 248 rows use an older concatenation scheme entirely.
+        </p>
+        <p>
+          So on the first 1.1 run not one published key appears in the new set. The budget reads
+          794 of 794 gone, 100 percent, and refuses the run. That run deletes no prerequisite
+          edge for that reason at all. It re-keys them.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/RefreshDataService.cs</span><span>RefreshGuards.AssertDeleteBudgetHeld</span></div>
+          <pre><span class="cmt">// The parameters are now each row's natural identity, never its computed key.</span>
+public static void AssertDeleteBudgetHeld(
+    string table,
+<span class="del">-   IEnumerable&lt;string&gt; existingIds,</span>
+<span class="del">-   IEnumerable&lt;string&gt; newIds,</span>
+<span class="add">+   IEnumerable&lt;string&gt; existingIdentities,</span>
+<span class="add">+   IEnumerable&lt;string&gt; newIdentities,</span>
+    int rowsToDelete,
+    Action&lt;string&gt;? progress)
+{
+    var lost = new HashSet&lt;string&gt;(existingIdentities, StringComparer.Ordinal);
+    var existingCount = lost.Count;
+    if (existingCount &lt; MinRowsForDeleteBudget)
+        return;
+
+    lost.ExceptWith(newIdentities);
+    var share = (double)lost.Count / existingCount;
+    if (share &lt;= MaxRowsDeletedShare)
+    {
+<span class="add">+       // The gap between the two numbers is what makes a re-key visible.</span>
+        progress?.Invoke($"{table}: {lost.Count} of {existingCount} row identities are gone "
+            + $"({share:P1}); {rowsToDelete} rows deleted by key");
+        return;
+    }
+
+    throw new InvalidOperationException(/* names the share and the limit */);
+}</pre>
+        </div>
+
+        <p>
+          A prerequisite edge is now its <code>(QuestId, RequiredQuestId)</code> pair. A loyalty
+          gate is its <code>(QuestId, TraderId)</code> pair. <code>Items</code> and
+          <code>Traders</code> pass the record id, which is already upstream's own identity.
+        </p>
+        <p>
+          Measured that way against <code>data/v1/tarkov_data.db</code> and the live task set,
+          the first 1.1 run loses 596 of 794 pairs. That is 75.1 percent against an 80 percent
+          ceiling. The margin is real and thin, and the code comment says so with the numbers.
+        </p>
+        <p>
+          The ceiling stays loose on purpose. Patch 1.1 replaces the wiki's chains with the
+          game's, and it takes the Kappa flag off all but 13 quests. Collector's synthesized
+          list falls from 248 rows to 12. A tighter ceiling refuses the run this pipeline was
+          rebuilt for.
+        </p>
+      </section>
+
+      <!-- ===================== LAB A ===================== -->
+      <div class="lab" id="lab-a">
+        <div class="lab-head">
+          <span class="lab-tag">Lab A</span>
+          <h3>The first run that would not run</h3>
+          <p class="sub">
+            The shipped rule is
+            <code>RefreshGuards.AssertDeleteBudgetHeld</code>, pinned by
+            <code>The_delete_budget_passes_a_run_that_only_re_keys_the_published_prerequisite_table</code>
+            and by
+            <code>The_delete_budget_still_refuses_the_published_prerequisite_table_collapsing_to_one_edge</code>.
+            The table is the published one, with 794 prerequisite edges. Move the slider to 159
+            and then to 158. The comparison is <code>share &lt;= 0.80</code>, and 794 rows have no
+            position that lands on 80 percent exactly, so the boundary falls between those two
+            steps. One reads 79.97 percent and passes. The next reads 80.10 percent and does not.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">Measured over</span>
+            <div class="seg" id="labAMeasure">
+              <button type="button" data-a-measure="key" data-tone="bad" aria-pressed="true">the computed row key</button>
+              <button type="button" data-a-measure="identity" data-tone="good">the natural identity</button>
+            </div>
+            <span class="ctl-label">Edges the new run still produces</span>
+            <div class="slider-wrap">
+              <input type="range" id="labAKept" min="0" max="794" step="1" value="198" aria-label="Published edges the new run still produces">
+              <span class="slider-read" id="labAKeptRead">198 of 794</span>
+            </div>
+          </div>
+
+          <div class="cols">
+            <div class="col" id="labAKeyCol">
+              <h4>Measured over the computed row key</h4>
+              <p class="num" id="labAKeyNum">-</p>
+              <p id="labAKeyNote">-</p>
+            </div>
+            <div class="col" id="labAIdCol">
+              <h4>Measured over the natural identity</h4>
+              <p class="num" id="labAIdNum">-</p>
+              <p id="labAIdNote">-</p>
+            </div>
+          </div>
+
+          <div class="meter" id="labAMeter"><i id="labABar"></i><span class="ceiling" id="labACeiling"></span></div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">Identities gone</p>
+              <p class="v" id="labALost">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Share measured</p>
+              <p class="v" id="labAShare">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Rows the write deletes by key</p>
+              <p class="v" id="labADeleted">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">The run</p>
+              <p class="v" id="labAOutcome">-</p>
+            </div>
+          </div>
+
+          <div class="tbl">
+            <table>
+              <thead>
+                <tr><th>Published row</th><th>Key it carries</th><th>Key the new run mints</th><th>Natural identity</th><th>In the new set</th></tr>
+              </thead>
+              <tbody id="labARows"></tbody>
+            </table>
+          </div>
+
+          <div class="verdict" id="labAVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== 3 ===================== -->
+      <section id="ch3">
+        <div class="chapter-head">
+          <span class="chapter-num">03</span>
+          <div>
+            <h2>Asking by the thing that rotates</h2>
+            <p class="kicker">
+              The resolver exists because patch 1.1 moves titles. One of its steps looked a
+              quest up by title.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          One wiki page can have several game records behind it. <code>ChooseAmong</code>
+          decides which record the page takes, by a fixed order of evidence. Step 3 is "the
+          record the user's recorded progress has already been matching".
+        </p>
+        <p>
+          Part 1 found that record by the page title. The index it asked also answered for the
+          title a row's key was minted from. Two failures follow from that, and neither leaves
+          a mark in the published data.
+        </p>
+        <ul>
+          <li>
+            A renamed page finds nothing. The lookup asks for the new title, and the previous
+            row carries the old one. Step 3 falls through, step 4 takes the newest record, and
+            the page mints a fresh key.
+          </li>
+          <li>
+            A page whose title changed owner finds the wrong row. Patch 1.1 handed eight titles
+            to a different quest. The lookup answers with the old owner's row, and files one
+            quest's recorded progress against another.
+          </li>
+        </ul>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/QuestIdentityResolver.cs</span><span>ChooseAmong, step 3</span></div>
+          <pre><span class="cmt">// 3. The record a previous row already holds: the one the user's recorded</span>
+<span class="cmt">//    progress and log events have been matching. Found by the game id, never by</span>
+<span class="cmt">//    the page title, because the title is what a patch rotates.</span>
+<span class="del">- var previousId = previous.ByPageTitle(title)?.BsgId;</span>
+<span class="del">- var previouslyHeld = candidates.FirstOrDefault(c =></span>
+<span class="del">-     string.Equals(c.Id, previousId, StringComparison.OrdinalIgnoreCase));</span>
+<span class="del">- if (previouslyHeld != null)</span>
+<span class="del">-     return (previouslyHeld, CollisionRule.PreviousRow);</span>
+<span class="add">+ var previouslyHeld = candidates.Where(c => previous.ByBsgId(c.Id) != null).ToList();</span>
+<span class="add">+ if (previouslyHeld.Count > 0)</span>
+<span class="add">+     return (NewestId(previouslyHeld), CollisionRule.PreviousRow);</span>
+
+<span class="cmt">// 4. Nothing to go on: the record the game created most recently.</span>
+return (NewestId(candidates), CollisionRule.NewestId);</pre>
+        </div>
+
+        <p>
+          The fix is not only the new expression. The title index is deleted. What remains is
+          <code>ByExactName</code>, which answers for a row's own name and never for the title
+          a key was minted from. Only the seasonal pages use it, because those pages have no
+          game record to match on.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/QuestIdentityResolver.cs</span><span>PreviousRowIndex</span></div>
+          <pre><span class="del">- _byName.TryAdd(row.Name, row);</span>
+<span class="del">-</span>
+<span class="del">- // Also reachable by the title the row key was minted from, which is what a</span>
+<span class="del">- // row renamed by an earlier refresh still answers to.</span>
+<span class="del">- var mintedTitle = WikiQuestIdentity.TitleOf(row.Id);</span>
+<span class="del">- if (mintedTitle != null)</span>
+<span class="del">-     _byName.TryAdd(mintedTitle, row);</span>
+<span class="add">+ _byRowName.TryAdd(row.Name, row);</span></pre>
+        </div>
+
+        <p>
+          Step 1 changed for a related reason. It recognises a BEAR record and a USEC record
+          behind one page, and part 1 took whichever id sorted first. Each page of a chain is
+          decided on its own, so that rule could take BEAR for Part 1 and USEC for Part 2.
+        </p>
+        <p>
+          Part 2's prerequisite would then name a BEAR record the refresh never imported.
+          <code>BuildRequirements</code> drops a prerequisite it cannot resolve, and it does so
+          without a word. The app would then offer Part 2 to a player who has not started Part
+          1. The side is now pinned to BEAR, which is what all four published faction pages
+          resolve to today.
+        </p>
+        <p>
+          Step 1 also stopped requiring the pair to be the whole candidate set. A stale third
+          record must not turn a shared page into a one faction quest. The row would then carry
+          a <code>Faction</code> value that hides the quest from half the installs.
+        </p>
+      </section>
+
+      <!-- ===================== LAB B ===================== -->
+      <div class="lab" id="lab-b">
+        <div class="lab-head">
+          <span class="lab-tag">Lab B</span>
+          <h3>Which record the page takes</h3>
+          <p class="sub">
+            Both cases are test fixtures.
+            <code>A_page_whose_title_changed_hands_does_not_take_the_old_owners_record</code>
+            is the Sew it Good rotation, with the real game ids.
+            <code>A_renamed_page_still_takes_the_record_its_previous_row_holds</code> is the
+            renamed page. The created dates are read the way
+            <code>CreationTimeOf</code> reads them, from the first eight hex digits of the id.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">Step 3 asks</span>
+            <div class="seg" id="labBRule">
+              <button type="button" data-b-rule="title" data-tone="bad" aria-pressed="true">by the page title</button>
+              <button type="button" data-b-rule="id" data-tone="good">by the game id</button>
+            </div>
+            <span class="ctl-label">Case</span>
+            <div class="seg" id="labBCase">
+              <button type="button" data-b-case="reused" aria-pressed="true">a title changed owner</button>
+              <button type="button" data-b-case="renamed">a page was renamed</button>
+            </div>
+          </div>
+
+          <div class="lanes">
+            <div class="lane">
+              <div class="lane-head">
+                <span id="labBPageName">The page</span>
+                <span class="rev" id="labBCandCount">2 records</span>
+              </div>
+              <div class="tbl">
+                <table>
+                  <thead>
+                    <tr><th>Game record</th><th>Created</th><th>Held by a previous row</th><th>Taken by the page</th></tr>
+                  </thead>
+                  <tbody id="labBCands"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="lanes" style="margin-top:14px;">
+            <div class="lane">
+              <div class="lane-head">
+                <span>The previous database</span>
+                <span class="lane-note">what each published row becomes</span>
+              </div>
+              <div class="tbl">
+                <table>
+                  <thead>
+                    <tr><th>Published row</th><th>Key minted from</th><th>External id</th><th>What this run does with it</th></tr>
+                  </thead>
+                  <tbody id="labBPrev"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">Record the page takes</p>
+              <p class="v" id="labBChosen">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Step that decided</p>
+              <p class="v" id="labBRuleOut">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Row key published</p>
+              <p class="v" id="labBKey">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Recorded progress</p>
+              <p class="v" id="labBProgress">-</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labBVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== 4 ===================== -->
+      <section id="ch4">
+        <div class="chapter-head">
+          <span class="chapter-num">04</span>
+          <div>
+            <h2>Blind to the rows it measured</h2>
+            <p class="kicker">
+              A carry-over guard whose denominator excluded exactly the rows that cannot be
+              carried.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          <code>AssertMatchRateHeld</code> refuses a run that would lose the game record of
+          more than 5 percent of published quests. It measured that over the rows that already
+          carry an external id.
+        </p>
+        <p>
+          A row with no external id cannot be carried at all. Nothing in a run ties its new
+          title to it. Those rows are the ones a refresh orphans, and they were the ones the
+          guard could not see. They were absent from the numerator and from the denominator.
+        </p>
+        <p>
+          The refresh separately refuses to start when more than 10 percent of previous quests
+          carry no external id. Ten percent of 488 published quests is 48 rows. So up to 48
+          quests could lose their row key at a measured loss of 0 percent.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/RefreshDataService.cs</span><span>RefreshGuards.AssertMatchRateHeld</span></div>
+          <pre><span class="cmt">// The match-rate measure, unchanged, over the rows that carry an external id.</span>
+var previouslyMatched = previousQuests.Where(q => !string.IsNullOrEmpty(q.BsgId)).ToList();
+if (previouslyMatched.Count > 0) { <span class="cmt">/* ... MaxLostMatches, 5 percent ... */</span> }
+
+<span class="add">+ // The resolver's own list rather than a second computation of it. Two copies of</span>
+<span class="add">+ // one rule are two answers waiting to disagree.</span>
+<span class="add">+ var orphaned = resolution.UncarriedPreviousRows;</span>
+<span class="add">+ var keyShare = (double)orphaned.Count / previousQuests.Count;</span>
+<span class="add">+</span>
+<span class="add">+ if (keyShare > MaxLostRowKeys)</span>
+<span class="add">+ {</span>
+<span class="add">+     throw new InvalidOperationException(</span>
+<span class="add">+         $"{orphaned.Count} of {previousQuests.Count} published quests ({keyShare:P0}) would "</span>
+<span class="add">+         + "lose their row key, over the limit: " + /* the first ten, by name */ "...");</span>
+<span class="add">+ }</span></pre>
+        </div>
+
+        <p>
+          The second measure counts every previous row that no imported quest kept the key of.
+          Those are exactly the rows the write deletes. The denominator is every published
+          quest, so a row with no external id is inside it.
+        </p>
+        <p>
+          The list itself comes from the resolver, which already builds it for the run log. The
+          error names the first ten rows. A run that loses quests now says which quests, rather
+          than reporting a share nobody can act on.
+        </p>
+      </section>
+
+      <!-- ===================== LAB C ===================== -->
+      <div class="lab" id="lab-c">
+        <div class="lab-head">
+          <span class="lab-tag">Lab C</span>
+          <h3>A loss measured at zero</h3>
+          <p class="sub">
+            The shipped guards are
+            <code>AssertPreviousQuestsAreBackfilled</code> and
+            <code>AssertMatchRateHeld</code>, pinned by
+            <code>Published_quests_losing_their_row_key_fail_the_run_even_with_no_external_id</code>.
+            The table is the published one: 488 quests. The row-key limit is 5 percent, and the
+            comparison is <code>keyShare &gt; 0.05</code>, so 24 rows pass and 25 rows do not.
+            At 49 rows the earlier guard stops the run before it starts.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">The run measures</span>
+            <div class="seg" id="labCGuard">
+              <button type="button" data-c-guard="match" data-tone="bad" aria-pressed="true">the match rate alone</button>
+              <button type="button" data-c-guard="both" data-tone="good">the match rate and the row keys</button>
+            </div>
+            <span class="ctl-label">Published quests with no external id</span>
+            <div class="slider-wrap">
+              <input type="range" id="labCMissing" min="0" max="49" step="1" value="25" aria-label="Published quests carrying no external id">
+              <span class="slider-read" id="labCMissingRead">25 of 488</span>
+            </div>
+          </div>
+
+          <div class="reads" id="labCReads"></div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">Quests that lose their row key</p>
+              <p class="v" id="labCLost">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">The match rate reports</p>
+              <p class="v" id="labCMatch">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">The row-key measure reports</p>
+              <p class="v" id="labCKeys">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">The run</p>
+              <p class="v" id="labCOutcome">-</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labCVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== 5 ===================== -->
+      <section id="ch5">
+        <div class="chapter-head">
+          <span class="chapter-num">05</span>
+          <div>
+            <h2>A receipt written too early</h2>
+            <p class="kicker">
+              An ETag is a claim that a file on this machine holds a named upstream revision.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The client reads the game rules from json.tarkov.dev. It stores the ETag of each file
+          it fetched, so the next run may be told 304 and keep what it has. Part 1 recorded
+          those ETags as soon as the response parsed.
+        </p>
+        <p>
+          Parsing is not the last step that can fail. The caller still has to write the parsed
+          models to a cache file. If that write fails, the ETag store names a revision no file
+          on the machine holds.
+        </p>
+        <p>
+          The next run then sends <code>If-None-Match</code>, upstream answers 304, and the run
+          keeps the very copy the failure was meant to replace. It also re-stamps the file's
+          write time, so the seven day staleness guard reads green. The refresh publishes a
+          pre-patch task set and reports success.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/TarkovDevJsonClient.cs</span><span>FetchTasksAsync, and the fetch result</span></div>
+          <pre>progress?.Invoke($"Fetched {quests.Count} tasks from json.tarkov.dev");
+<span class="del">- CommitETags(group);</span>
+<span class="del">- return new TarkovDevFetch&lt;List&lt;TarkovDevQuestCacheItem&gt;&gt;(quests, group.SourceLastModified);</span>
+<span class="add">+ return Fetched(quests, group);</span>
+
+<span class="cmt">// Hands the caller a fetch whose ETags are recorded only when it says the cache</span>
+<span class="cmt">// file built from the value reached the disk.</span>
+<span class="add">+ private TarkovDevFetch&lt;T&gt; Fetched&lt;T&gt;(T value, EndpointGroup group) =></span>
+<span class="add">+     new(value, group.SourceLastModified) { ETagCommit = () => CommitETags(group) };</span></pre>
+        </div>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/TarkovDevDataService.cs</span><span>RunCachePartAsync</span></div>
+          <pre>var fetched = await fetch(File.Exists(file.Path));
+if (fetched == null)
+{
+    MarkVerified(file.Path);          <span class="cmt">// upstream said 304, so the file is current</span>
+    value = await file.LoadAsync(cancellationToken);
+    kept = true;
+}
+else
+{
+    await file.SaveAsync(fetched.Value, fetched.SourceLastModified, cancellationToken);
+<span class="add">+   fetched.CommitETags();            // only now, with the bytes on disk</span>
+    value = fetched.Value;
+    kept = false;
+}</pre>
+        </div>
+
+        <p>
+          Not calling <code>CommitETags</code> costs one unconditional fetch. It never costs
+          correctness. That is the safe direction for a caller to get wrong, and the reason the
+          decision sits with the caller rather than inside the client.
+        </p>
+      </section>
+
+      <!-- ===================== LAB D ===================== -->
+      <div class="lab" id="lab-d">
+        <div class="lab-head">
+          <span class="lab-tag">Lab D</span>
+          <h3>The 304 that certifies old data</h3>
+          <p class="sub">
+            The shipped order is <code>SaveAsync</code>, then
+            <code>TarkovDevFetch.CommitETags</code>, pinned by
+            <code>An_etag_is_not_recorded_when_the_cache_file_could_not_be_written</code> and
+            by <code>An_uncommitted_fetch_leaves_the_next_run_asking_unconditionally</code>.
+            Make the write fail, then compare the two orders. The step where the two worlds
+            separate is step 5.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">The ETag is recorded</span>
+            <div class="seg" id="labDOrder">
+              <button type="button" data-d-order="parse" data-tone="bad" aria-pressed="true">when the parse succeeds</button>
+              <button type="button" data-d-order="write" data-tone="good">when the file is on disk</button>
+            </div>
+            <span class="ctl-label">The cache write</span>
+            <div class="seg" id="labDWrite">
+              <button type="button" data-d-write="fail" data-tone="bad" aria-pressed="true">fails</button>
+              <button type="button" data-d-write="ok" data-tone="good">succeeds</button>
+            </div>
+            <span class="ctl-label">Step</span>
+            <div class="slider-wrap">
+              <input type="range" id="labDStep" min="0" max="8" step="1" value="8" aria-label="Step of the two runs">
+              <span class="slider-read" id="labDStepRead">step 8</span>
+            </div>
+          </div>
+
+          <div class="lanes">
+            <div class="lane">
+              <div class="lane-head">
+                <span>Run one, and the run that follows it</span>
+                <span class="lane-note">the current step is gold</span>
+              </div>
+              <div class="steps" id="labDSteps"></div>
+            </div>
+          </div>
+
+          <div class="reads" id="labDReads" style="margin-top:14px;"></div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">The stored ETag</p>
+              <p class="v" id="labDEtag">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">The cache file holds</p>
+              <p class="v" id="labDCache">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">The staleness guard</p>
+              <p class="v" id="labDFresh">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">The refresh publishes</p>
+              <p class="v" id="labDPublish">-</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labDVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== 6 ===================== -->
+      <section id="ch6">
+        <div class="chapter-head">
+          <span class="chapter-num">06</span>
+          <div>
+            <h2>Never reading the file that ships</h2>
+            <p class="kicker">
+              Four guards that certified something other than the thing they were guarding.
+            </p>
+          </div>
+        </div>
+
+        <h3>The constraints read the build, not the file</h3>
+        <p>
+          The publish constraints state what every installed build can read: the requirement
+          type vocabulary, the faction vocabulary, one row per prerequisite, a non-empty
+          normalized name that matches the row key. Part 1 checked them over the rows a refresh
+          had just built in memory.
+        </p>
+        <p>
+          The build phase is not the only way a row reaches the file. A hand edit in the
+          editor's grid writes straight to the database. So does a backfill run, and so does
+          any correction made after a refresh. The generic UPDATE can rewrite
+          <code>Quests.Name</code> and leave <code>NormalizedName</code> behind.
+        </p>
+        <p>
+          The rules moved to <code>PublishConstraints</code>, which holds one declaration and
+          two readers. One reader takes the rows a refresh built. The other opens a candidate
+          database file read only. The publish path now runs them three times. It runs them in
+          the comparison, and again against the file it is about to copy. It runs them a third
+          time over the endpoint copy, before that copy is mirrored into <code>Assets</code>.
+        </p>
+        <p>
+          The file reader feature detects every column, the same way the app does. A database
+          published before <code>Quests.NormalizedName</code> existed is checked the way the app
+          reads it, from the name, rather than refused for lacking the column.
+          <code>data/v1/tarkov_data.db</code> is in that older shape and passes the gate as
+          published, which <code>PublishConstraintTests</code> asserts against the file itself.
+        </p>
+
+        <h3>A catch that admitted 320 pages</h3>
+        <p>
+          The crawl excludes event, seasonal and legacy categories. The loop that reads them
+          caught every exception and moved on, with the comment "the category may not exist".
+        </p>
+        <p>
+          MediaWiki answers a missing category with an empty member list and a 200, so the
+          catch never covered that case. What it covered was a timeout. One timed out request
+          turned the whole exclusion list into nothing.
+        </p>
+        <p>
+          Historical content alone holds 320 pages inside Category:Quests, and 35 of them still
+          have a live tarkov.dev record. Those 35 would publish as real quests. The read now
+          fails the crawl, and the message says what continuing would publish.
+        </p>
+
+        <h3>A canary that only sang at zero</h3>
+        <p>
+          The seasonal marker guard fired when no page matched. A wiki edit that rewords 17 of
+          the 18 KORD BREACH pages leaves one matching, and the guard stays quiet. The other 17
+          are held back and deleted with their objectives and prerequisites.
+        </p>
+        <p>
+          None of those pages carries an external id, so no other guard can see them. The
+          measure is now a share of the pages that mention a seasonal mode, and the limit is 25
+          percent.
+        </p>
+
+        <h3>A flag older than the text it described</h3>
+        <p>
+          <code>IsSeasonal</code> was stored in the page cache beside the page text. It was
+          assigned only where content is fetched, and the crawl skips content for every page
+          whose revision is unchanged.
+        </p>
+        <p>
+          So a cache written before the marker existed answered false forever, while the
+          refresh read the page text and imported the quest. The field is deleted. Both readers
+          now derive the flag from <code>PageContent</code> through
+          <code>ExtractIsSeasonal</code>, which is the only arrangement in which they cannot
+          disagree.
+        </p>
+        <p>
+          The cache also kept every page it had ever seen. A page the quest list no longer names
+          stayed in it and kept publishing as a live quest. <code>PruneCacheTo</code> drops
+          those entries, and it refuses to prune to an empty crawl.
+        </p>
+      </section>
+
+      <!-- ===================== 7 ===================== -->
+      <section id="ch7">
+        <div class="chapter-head">
+          <span class="chapter-num">07</span>
+          <div>
+            <h2>One prerequisite, two statuses</h2>
+            <p class="kicker">
+              Fourteen 1.1 prerequisites name more than one satisfying status. A row carries
+              one.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          A prerequisite row is keyed by the <code>(quest, prerequisite, group)</code> triple.
+          Two rows for one status pair would collide on that key rather than express an
+          alternative. So both statuses have to fit on one row.
+        </p>
+        <p>
+          Ten of the fourteen are "active or complete". <code>Accept</code> is satisfied by an
+          active prerequisite and by a completed one, so those ten collapse onto
+          <code>Accept</code> with nothing left over and nothing lost.
+        </p>
+        <p>
+          The other four are "complete or failed", and no single type covers that. Part 1
+          collapsed them onto <code>Complete</code>. Two of the four ship as working OR groups
+          in the published database today, so the collapse regresses behaviour that players
+          have right now.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/RefreshDataService.cs</span><span>MapRequirementStatuses</span></div>
+          <pre><span class="cmt">// The most permissive type wins RequirementType, and only a status it does not</span>
+<span class="cmt">// already satisfy reaches AltRequirementType.</span>
+var named = statuses.Select(s => MapRequirementStatus(s, questTitle)).Distinct().ToList();
+var primary = named.Max();
+
+var leftover = named.Where(s => !Satisfies(primary, s)).Distinct().ToList();
+if (leftover.Count > 1)
+    throw new InvalidOperationException(<span class="cmt">/* a widened vocabulary needs a column */</span>);
+
+return new MappedRequirement(
+    primary.ToString(),
+    leftover.Count == 1 ? leftover[0].ToString() : null);
+
+<span class="cmt">// Accept subsumes Complete, and nothing else subsumes anything but itself.</span>
+private static bool Satisfies(RequirementStatus type, RequirementStatus other) =>
+    type == other || (type == RequirementStatus.Accept &amp;&amp; other == RequirementStatus.Complete);</pre>
+        </div>
+
+        <p>
+          Both mechanisms ship. <code>AltRequirementType</code> is an additive column that
+          carries the second status, and a build that reads it is satisfied by either. It
+          reaches nothing until an app release reads it.
+        </p>
+        <p>
+          The other half reaches the field now. <code>ExpandExclusiveAlternatives</code> writes
+          the same fact as an OR group: this prerequisite, or the quest whose completion fails
+          it, both at <code>Complete</code>. Every installed build has understood OR groups
+          since before this change.
+        </p>
+        <p>
+          Which quest is the other branch comes from upstream's own fail conditions, not from a
+          transcription. The expansion is refused, and reported, whenever the group would not be
+          readable as written.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">Why the writer refuses a second row</p>
+          <p>
+            The installed reader keys incoming prerequisite rows by <code>TaskId</code> alone
+            and drops every later row naming the same prerequisite, <code>GroupId</code> and
+            all. So two rows for one pair publish as one row, and which one survives is the row
+            order. An OR group can lose a branch and become a group that nothing satisfies.
+            <code>PublishConstraints</code> refuses that shape whatever produced it.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== 8 ===================== -->
+      <section id="ch8">
+        <div class="chapter-head">
+          <span class="chapter-num">08</span>
+          <div>
+            <h2>One rule, four spellings</h2>
+            <p class="kicker">
+              The normalized name is the key recorded progress is filed under. Four places
+              spelled it, and they disagreed.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The app derives a quest's normalized name in SQL when the column is absent. It derives
+          it in C# when the column exists but a row's value is NULL. The editor writes the stored
+          column from a third spelling. The two end to end test suites carried a fourth.
+        </p>
+        <p>
+          The SQL is the rule, because it is what produced the values that recorded progress is
+          filed under today. It replaces spaces with dashes, drops the ASCII apostrophe and the
+          period, and lowers A to Z.
+        </p>
+        <p>
+          It lowers nothing else. The bundled SQLite is built without ICU, so its
+          <code>LOWER</code> leaves every non-ASCII letter alone. The C# twin called
+          <code>ToLowerInvariant</code>, and it also stripped the comma, the question mark, the
+          exclamation mark, the colon and the quote.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/QuestDbService.cs</span><span>GenerateNormalizedName</span></div>
+          <pre><span class="del">- return name.ToLowerInvariant()</span>
+<span class="del">-     .Replace(" ", "-").Replace("'", "").Replace("'", "").Replace(".", "")</span>
+<span class="del">-     .Replace(",", "").Replace("?", "").Replace("!", "").Replace(":", "").Replace("\"", "");</span>
+<span class="add">+ var result = new StringBuilder(name.Length);</span>
+<span class="add">+ foreach (var c in name)</span>
+<span class="add">+ {</span>
+<span class="add">+     switch (c)</span>
+<span class="add">+     {</span>
+<span class="add">+         case ' ': result.Append('-'); break;</span>
+<span class="add">+         case '\'': case '.': break;</span>
+<span class="add">+         default: result.Append(c is &gt;= 'A' and &lt;= 'Z' ? (char)(c + ('a' - 'A')) : c); break;</span>
+<span class="add">+     }</span>
+<span class="add">+ }</span>
+<span class="add">+ return result.ToString();</span></pre>
+        </div>
+
+        <p>
+          A row whose stored value is NULL was therefore keyed under a name nothing else
+          computes. Nothing throws and nothing shows red. The completion simply stops appearing.
+        </p>
+        <p>
+          <code>QuestNameNormalizationParityTests</code> holds the three spellings together. One
+          of its tests has SQLite evaluate the app's own expression over every published quest
+          name and compares the result with the C# fallback. That test cannot be fooled by a
+          shared misunderstanding of what SQLite does.
+        </p>
+
+        <h3>Tests that proved nothing</h3>
+        <p>
+          Several existing tests were shown to be inert before they were tightened. Each of
+          these mutations left the whole suite green: renaming
+          <code>PageCollision.ChosenTaskId</code>, nulling the match overrides file, and
+          restoring the swallowed <code>catch</code> of chapter 6.
+        </p>
+        <p>
+          The fourth spelling of the name rule lived in the end to end suites. Both carried a
+          local copy that used <code>ToLowerInvariant</code>, which lowers 1,146 BMP code points
+          that the app's SQL leaves alone.
+        </p>
+        <p>
+          The consequence is worse than a wrong assertion. Both suites take the first carried
+          rename they are offered, and a title with a cased non-ASCII letter reads as one. A
+          single false positive displaces every real case, and the suite goes green having
+          driven an ordinary quest. The copy is gone, and
+          <code>E2EFixtureGuardTests</code> pins the reader that replaced it.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">Read this file closely</p>
+          <p>
+            During the review a fixer ran <code>git checkout --</code> on
+            <code>RefreshDataService.cs</code> and destroyed about 1,560 lines of uncommitted
+            work. The file was reconstructed by replaying the recorded edits. It was verified
+            structurally, behaviourally and by its metrics. Behavioural equivalence can be
+            claimed. Byte equality cannot, because no copy from before the loss exists to
+            compare against.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== QUIZ ===================== -->
+      <section id="quiz">
+        <div class="chapter-head">
+          <span class="chapter-num">09</span>
+          <div>
+            <h2>Comprehension gate</h2>
+            <p class="kicker">
+              There are eight questions. Each one needs the reasoning, and not the words. The
+              approval checklist below opens when all eight answers are correct. Every answer
+              gives an explanation, so you can read the chapter again.
+            </p>
+          </div>
+        </div>
+
+        <div class="quiz-intro">
+          <div class="quiz-score" id="quizScore">0/8</div>
+          <div>
+            <strong>Every question here is about a guard that reported success.</strong>
+            <p style="margin:4px 0 0;color:#c2c2c2;">
+              Questions 4 and 5 are the important ones. Both name a way this pipeline publishes
+              data that looks correct and is not. If you cannot answer them, you did not review
+              this change. Answer each question, read the explanation, and correct your
+              understanding.
+            </p>
+          </div>
+        </div>
+
+        <div id="quizList"></div>
+
+        <div class="gate is-locked" id="gate">
+          <h3 id="gateTitle">Approval checklist: locked</h3>
+          <p id="gateBody">Answer all eight questions correctly to unlock the reviewer checklist.</p>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          Sources. The product decision is
+          <code>docs/decisions/feature-quest-data-1-1-refresh.md</code>. The technical design is
+          <code>docs/decisions/feature-quest-data-1-1-refresh.spec.md</code>, which this PR
+          extends. The research both rest on is
+          <code>docs/assessments/2026-08-quest-data-1-1-refresh-grounds.md</code>. Part 1 of
+          this guide is <code>docs/2026-08-quest-data-1-1-refresh-code-guide.html</code>.
+        </p>
+        <p>
+          The labs obey the same decision logic as the code, and they use the fixtures and the
+          numbers of the tests. But they are examples, and they are not the released code.
+        </p>
+        <p>
+          These tests hold the shipped behaviour. <code>RefreshGuardTests</code> holds the
+          delete budget of lab A and the row-key measure of lab C. It also holds the exclusion
+          category read and the seasonal canary of chapter 6, and the prerequisite mapping of
+          chapter 7. <code>QuestIdentityResolverTests</code> holds the collision order of lab B
+          and the identity carry-over.
+        </p>
+        <p>
+          <code>TarkovDevJsonClientTests</code> holds the ETag order of lab D.
+          <code>PublishConstraintTests</code> holds the constraints of chapter 6 over both
+          sources, and over the published file itself.
+          <code>QuestNameNormalizationParityTests</code> and <code>E2EFixtureGuardTests</code>
+          hold the name rule of chapter 8. <code>BsgIdBackfillTests</code> holds the hand bridge
+          that this refresh renames.
+        </p>
+        <p>
+          Two limits are on the record. <code>LegacySmokeE2ETests</code> has still never
+          executed, so treat it as unverified code.
+          <code>RefreshGuards.MaxTradersMissing</code> is the one threshold with no test. The PR
+          body carries the full list of residuals.
+        </p>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+
+    function bindSegment(root, attr, onPick) {
+      var buttons = Array.prototype.slice.call(root.querySelectorAll("[" + attr + "]"));
+      buttons.forEach(function (b) {
+        b.addEventListener("click", function () {
+          buttons.forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+          onPick(b.getAttribute(attr));
+        });
+      });
+    }
+
+    function say(node, tone, title, body) {
+      node.setAttribute("data-tone", tone);
+      node.innerHTML = "";
+      node.appendChild(el("b", null, title));
+      node.appendChild(document.createTextNode(body));
+    }
+
+    function chip(parent, text, cls) {
+      parent.appendChild(el("span", "step" + (cls ? " " + cls : ""), text));
+    }
+
+    function row(parent, key, value, tone, note) {
+      var r = el("div", "read-row");
+      r.appendChild(el("span", "rk", key));
+      var v = el("span", "rv", value);
+      if (tone) v.setAttribute("data-tone", tone);
+      r.appendChild(v);
+      r.appendChild(el("span", "ro", note || ""));
+      parent.appendChild(r);
+    }
+
+    function trow(tbody, cells, rowTone) {
+      var tr = el("tr");
+      if (rowTone) tr.setAttribute("data-row", rowTone);
+      cells.forEach(function (c) {
+        var td = el("td", null, c.t);
+        if (c.tone) td.setAttribute("data-tone", c.tone);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    }
+
+    function setTone(node, tone) {
+      if (tone) node.setAttribute("data-tone", tone);
+      else node.removeAttribute("data-tone");
+    }
+
+    function pct(share) { return (share * 100).toFixed(2) + "%"; }
+
+    /* ============================================================
+       LAB A. RefreshGuards.AssertDeleteBudgetHeld, over the two
+       projections of the published QuestRequirements table.
+       ============================================================ */
+
+    var A_TOTAL = 794;                 // published prerequisite edges
+    var A_CEILING = 0.80;              // MaxRowsDeletedShare
+    var A_MIN_ROWS = 10;               // MinRowsForDeleteBudget
+    var A = { measure: "key", kept: 198 };
+
+    // The guard itself. `existing` and `next` are the projections the caller
+    // passes, and the comparison is the shipped one: share <= MaxRowsDeletedShare.
+    function aBudget(existing, next) {
+      var lostCount = 0;
+      var i;
+      var inNext = {};
+      for (i = 0; i < next.length; i++) inNext[next[i]] = true;
+      var seen = {};
+      var existingCount = 0;
+      for (i = 0; i < existing.length; i++) {
+        if (seen[existing[i]]) continue;
+        seen[existing[i]] = true;
+        existingCount++;
+        if (!inNext[existing[i]]) lostCount++;
+      }
+      if (existingCount < A_MIN_ROWS) return { applies: false, lost: 0, existing: existingCount, share: 0, passes: true };
+      var share = lostCount / existingCount;
+      return { applies: true, lost: lostCount, existing: existingCount, share: share, passes: share <= A_CEILING };
+    }
+
+    // The two projections of the same run. Every published key is minted by a
+    // scheme this pipeline no longer produces, so no key survives; the pair a
+    // row is about survives whenever the run still produces that edge.
+    function aProjection(kind, kept) {
+      var existing = [];
+      var next = [];
+      var i;
+      for (i = 0; i < A_TOTAL; i++) existing.push(kind === "key" ? "publishedKey:" + i : "edge:" + i);
+      for (i = 0; i < kept; i++) next.push(kind === "key" ? "mintedKey:" + i : "edge:" + i);
+      return aBudget(existing, next);
+    }
+
+    function aLandmark(kept) {
+      if (kept === 198) return "the first 1.1 run";
+      if (kept === 174) return "the Kappa set collapsing alone";
+      if (kept === 159) return "the last value the budget allows";
+      if (kept === 158) return "the first value the budget refuses";
+      if (kept === 1) return "a collapsed parse";
+      if (kept === 0) return "an empty list";
+      return "";
+    }
+
+    var A_ROWS = [
+      { at: 0, what: "a wiki-parsed edge", old: "RowHash(quest, prereq, group 1)", now: "RowHash(quest, prereq, group 0)" },
+      { at: 1, what: "another wiki-parsed edge", old: "RowHash(quest, prereq, group 2)", now: "RowHash(quest, prereq, group 0)" },
+      { at: 2, what: "a Collector edge", old: "collectorId_questId", now: "RowHash(collector, quest, group 0)" },
+      { at: 793, what: "an edge 1.1 removes", old: "RowHash(quest, prereq, group 1)", now: "not minted" }
+    ];
+
+    var aKeptRead = document.getElementById("labAKeptRead");
+    var aKeyCol = document.getElementById("labAKeyCol");
+    var aIdCol = document.getElementById("labAIdCol");
+    var aKeyNum = document.getElementById("labAKeyNum");
+    var aIdNum = document.getElementById("labAIdNum");
+    var aKeyNote = document.getElementById("labAKeyNote");
+    var aIdNote = document.getElementById("labAIdNote");
+    var aMeter = document.getElementById("labAMeter");
+    var aBar = document.getElementById("labABar");
+    var aCeilingMark = document.getElementById("labACeiling");
+    var aLost = document.getElementById("labALost");
+    var aShareOut = document.getElementById("labAShare");
+    var aDeleted = document.getElementById("labADeleted");
+    var aOutcome = document.getElementById("labAOutcome");
+    var aRows = document.getElementById("labARows");
+    var aVerdict = document.getElementById("labAVerdict");
+
+    function renderA() {
+      var byKey = aProjection("key", A.kept);
+      var byId = aProjection("identity", A.kept);
+      var active = A.measure === "key" ? byKey : byId;
+      var landmark = aLandmark(A.kept);
+
+      aKeptRead.textContent = A.kept + " of " + A_TOTAL + (landmark ? ", " + landmark : "");
+
+      aKeyNum.textContent = pct(byKey.share);
+      setTone(aKeyNum, byKey.passes ? "good" : "bad");
+      aKeyNote.textContent = byKey.lost + " of " + byKey.existing
+        + " keys gone. No published key is minted the way this pipeline mints one.";
+
+      aIdNum.textContent = pct(byId.share);
+      setTone(aIdNum, byId.passes ? "good" : "bad");
+      aIdNote.textContent = byId.lost + " of " + byId.existing
+        + " pairs gone. A pair survives a change of key scheme.";
+
+      aKeyCol.className = "col" + (A.measure === "key" ? " is-active" : "");
+      aIdCol.className = "col" + (A.measure === "identity" ? " is-active" : "");
+
+      aBar.style.width = (100 * active.share) + "%";
+      aMeter.className = "meter" + (active.passes ? " is-good" : "");
+      aCeilingMark.style.left = (100 * A_CEILING) + "%";
+
+      aLost.textContent = active.lost + " of " + active.existing;
+      aShareOut.textContent = pct(active.share);
+      setTone(aShareOut, active.passes ? "good" : "bad");
+      // Every published key disappears whatever the budget measures, so the
+      // delete loop removes the whole table and the write re-inserts it.
+      aDeleted.textContent = A_TOTAL + " rows";
+      aOutcome.textContent = active.passes ? "writes" : "refuses";
+      setTone(aOutcome, active.passes ? "good" : "bad");
+      setTone(aLost, active.passes ? null : "bad");
+
+      aRows.innerHTML = "";
+      A_ROWS.forEach(function (r) {
+        var keptHere = r.at < A.kept;
+        var gone = A.measure === "key" ? true : !keptHere;
+        trow(aRows, [
+          { t: r.what },
+          { t: r.old, tone: A.measure === "key" ? null : "dim" },
+          { t: r.now, tone: A.measure === "key" ? null : "dim" },
+          { t: keptHere ? "the same pair" : "no longer produced", tone: A.measure === "identity" ? null : "dim" },
+          { t: gone ? "gone" : "kept", tone: gone ? "bad" : "good" }
+        ], gone ? "wrong" : "kept");
+      });
+
+      if (A.measure === "key" && !active.passes) {
+        say(aVerdict, "bad", "The run is refused, and it deletes no edge for this reason. ",
+            "Every published key belongs to a scheme this pipeline replaced, so a key measure reads 100 percent "
+            + "on any run at all. This is a mass re-key, and the budget cannot tell it from a collapse.");
+      } else if (A.measure === "key") {
+        say(aVerdict, "bad", "A key measure cannot read this table. ",
+            "It compares a published key against a minted key, and the two schemes share nothing. "
+            + "Move the slider: the number does not move either.");
+      } else if (!active.passes) {
+        say(aVerdict, "bad", "The run is refused. ",
+            "More than 80 percent of the pairs the table describes are gone. A list this much shorter is a "
+            + "collapsed parse or a partial fetch. One row is not zero rows, so the emptiness check cannot see it.");
+      } else if (A.kept === 174) {
+        say(aVerdict, "good", "This one passes, and the guide says so. ",
+            "The Kappa set collapsing on its own reads 78.09 percent, under the ceiling. The delete budget does "
+            + "not catch it. AssertCollectorsChainIsInTheKappaSet and the Kappa report do.");
+      } else {
+        say(aVerdict, "good", "The run writes. ",
+            "The budget measures what each row is about, so a change of key scheme costs nothing. The gap between "
+            + "the share and the rows deleted by key is what makes the re-key visible in the log.");
+      }
+    }
+
+    bindSegment(document.getElementById("labAMeasure"), "data-a-measure", function (v) {
+      A.measure = v;
+      renderA();
+    });
+
+    var aKeptInput = document.getElementById("labAKept");
+    aKeptInput.addEventListener("input", function () {
+      A.kept = parseInt(aKeptInput.value, 10);
+      renderA();
+    });
+
+    renderA();
+
+    /* ============================================================
+       LAB B. QuestIdentityResolver.ChooseAmong, step 3, and the
+       carry-over that follows from it.
+       ============================================================ */
+
+    var B_CASES = {
+      reused: {
+        page: "Sew it Good - Part 2",
+        candidates: [
+          { id: "5ae4497b86f7744cf402ed00", label: "the live record" },
+          { id: "5ae4400c86f77406f4f4ba0d", label: "a stale record" }
+        ],
+        previous: [
+          { name: "Sew it Good - Part 4", mintedFrom: "Sew it Good - Part 4", bsgId: "5ae4497b86f7744cf402ed00" },
+          { name: "Sew it Good - Part 2", mintedFrom: "Sew it Good - Part 2", bsgId: "5ae4400c86f77406f4f4ba0d" }
+        ]
+      },
+      renamed: {
+        page: "New Title",
+        candidates: [
+          { id: "639136df4b15ca31f76bc31f", label: "the record the previous row holds" },
+          { id: "6a45208043b8d7604d00b8d5", label: "a newer record" }
+        ],
+        previous: [
+          { name: "Old Title", mintedFrom: "Old Title", bsgId: "639136df4b15ca31f76bc31f" }
+        ]
+      }
+    };
+
+    var B = { rule: "title", theCase: "reused" };
+
+    // CreationTimeOf: the first eight hex digits of a 24 hex game id are the
+    // record's creation time as a Unix timestamp.
+    // To the minute, because the two Sew it Good records were created on one day
+    // and the tie-break reads the whole timestamp.
+    function bCreated(id) {
+      var seconds = parseInt(id.slice(0, 8), 16);
+      var d = new Date(seconds * 1000);
+      return d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
+    }
+
+    function bNewest(list) {
+      return list.slice().sort(function (x, y) {
+        var dx = parseInt(x.id.slice(0, 8), 16);
+        var dy = parseInt(y.id.slice(0, 8), 16);
+        if (dx !== dy) return dy - dx;
+        return x.id < y.id ? 1 : -1;
+      })[0];
+    }
+
+    function bByBsgId(rows, id) {
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].bsgId && rows[i].bsgId.toLowerCase() === id.toLowerCase()) return rows[i];
+      }
+      return null;
+    }
+
+    // Part 1's index answered for a row's own name AND for the title its key was
+    // minted from. First entry wins, as TryAdd does.
+    function bByPageTitle(rows, title) {
+      var index = {};
+      rows.forEach(function (r) {
+        if (!(r.name in index)) index[r.name] = r;
+        if (!(r.mintedFrom in index)) index[r.mintedFrom] = r;
+      });
+      return title in index ? index[title] : null;
+    }
+
+    function bChoose(scenario, rule) {
+      // Steps 1 and 2 do not apply to either case: no faction pair, and nothing
+      // else in the task set requires either record.
+      if (rule === "title") {
+        var previousRow = bByPageTitle(scenario.previous, scenario.page);
+        var held = null;
+        if (previousRow && previousRow.bsgId) {
+          scenario.candidates.forEach(function (c) {
+            if (c.id.toLowerCase() === previousRow.bsgId.toLowerCase()) held = c;
+          });
+        }
+        if (held) return { task: held, rule: "PreviousRow" };
+        return { task: bNewest(scenario.candidates), rule: "NewestId" };
+      }
+
+      var previouslyHeld = scenario.candidates.filter(function (c) {
+        return bByBsgId(scenario.previous, c.id) !== null;
+      });
+      if (previouslyHeld.length > 0) return { task: bNewest(previouslyHeld), rule: "PreviousRow" };
+      return { task: bNewest(scenario.candidates), rule: "NewestId" };
+    }
+
+    var bPageName = document.getElementById("labBPageName");
+    var bCandCount = document.getElementById("labBCandCount");
+    var bCands = document.getElementById("labBCands");
+    var bPrev = document.getElementById("labBPrev");
+    var bChosenOut = document.getElementById("labBChosen");
+    var bRuleOut = document.getElementById("labBRuleOut");
+    var bKeyOut = document.getElementById("labBKey");
+    var bProgressOut = document.getElementById("labBProgress");
+    var bVerdict = document.getElementById("labBVerdict");
+
+    function renderB() {
+      var scenario = B_CASES[B.theCase];
+      var choice = bChoose(scenario, B.rule);
+      var carried = bByBsgId(scenario.previous, choice.task.id);
+
+      bPageName.textContent = "The page: " + scenario.page;
+      bCandCount.textContent = scenario.candidates.length + " records";
+
+      bCands.innerHTML = "";
+      scenario.candidates.forEach(function (c) {
+        var holder = bByBsgId(scenario.previous, c.id);
+        var taken = c.id === choice.task.id;
+        trow(bCands, [
+          { t: c.id, tone: taken ? "good" : "dim" },
+          { t: bCreated(c.id) },
+          { t: holder ? holder.name : "no row holds it", tone: holder ? null : "dim" },
+          { t: taken ? "yes" : "no", tone: taken ? "good" : "dim" }
+        ], taken ? "kept" : null);
+      });
+
+      bPrev.innerHTML = "";
+      scenario.previous.forEach(function (r) {
+        var isCarried = carried !== null && carried.name === r.name;
+        trow(bPrev, [
+          { t: r.name },
+          { t: r.mintedFrom },
+          { t: r.bsgId || "none", tone: "dim" },
+          {
+            t: isCarried ? "carried onto the page" : "deleted, and its progress orphaned",
+            tone: isCarried ? "good" : "bad"
+          }
+        ], isCarried ? "kept" : "wrong");
+      });
+
+      bChosenOut.textContent = choice.task.id;
+      bRuleOut.textContent = choice.rule === "PreviousRow" ? "step 3" : "step 4";
+      bKeyOut.textContent = carried ? "minted from " + carried.mintedFrom : "minted from " + scenario.page;
+      setTone(bChosenOut, null);
+      setTone(bKeyOut, null);
+
+      var right = choice.task.id === (B.theCase === "reused"
+        ? "5ae4497b86f7744cf402ed00"
+        : "639136df4b15ca31f76bc31f");
+
+      bProgressOut.textContent = right ? "stays with its quest" : "lands on the wrong quest";
+      setTone(bProgressOut, right ? "good" : "bad");
+      setTone(bChosenOut, right ? "good" : "bad");
+
+      if (B.rule === "title" && B.theCase === "reused") {
+        say(bVerdict, "bad", "Step 3 answered with the old owner. ",
+            "The title lookup found the row published under this title, and 1.1 gave the title to a different "
+            + "quest. So the page takes a dead record, and the quest that owns the page loses its row. The old "
+            + "quest's completion is filed against a quest nobody has done.");
+      } else if (B.rule === "title") {
+        say(bVerdict, "bad", "Step 3 found nothing, because the page was renamed. ",
+            "No previous row answers to the new title, so the run falls through to step 4 and takes the newest "
+            + "record. The row that held the live record is carried by nothing, and its progress is orphaned.");
+      } else if (B.theCase === "reused") {
+        say(bVerdict, "good", "Step 3 asked by the game id. ",
+            "Both records are held by a previous row, so the newest of them wins, which is the tie-break step 4 "
+            + "uses. The page takes the live record and keeps the key that record's progress is filed under.");
+      } else {
+        say(bVerdict, "good", "The rename costs nothing. ",
+            "The game id does not move when a title moves. So the one record a previous row holds is found, "
+            + "and the row key is carried. The title is now only a display value.");
+      }
+    }
+
+    bindSegment(document.getElementById("labBRule"), "data-b-rule", function (v) {
+      B.rule = v;
+      renderB();
+    });
+
+    bindSegment(document.getElementById("labBCase"), "data-b-case", function (v) {
+      B.theCase = v;
+      renderB();
+    });
+
+    renderB();
+
+    /* ============================================================
+       LAB C. AssertPreviousQuestsAreBackfilled and
+       AssertMatchRateHeld, over the published 488 quests.
+       ============================================================ */
+
+    var C_TOTAL = 488;
+    var C_MATCH_LIMIT = 0.05;      // MaxLostMatches
+    var C_KEY_LIMIT = 0.05;        // MaxLostRowKeys
+    var C_BACKFILL_LIMIT = 0.10;   // MaxPreviousQuestsWithoutBsgId
+    var C = { guard: "match", missing: 25 };
+
+    // A row with no external id cannot be carried, so it is exactly the set that
+    // loses its row key. The match-rate measure never sees it.
+    function cMeasure(missing) {
+      var backfillShare = missing / C_TOTAL;
+      var startRefused = backfillShare > C_BACKFILL_LIMIT;
+      var matched = C_TOTAL - missing;
+      var matchShare = matched > 0 ? 0 / matched : 0;
+      var keyShare = missing / C_TOTAL;
+      return {
+        missing: missing,
+        matched: matched,
+        backfillShare: backfillShare,
+        startRefused: startRefused,
+        matchShare: matchShare,
+        matchFires: matchShare > C_MATCH_LIMIT,
+        keyShare: keyShare,
+        keyFires: keyShare > C_KEY_LIMIT
+      };
+    }
+
+    var cMissingRead = document.getElementById("labCMissingRead");
+    var cReads = document.getElementById("labCReads");
+    var cLost = document.getElementById("labCLost");
+    var cMatchOut = document.getElementById("labCMatch");
+    var cKeysOut = document.getElementById("labCKeys");
+    var cOutcome = document.getElementById("labCOutcome");
+    var cVerdict = document.getElementById("labCVerdict");
+
+    function renderC() {
+      var m = cMeasure(C.missing);
+      var both = C.guard === "both";
+
+      cMissingRead.textContent = C.missing + " of " + C_TOTAL;
+
+      cReads.innerHTML = "";
+      row(cReads, "Published quests", String(C_TOTAL), null, "the previous database");
+      row(cReads, "Carrying an external id", String(m.matched), null, "the rows a carry-over can find");
+      row(cReads, "Carrying none", String(m.missing), m.missing > 0 ? "bad" : "good",
+          "nothing ties a new title to these");
+      row(cReads, "Backfill guard",
+          pct(m.backfillShare) + " against " + pct(C_BACKFILL_LIMIT),
+          m.startRefused ? "bad" : "good",
+          m.startRefused ? "the run is refused before it starts" : "the run may start");
+      row(cReads, "Match-rate measure",
+          m.startRefused ? "not reached" : "0 of " + m.matched + " (" + pct(m.matchShare) + ")",
+          m.startRefused ? null : "good",
+          "the rows with no id are outside its denominator");
+      row(cReads, "Row-key measure",
+          both ? (m.startRefused ? "not reached" : m.missing + " of " + C_TOTAL + " (" + pct(m.keyShare) + ")")
+               : "not measured",
+          both ? (m.keyFires ? "bad" : "good") : "bad",
+          both ? "every published quest is in this denominator" : "part 1 had no second measure");
+
+      cLost.textContent = m.startRefused ? "0, the run stops" : String(m.missing);
+      setTone(cLost, m.startRefused || m.missing === 0 ? "good" : "bad");
+
+      cMatchOut.textContent = m.startRefused ? "not reached" : pct(m.matchShare);
+      setTone(cMatchOut, m.startRefused ? null : "good");
+
+      cKeysOut.textContent = both ? (m.startRefused ? "not reached" : pct(m.keyShare)) : "nothing";
+      setTone(cKeysOut, both ? (m.keyFires ? "bad" : "good") : "bad");
+
+      var refused = m.startRefused || (both && m.keyFires);
+      var orphans = !refused && m.missing > 0;
+      cOutcome.textContent = refused ? "refuses" : (orphans ? "publishes, and orphans them" : "publishes");
+      setTone(cOutcome, refused || !orphans ? "good" : "bad");
+
+      if (m.startRefused) {
+        say(cVerdict, "good", "The run never starts. ",
+            "More than a tenth of the previous quests carry no external id. So the backfill guard stops the "
+            + "refresh, and it names the menu item that fixes it. This is the guard the carry-over rests on.");
+      } else if (!both && m.missing > 0) {
+        say(cVerdict, "bad", "A loss of " + m.missing + " quests, measured at zero. ",
+            "The match rate counts only rows that carry an external id, and these rows carry none. They are "
+            + "absent from the numerator and from the denominator, so the guard that watches carry-over is "
+            + "blind to every row that cannot be carried.");
+      } else if (both && m.keyFires) {
+        say(cVerdict, "good", "The row-key measure fires. ",
+            "It counts every previous row no imported quest kept the key of, over every published quest. The "
+            + "error names the first ten rows, so the operator reads which quests rather than a share.");
+      } else if (m.missing === 0) {
+        say(cVerdict, "good", "Nothing is lost, and both measures agree. ",
+            "A backfilled previous database is what the carry-over needs. Move the slider to see the two "
+            + "measures separate.");
+      } else {
+        say(cVerdict, "good", "Under the limit, and reported. ",
+            "The row-key measure reads " + pct(m.keyShare) + ", inside the 5 percent the run tolerates. The "
+            + "count still reaches the log, and the rows are named in the refresh report.");
+      }
+    }
+
+    bindSegment(document.getElementById("labCGuard"), "data-c-guard", function (v) {
+      C.guard = v;
+      renderC();
+    });
+
+    var cMissingInput = document.getElementById("labCMissing");
+    cMissingInput.addEventListener("input", function () {
+      C.missing = parseInt(cMissingInput.value, 10);
+      renderC();
+    });
+
+    renderC();
+
+    /* ============================================================
+       LAB D. The ETag store and the cache file are one claim in two
+       places. The order in which they are written decides what the
+       next run reads.
+       ============================================================ */
+
+    var D = { order: "parse", write: "fail", step: 8 };
+
+    function dState() {
+      var wrote = D.write === "ok";
+      // The ETag is recorded at step 3 in part 1, and at step 5 now. A failed
+      // write throws out of SaveAsync, so CommitETags is never reached.
+      var etagStep = D.order === "parse" ? 3 : 5;
+      var etagAtEndOfRun1 = D.order === "parse" || wrote;
+      var etagRecorded = D.step >= etagStep && etagAtEndOfRun1;
+      var run1Cached = wrote && D.step >= 4;
+      // Upstream is unchanged, so a conditional request always answers 304 and
+      // an unconditional one always sends the 1.1 body.
+      var conditional = D.step >= 6 && etagAtEndOfRun1;
+      var notModified = D.step >= 7 && conditional;
+      var run2Refetched = D.step >= 7 && !conditional;
+      return {
+        wrote: wrote,
+        etagAtEndOfRun1: etagAtEndOfRun1,
+        etagRecorded: etagRecorded,
+        cacheIsNew: run1Cached || run2Refetched,
+        conditional: conditional,
+        notModified: notModified,
+        // A 304 re-stamps the file's write time, so the seven day lag guard
+        // reads it as confirmed current whatever the file holds.
+        restamped: notModified,
+        publishesStale: D.step >= 8 && !(run1Cached || run2Refetched)
+      };
+    }
+
+    function dStepLabels(s) {
+      return [
+        "run 1: start",
+        "GET regular/tasks",
+        "200, ETag W/\"1.1-a91\"",
+        s.order === "parse" ? "parse 517 tasks, record the ETag" : "parse 517 tasks",
+        "write the cache file",
+        s.order === "parse" ? "the ETag is already recorded" : "record the ETag",
+        s.etagAtEndOfRun1 ? "run 2: If-None-Match" : "run 2: unconditional GET",
+        s.etagAtEndOfRun1 ? "304 Not Modified" : "200 with the 1.1 body",
+        "the refresh publishes"
+      ];
+    }
+
+    var dStepRead = document.getElementById("labDStepRead");
+    var dSteps = document.getElementById("labDSteps");
+    var dReads = document.getElementById("labDReads");
+    var dEtag = document.getElementById("labDEtag");
+    var dCache = document.getElementById("labDCache");
+    var dFresh = document.getElementById("labDFresh");
+    var dPublish = document.getElementById("labDPublish");
+    var dVerdict = document.getElementById("labDVerdict");
+
+    function renderD() {
+      var s = dState();
+
+      dStepRead.textContent = "step " + D.step + " of 8";
+
+      dSteps.innerHTML = "";
+      s.order = D.order;
+      dStepLabels(s).forEach(function (label, index) {
+        var cls = null;
+        if (index === D.step) cls = "is-now";
+        else if (index < D.step) cls = "is-done";
+        if (index === 4 && D.write === "fail" && D.step >= 4) cls = "is-kill";
+        if (index === 5 && D.step >= 5 && !s.etagRecorded) cls = "is-win";
+        chip(dSteps, label, cls);
+      });
+
+      dReads.innerHTML = "";
+      row(dReads, "The write at step 4",
+          s.wrote ? "succeeded" : "failed", s.wrote ? "good" : "bad",
+          s.wrote ? "the parsed models are on disk" : "the disk is full, or the file is locked");
+      row(dReads, "The ETag store",
+          s.etagRecorded ? "W/\"1.1-a91\"" : "empty",
+          s.etagRecorded && !s.cacheIsNew ? "bad" : "good",
+          s.etagRecorded && !s.cacheIsNew
+            ? "it names a revision no file on this machine holds"
+            : "it names what the cache file holds");
+      row(dReads, "Run 2 asks",
+          D.step < 6 ? "not yet" : (s.conditional ? "If-None-Match" : "unconditionally"),
+          D.step < 6 ? null : (s.conditional && !s.wrote ? "bad" : "good"),
+          s.etagAtEndOfRun1 ? "upstream may answer 304" : "upstream must send the body");
+      row(dReads, "Upstream answers",
+          D.step < 7 ? "not yet" : (s.notModified ? "304 Not Modified" : "200 with the 1.1 body"),
+          D.step < 7 ? null : (s.cacheIsNew ? "good" : "bad"),
+          s.notModified ? "the run keeps the file it already has" : "the run writes the file again");
+
+      dEtag.textContent = s.etagRecorded ? "recorded" : "not recorded";
+      setTone(dEtag, s.etagRecorded && !s.cacheIsNew ? "bad" : "good");
+
+      dCache.textContent = s.cacheIsNew ? "the 1.1 task set" : "the pre-patch task set";
+      setTone(dCache, s.cacheIsNew ? "good" : "bad");
+
+      dFresh.textContent = D.step < 7 ? "not reached" : (s.restamped ? "green" : "reads the real age");
+      setTone(dFresh, s.restamped && !s.cacheIsNew ? "bad" : "good");
+
+      dPublish.textContent = D.step < 8
+        ? "not reached"
+        : (s.cacheIsNew ? "the 1.1 task set" : "the pre-patch task set");
+      setTone(dPublish, s.publishesStale ? "bad" : (D.step < 8 ? null : "good"));
+
+      if (s.publishesStale) {
+        say(dVerdict, "bad", "A pre-patch task set publishes as 1.1. ",
+            "The ETag was recorded before the bytes reached the disk, so it names a revision this machine "
+            + "never stored. Upstream answers 304, the run keeps the old file, and the 304 re-stamps its write "
+            + "time. Every freshness check reads green.");
+      } else if (D.order === "write" && !s.wrote && D.step >= 5) {
+        say(dVerdict, "good", "Nothing was recorded, so nothing is claimed. ",
+            "SaveAsync threw, so CommitETags was never reached. The next run asks unconditionally and gets the "
+            + "1.1 body. Not calling CommitETags costs one fetch, never correctness.");
+      } else if (D.step < 4) {
+        say(dVerdict, "good", "The two orders agree so far. ",
+            "They separate at step 5, which is where the ETag is recorded. Move the slider past step 4 with the "
+            + "write set to fail.");
+      } else if (s.wrote) {
+        say(dVerdict, "good", "The write succeeded, so both orders are correct here. ",
+            "The order only matters when a step after the parse fails. Set the write to fail and compare them "
+            + "again.");
+      } else {
+        say(dVerdict, "bad", "The receipt is written, and the file is not. ",
+            "The ETag store is now the fresher of the two, which is the state it must never be in. Move the "
+            + "slider to step 8 to see what the next run publishes.");
+      }
+    }
+
+    bindSegment(document.getElementById("labDOrder"), "data-d-order", function (v) {
+      D.order = v;
+      renderD();
+    });
+
+    bindSegment(document.getElementById("labDWrite"), "data-d-write", function (v) {
+      D.write = v;
+      renderD();
+    });
+
+    var dStepInput = document.getElementById("labDStep");
+    dStepInput.addEventListener("input", function () {
+      D.step = parseInt(dStepInput.value, 10);
+      renderD();
+    });
+
+    renderD();
+
+    /* ============================================================
+       Comprehension gate.
+       ============================================================ */
+
+    var QUESTIONS = [
+      {
+        q: "The delete budget refused the first 1.1 regeneration at 100 percent. How many prerequisite edges did that run actually remove for the reason the budget names?",
+        options: [
+          "All 794, because the new pipeline rebuilds the table from the game",
+          "None. Every published key belongs to a scheme the pipeline replaced, so a key measure reads 100 percent on any run",
+          "596, which is the number the identity measure reports",
+          "248, which is the Collector list the patch shortens"
+        ],
+        answer: 1,
+        why: "Lab A shows it. Keep the measure on the computed row key and move the slider: the number does not move, because no published key and no minted key can ever be equal. The budget was reading the key scheme, not the loss."
+      },
+      {
+        q: "The identity measure reads 78.09 percent when the Kappa set collapses on its own, which passes. Why is that not a defect in the ceiling?",
+        options: [
+          "The Kappa set cannot collapse without the game chains collapsing too",
+          "A tighter ceiling would refuse the 1.1 run itself, which loses 75.1 percent, so that loss is caught by shape rather than by share",
+          "Collector rows are exempt from the delete budget",
+          "The ceiling is a warning rather than a refusal"
+        ],
+        answer: 1,
+        why: "1.1 takes the Kappa flag off all but 13 quests, so Collector's list falls from 248 rows to 12. Any ceiling tight enough to catch a bad collapse refuses the regeneration this pipeline was rebuilt for. AssertCollectorsChainIsInTheKappaSet catches the bad shape instead."
+      },
+      {
+        q: "Step 3 looked the previous row up by page title, inside a resolver written because titles rotate. Which two failures follow, and do they leave a mark?",
+        options: [
+          "It throws on a renamed page, and the run reports the failure",
+          "It misses every renamed page and answers with the old owner on a reused title. Neither leaves a mark",
+          "It picks the oldest record, so the collision report names the wrong rule",
+          "It matches too many rows, so the resolve fails on a duplicate key"
+        ],
+        answer: 1,
+        why: "Lab B drives both. On a renamed page the lookup finds nothing and step 4 mints a fresh key. On a reused title it finds the old owner's row. Both produce a full, plausible database."
+      },
+      {
+        q: "The match-rate guard read 0 percent on a run that orphaned dozens of quests. What exactly made those quests invisible to it?",
+        options: [
+          "They were seasonal, and seasonal quests are excluded by name",
+          "The guard runs after the write, so the rows were already deleted",
+          "It measured only rows carrying an external id, and a row with no external id is exactly the row that cannot be carried",
+          "Their share was below five percent, so the guard passed them"
+        ],
+        answer: 2,
+        why: "The rows sat outside the numerator and outside the denominator at once. The backfill guard tolerates up to a tenth of the 488 rows without an id. That is 48 quests, lost at a measured loss of zero."
+      },
+      {
+        q: "A cache write fails, and part 1 had already recorded the ETag. Which check catches the pre-patch data on the next run?",
+        options: [
+          "None of them. The 304 keeps the old file and re-stamps its write time, so the staleness guard reads green",
+          "The seven day staleness guard, because the file is old",
+          "The empty task set refusal, because a 304 carries no body",
+          "The publish constraints, because the row values are from before the patch"
+        ],
+        answer: 0,
+        why: "Lab D drives it. The ETag store and the cache file are one claim in two places, and the store must never be the fresher of the two. Nothing downstream can tell a certified stale file from a fresh one, because the values in it are all valid."
+      },
+      {
+        q: "The publish constraints were checked over the rows a refresh had built. Which path put rows into the shipped file without passing that check?",
+        options: [
+          "The download the app performs, which rewrites the file after install",
+          "A hand edit in the editor grid, a backfill run, or any correction after a refresh, all of which write straight to the database",
+          "The schema drift guard, which adds the missing columns",
+          "The mirror copy into Assets, which rewrites the row keys"
+        ],
+        answer: 1,
+        why: "The generic UPDATE can rewrite Quests.Name and leave NormalizedName behind, which un-keys that quest's progress in every install. The constraints now read the candidate file itself, feature detecting each column the way the app does."
+      },
+      {
+        q: "AltRequirementType carries the second status a prerequisite accepts. Why does the change also synthesize an OR group for the same fact?",
+        options: [
+          "An OR group is faster for the app to read",
+          "The column is not additive, so old builds would fail to open the database",
+          "Builds in the field read RequirementType alone, so the column reaches nothing until an app release; the OR group is a vocabulary they already read",
+          "The OR group is a fallback used only when the column is NULL"
+        ],
+        answer: 2,
+        why: "Two of the four complete-or-failed pairs ship as working OR groups today, so collapsing them onto Complete regresses behaviour players have right now. The synthesis corrects installs on their next poll, with no app release."
+      },
+      {
+        q: "GenerateNormalizedName drifted from the SQL expression in the same file. What is the observable consequence in an install?",
+        options: [
+          "The app throws when it loads a row whose stored value is NULL",
+          "Two quests collide on the primary key, so the second one is dropped",
+          "Nothing throws and nothing shows red. The quest's recorded completion simply stops appearing",
+          "The database update is rejected, because the hash no longer matches"
+        ],
+        answer: 2,
+        why: "The normalized name is the key recorded progress is filed under. A spelling only one component computes files that progress under a name nothing else looks it up by. That is why the parity test has SQLite evaluate the app's own expression over every published name."
+      }
+    ];
+
+    var CHECKLIST = [
+      "The delete budget is measured over natural identity for every child table, and the 75.1 percent margin is stated in the code.",
+      "The resolver has one name lookup left, ByExactName, and only the seasonal pages reach it.",
+      "The row-key measure comes from the resolver's own uncarried list rather than a second computation.",
+      "CommitETags is called by the caller, after SaveAsync, on every cache part.",
+      "PublishConstraints runs over the candidate file in the comparison, again before the copy, and again over the endpoint copy.",
+      "The exclusion category read fails the crawl, and the seasonal canary measures a share rather than zero.",
+      "Both mechanisms ship for complete-or-failed prerequisites, and the writer refuses two rows naming one prerequisite.",
+      "The name rule has three spellings and a parity test that evaluates the real SQL over every published name."
+    ];
+
+    var answered = {};
+    var quizList = document.getElementById("quizList");
+    var quizScore = document.getElementById("quizScore");
+    var railLabel = document.getElementById("railGateLabel");
+    var railHint = document.getElementById("railGateHint");
+    var railBar = document.getElementById("railGateBar");
+
+    QUESTIONS.forEach(function (item, qi) {
+      var card = el("div", "q");
+
+      var head = el("div", "q-head");
+      head.appendChild(el("span", "q-num", String(qi + 1).padStart(2, "0")));
+      head.appendChild(el("p", "q-text", item.q));
+      card.appendChild(head);
+
+      var why = el("div", "q-why");
+
+      var opts = el("div", "q-opts");
+      item.options.forEach(function (text, oi) {
+        var label = el("label", "opt");
+        var input = document.createElement("input");
+        input.type = "radio";
+        input.name = "q" + qi;
+        input.value = String(oi);
+        label.appendChild(input);
+        label.appendChild(el("span", null, text));
+        opts.appendChild(label);
+
+        input.addEventListener("change", function () {
+          answered[qi] = oi;
+          var correct = oi === item.answer;
+          card.setAttribute("data-state", correct ? "right" : "wrong");
+
+          Array.prototype.forEach.call(opts.children, function (child, ci) {
+            child.classList.remove("is-right", "is-wrong");
+            if (ci === item.answer && (correct || ci === oi)) child.classList.add("is-right");
+            if (ci === oi && !correct) child.classList.add("is-wrong");
+          });
+
+          why.innerHTML = "";
+          var p = el("p");
+          var word = el("span", "verdict-word", correct ? "Correct. " : "Not quite. ");
+          p.appendChild(word);
+          p.appendChild(document.createTextNode(item.why));
+          why.appendChild(p);
+
+          updateGate();
+        });
+      });
+      card.appendChild(opts);
+      card.appendChild(why);
+
+      quizList.appendChild(card);
+    });
+
+    var gate = document.getElementById("gate");
+    var gateTitle = document.getElementById("gateTitle");
+    var gateBody = document.getElementById("gateBody");
+
+    function updateGate() {
+      var correct = 0;
+      QUESTIONS.forEach(function (item, i) { if (answered[i] === item.answer) correct++; });
+
+      quizScore.textContent = correct + "/" + QUESTIONS.length;
+      railHint.textContent = correct + " of " + QUESTIONS.length + " correct";
+      railBar.style.width = (100 * correct / QUESTIONS.length) + "%";
+
+      if (correct === QUESTIONS.length) {
+        railLabel.textContent = "Gate open";
+        gate.className = "gate is-open";
+        gateTitle.textContent = "Approval checklist: unlocked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Eight of eight. You know what each guard was reading. Now compare the changes with it. "
+          + "Check these items before you approve:"));
+        var ul = el("ul");
+        CHECKLIST.forEach(function (line) { ul.appendChild(el("li", null, line)); });
+        gateBody.appendChild(ul);
+        var pre = el("pre", "approval",
+          "Reviewed the quest pipeline deep review on PR #51.\n" +
+          "Guide: docs/2026-08-quest-data-1-1-refresh-deep-review-guide.html\n" +
+          "Comprehension gate: 8/8\n" +
+          "Checklist items examined:\n" +
+          "1. The delete budget, and what it is measured over.\n" +
+          "2. The one name lookup the resolver has left.\n" +
+          "3. The row-key measure and where its list comes from.\n" +
+          "4. The order of SaveAsync and CommitETags.\n" +
+          "5. The three places the publish constraints run.\n" +
+          "6. The exclusion category read and the seasonal canary.\n" +
+          "7. The OR group and the second requirement type.\n" +
+          "8. The name rule, and the test that evaluates the real SQL.\n" +
+          "Read closely: RefreshDataService.cs, reconstructed after the loss the PR body records.");
+        gateBody.appendChild(pre);
+      } else {
+        railLabel.textContent = "Gate locked";
+        gate.className = "gate is-locked";
+        gateTitle.textContent = "Approval checklist: locked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Answer all eight questions correctly to open the reviewer checklist. You have "
+          + correct + " of " + QUESTIONS.length
+          + " correct. Each incorrect answer gives an explanation, so read the chapter again."));
+      }
+    }
+
+    updateGate();
+  })();
+  </script>
+</body>
+</html>
