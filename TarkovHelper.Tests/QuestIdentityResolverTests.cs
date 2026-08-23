@@ -130,7 +130,7 @@ public sealed class QuestIdentityResolverTests
     [Fact]
     public void With_nothing_else_to_go_on_the_newest_record_wins()
     {
-        // 639136df is 2022-12-08; 6a452080 is 2026-06-29. The first eight hex digits of a game
+        // 639136df is 2022-12-08; 6a452080 is 2026-07-01. The first eight hex digits of a game
         // id are its creation time.
         var older = Task_("639136df4b15ca31f76bc31f", "the-price-of-independence-old", link: "The_Price_of_Independence");
         var newer = Task_("6a45208043b8d7604d00b8d5", "the-price-of-independence", link: "The_Price_of_Independence");
