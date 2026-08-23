@@ -1,0 +1,2709 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quest Data 1.1 Refresh - Code Guide</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Ground and structure, inherited from the earlier guides so the
+         interactive docs read as one set. */
+      --page: #101010;
+      --surface: #181818;
+      --surface-2: #222222;
+      --surface-3: #2d2d2d;
+      --line: #3d3d3d;
+      --line-soft: #2a2a2a;
+      --text: #e0e0e0;
+      --muted: #9e9e9e;
+      --dim: #737373;
+
+      /* Accent: the app's own AccentBrush. */
+      --gold: #c5a84a;
+      --gold-hover: #d4b85a;
+      --gold-ink: #19170f;
+
+      /* Profile hues. These are a LAW, not decoration: the same profile is the same
+         colour in every table, lane and timeline on this page. Nothing on this page is
+         a profile, so it spends none of them. */
+      --pvp: #5ea9e8;
+      --pve: #4caf50;
+      --season: #ff9800;
+
+      /* Reserved for data in the wrong place. */
+      --wrong: #ef5350;
+      --right: #4caf50;
+
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+
+      --body: "Segoe UI", "Noto Sans", system-ui, sans-serif;
+      --mono: Consolas, "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 14% -12%, rgba(197, 168, 74, .12), transparent 36rem),
+        var(--page);
+      color: var(--text);
+      font-family: var(--body);
+      line-height: 1.55;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    }
+
+    button, input, select { font: inherit; }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* ---------- shell ---------- */
+
+    .shell {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      gap: 44px;
+      width: min(1320px, calc(100% - 44px));
+      margin: 0 auto;
+      padding: 56px 0 96px;
+      align-items: start;
+    }
+
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .rail { position: static; margin-bottom: 40px; }
+    }
+
+    .rail {
+      position: sticky;
+      top: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 18px 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: rgba(24, 24, 24, .84);
+      backdrop-filter: blur(10px);
+    }
+
+    .rail-title {
+      margin: 0 0 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .rail a {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 13.5px;
+      text-decoration: none;
+      transition: background .15s, color .15s;
+    }
+
+    .rail a:hover { background: var(--surface-2); color: var(--text); }
+    .rail a .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+    .rail a.is-lab { color: var(--gold); }
+    .rail a.is-lab .n { color: var(--gold); }
+
+    .rail-gate {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line-soft);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    .rail-gate strong { display: block; color: var(--text); font-size: 13px; }
+
+    .gate-meter {
+      height: 5px;
+      margin-top: 8px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .gate-meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--gold);
+      transition: width .3s ease;
+    }
+
+    /* ---------- type ---------- */
+
+    main { max-width: 100%; }
+
+    .eyebrow {
+      margin: 0;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    h1 {
+      max-width: 18ch;
+      margin: 12px 0 18px;
+      font-size: clamp(38px, 5.6vw, 70px);
+      font-weight: 800;
+      line-height: 1.0;
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+
+    .lede {
+      max-width: 62ch;
+      margin: 0 0 14px;
+      font-size: 19px;
+      color: #c2c2c2;
+    }
+
+    h2 {
+      margin: 0 0 6px;
+      font-size: clamp(24px, 3vw, 33px);
+      font-weight: 800;
+      letter-spacing: -.03em;
+      line-height: 1.12;
+      text-wrap: balance;
+    }
+
+    h3 {
+      margin: 30px 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    p, li { max-width: 68ch; }
+    p { margin: 0 0 14px; }
+    ul, ol { margin: 0 0 14px; padding-left: 22px; }
+    li { margin-bottom: 7px; }
+
+    strong { color: #f0f0f0; }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: #ddc98a;
+      font-family: var(--mono);
+      font-size: .88em;
+    }
+
+    a { color: var(--gold); }
+
+    section { margin-bottom: 68px; scroll-margin-top: 24px; }
+
+    .chapter-head {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 16px;
+      align-items: baseline;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .chapter-num {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      color: var(--gold);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kicker {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 62ch;
+    }
+
+    /* ---------- callouts ---------- */
+
+    .note {
+      margin: 22px 0;
+      padding: 16px 18px;
+      border-left: 3px solid var(--gold);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: linear-gradient(100deg, rgba(197, 168, 74, .1), rgba(197, 168, 74, .02));
+    }
+
+    .note p:last-child { margin-bottom: 0; }
+
+    .note-label {
+      margin: 0 0 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .note.is-wrong { border-left-color: var(--wrong); background: linear-gradient(100deg, rgba(239, 83, 80, .1), transparent); }
+    .note.is-wrong .note-label { color: var(--wrong); }
+
+    /* ---------- code and logs ---------- */
+
+    .code {
+      margin: 18px 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #141414;
+      overflow: hidden;
+    }
+
+    .code-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .code pre {
+      margin: 0;
+      padding: 14px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.62;
+      tab-size: 2;
+    }
+
+    .code .del { display: block; background: rgba(239, 83, 80, .12); color: #f0b3b1; }
+    .code .add { display: block; background: rgba(76, 175, 80, .12); color: #b3e0b5; }
+    .code .cmt { color: var(--dim); }
+
+    /* ---------- labs ---------- */
+
+    .lab {
+      margin: 34px 0 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .lab-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      align-items: baseline;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line-soft);
+      background: linear-gradient(180deg, rgba(197, 168, 74, .07), transparent);
+    }
+
+    .lab-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .lab-head h3 { margin: 0; font-size: 19px; }
+    .lab-head .sub { width: 100%; margin: 2px 0 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
+
+    .lab-body { padding: 20px; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    .ctl-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .seg {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      background: var(--surface-2);
+      gap: 3px;
+    }
+
+    .seg button {
+      padding: 6px 14px;
+      border: 0;
+      border-radius: 99px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+
+    .seg button:hover { color: var(--text); }
+    .seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); }
+    .seg button[aria-pressed="true"][data-tone="bad"] { background: rgba(239, 83, 80, .2); color: var(--wrong); }
+    .seg button[aria-pressed="true"][data-tone="good"] { background: rgba(76, 175, 80, .2); color: var(--right); }
+
+    .btn {
+      padding: 8px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+
+    .btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--gold); }
+    .btn:disabled { opacity: .42; cursor: not-allowed; }
+    .btn.is-primary { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+    .btn.is-primary:hover:not(:disabled) { background: var(--gold-hover); }
+
+    .slider-wrap { display: flex; align-items: center; gap: 10px; }
+    .slider-wrap input[type="range"] { width: 210px; accent-color: var(--gold); }
+    .slider-read { font-family: var(--mono); font-size: 13px; color: var(--text); min-width: 15ch; }
+
+    .verdict {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: var(--surface-2);
+      font-size: 14.5px;
+    }
+
+    .verdict[data-tone="bad"] { border-color: rgba(239, 83, 80, .5); background: rgba(239, 83, 80, .08); }
+    .verdict[data-tone="good"] { border-color: rgba(76, 175, 80, .45); background: rgba(76, 175, 80, .07); }
+    .verdict b { display: block; margin-bottom: 3px; }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-top: 6px;
+    }
+
+    .stat {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .stat .k {
+      margin: 0 0 4px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .stat .v {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .v[data-tone="bad"] { color: var(--wrong); }
+    .v[data-tone="good"] { color: var(--right); }
+    .v[data-tone="season"] { color: var(--season); }
+    .v[data-tone="pve"] { color: var(--pve); }
+    .v[data-tone="pvp"] { color: var(--pvp); }
+
+    /* ---------- step chips, shared by labs A, B and D ---------- */
+
+    .lanes { display: grid; gap: 12px; }
+
+    .lane {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .lane[data-profile="pvp"] { border-left: 3px solid var(--pvp); }
+    .lane[data-profile="pve"] { border-left: 3px solid var(--pve); }
+    .lane[data-profile="season"] { border-left: 3px solid var(--season); }
+
+    .lane-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 12px;
+      align-items: baseline;
+      margin-bottom: 8px;
+      font-size: 13.5px;
+      font-weight: 700;
+    }
+
+    .lane-head .rev { font-family: var(--mono); font-size: 12px; color: var(--dim); font-weight: 600; }
+
+    .steps { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .step {
+      padding: 4px 9px;
+      border: 1px solid var(--line-soft);
+      border-radius: 99px;
+      background: #141414;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--dim);
+    }
+
+    .step.is-done { color: var(--text); border-color: var(--line); }
+    .step.is-now { color: var(--gold-ink); background: var(--gold); border-color: var(--gold); font-weight: 700; }
+    .step.is-kill { color: var(--wrong); border-color: rgba(239, 83, 80, .55); }
+    .step.is-win { color: var(--right); border-color: rgba(76, 175, 80, .55); }
+
+    /* ---------- labs C and D: the document rows ---------- */
+
+    .reads { border: 1px solid var(--line-soft); border-radius: var(--radius-sm); overflow: hidden; }
+
+    .read-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) 92px minmax(0, 1.9fr);
+      gap: 10px;
+      align-items: center;
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      background: var(--surface-2);
+    }
+
+    .read-row:last-child { border-bottom: 0; }
+    .read-row .rk { color: var(--text); overflow-wrap: anywhere; }
+    .read-row .rv { font-weight: 700; text-align: right; overflow-wrap: anywhere; }
+    .read-row .ro { font-size: 11.5px; color: var(--muted); font-family: var(--body); }
+    .read-row.is-dropped { opacity: .45; }
+    .read-row.is-dropped .rv { text-decoration: line-through; }
+    .read-row.is-boundary { box-shadow: inset 0 -2px 0 var(--wrong); }
+    .read-row .rv[data-tone="bad"] { color: var(--wrong); }
+    .read-row .rv[data-tone="good"] { color: var(--right); }
+
+    @media (max-width: 760px) {
+      .read-row { grid-template-columns: minmax(0, 1fr) 78px; }
+      .read-row .ro { display: none; }
+    }
+
+    /* ---------- lab-specific: the hourly meter in lab A ---------- */
+
+    .meter {
+      margin-top: 14px;
+      height: 10px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--wrong);
+      transition: width .25s ease;
+    }
+
+    .meter.is-good i { background: var(--right); }
+
+    /* ---------- quiz ---------- */
+
+    .quiz-intro {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 26px;
+      padding: 18px 20px;
+      border: 1px solid rgba(197, 168, 74, .35);
+      border-radius: var(--radius);
+      background: linear-gradient(110deg, rgba(197, 168, 74, .12), rgba(197, 168, 74, .02));
+    }
+
+    .quiz-score {
+      display: grid;
+      place-items: center;
+      min-width: 62px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      color: var(--gold);
+    }
+
+    .q {
+      margin-bottom: 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .q[data-state="right"] { border-color: rgba(76, 175, 80, .55); }
+    .q[data-state="wrong"] { border-color: rgba(239, 83, 80, .5); }
+
+    .q-head { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 16px 18px 10px; }
+
+    .q-num {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--gold);
+      padding-top: 3px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .q-text { margin: 0; font-size: 15.5px; font-weight: 600; max-width: 72ch; }
+
+    .q-opts { display: grid; gap: 7px; padding: 4px 18px 16px 44px; }
+
+    .opt {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      cursor: pointer;
+      font-size: 14px;
+      transition: border-color .15s, background .15s;
+    }
+
+    .opt:hover { border-color: var(--line); background: var(--surface-3); }
+    .opt input { margin: 3px 0 0; accent-color: var(--gold); }
+    .opt.is-right { border-color: rgba(76, 175, 80, .6); background: rgba(76, 175, 80, .1); }
+    .opt.is-wrong { border-color: rgba(239, 83, 80, .55); background: rgba(239, 83, 80, .1); }
+
+    .q-why {
+      display: none;
+      margin: 0 18px 16px 44px;
+      padding: 12px 14px;
+      border-left: 3px solid var(--line);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: var(--surface-2);
+      font-size: 13.5px;
+      color: #c4c4c4;
+    }
+
+    .q-why p { margin: 0; max-width: 74ch; }
+    .q[data-state] .q-why { display: block; }
+    .q[data-state="right"] .q-why { border-left-color: var(--right); }
+    .q[data-state="wrong"] .q-why { border-left-color: var(--wrong); }
+
+    .q-why .verdict-word { font-weight: 700; }
+    .q[data-state="right"] .verdict-word { color: var(--right); }
+    .q[data-state="wrong"] .verdict-word { color: var(--wrong); }
+
+    /* gate */
+
+    .gate {
+      margin-top: 30px;
+      padding: 22px 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .gate.is-locked { border-style: dashed; color: var(--muted); }
+    .gate.is-open { border-color: rgba(76, 175, 80, .55); background: linear-gradient(150deg, rgba(76, 175, 80, .1), transparent); }
+
+    .gate h3 { margin: 0 0 8px; }
+    .gate ul { margin-top: 10px; }
+
+    .approval {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: #141414;
+      border: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: #b9d8bb;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    footer {
+      margin-top: 22px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--dim);
+      font-size: 13px;
+    }
+
+    footer a { color: var(--muted); }
+
+    /* ---------- this guide: the row tables the labs print ---------- */
+
+    .tbl {
+      margin: 14px 0 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      overflow-x: auto;
+    }
+
+    .tbl table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
+
+    .tbl th {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      text-align: left;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+      white-space: nowrap;
+    }
+
+    .tbl td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      vertical-align: top;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      overflow-wrap: anywhere;
+    }
+
+    .tbl tr:last-child td { border-bottom: 0; }
+    .tbl td[data-tone="bad"] { color: var(--wrong); font-weight: 700; }
+    .tbl td[data-tone="good"] { color: var(--right); font-weight: 700; }
+    .tbl td[data-tone="dim"] { color: var(--dim); }
+    .tbl tr[data-row="wrong"] { background: rgba(239, 83, 80, .08); }
+    .tbl tr[data-row="kept"] { background: rgba(76, 175, 80, .06); }
+
+    .lane-note { font-size: 11.5px; color: var(--muted); font-family: var(--body); }
+
+    /* A test name is longer than a phone is wide, and .lab hides its overflow, so
+       inline code in a lab sub and in a stat tile has to break rather than be cut.
+       Nothing moves at desktop width. */
+    .lab-head .sub code, .stat .v { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="rail" aria-label="Guide contents">
+      <p class="rail-title">Curriculum</p>
+      <a href="#ch1"><span class="n">01</span><span>What a quest is keyed by</span></a>
+      <a href="#ch2"><span class="n">02</span><span>The pipeline stopped reading the game</span></a>
+      <a href="#ch3"><span class="n">03</span><span>Ninety-one renames and eight reused titles</span></a>
+      <a href="#lab-a" class="is-lab"><span class="n">LAB</span><span>Where the completion lands</span></a>
+      <a href="#ch4"><span class="n">04</span><span>One page, several game records</span></a>
+      <a href="#lab-b" class="is-lab"><span class="n">LAB</span><span>The order of evidence</span></a>
+      <a href="#ch5"><span class="n">05</span><span>The key the app computes for itself</span></a>
+      <a href="#lab-c" class="is-lab"><span class="n">LAB</span><span>Two spellings of one name</span></a>
+      <a href="#ch6"><span class="n">06</span><span>What ships is what both sources have</span></a>
+      <a href="#ch7"><span class="n">07</span><span>One prerequisite, two statuses</span></a>
+      <a href="#lab-d" class="is-lab"><span class="n">LAB</span><span>The collapse</span></a>
+      <a href="#ch8"><span class="n">08</span><span>Nothing publishes quietly</span></a>
+      <a href="#quiz"><span class="n">09</span><span>Comprehension gate</span></a>
+      <div class="rail-gate">
+        <strong id="railGateLabel">Gate locked</strong>
+        <span id="railGateHint">0 of 8 correct</span>
+        <div class="gate-meter"><i id="railGateBar"></i></div>
+      </div>
+    </nav>
+
+    <main>
+      <p class="eyebrow">PR #50 &middot; Code guide</p>
+      <h1>The quest that keeps your progress after the game renames it</h1>
+      <p class="lede">
+        Patch 1.1 renamed ninety-one quests and gave eight titles to a different quest.
+        The pipeline that rebuilds the app database identified a quest by its wiki page
+        address. A refresh would therefore detach recorded progress from all ninety-one.
+        On the eight it would attach that progress to the wrong quest. This change makes identity follow the
+        game's own identifier. Four labs let you operate the resolver, the collision
+        order, the name key and the prerequisite collapse.
+      </p>
+      <p class="lede" style="color:var(--muted);font-size:16px;">
+        This is phase 3 of the EFT 1.1 roadmap, code half only. Two decision documents
+        carry the design. <code>docs/decisions/feature-quest-data-1-1-refresh.md</code>
+        holds the product decision, and <code>feature-quest-data-1-1-refresh.spec.md</code>
+        holds the technical design. The research behind both is
+        <code>docs/assessments/2026-08-quest-data-1-1-refresh-grounds.md</code>. This PR
+        publishes no data. It prepares the pipeline, so that the regeneration in PR B runs
+        against reviewed code.
+      </p>
+
+      <div class="note">
+        <p class="note-label">The whole change</p>
+        <p>
+          The pipeline reads the game rules from a live source again. Quest identity now
+          follows the game's own identifier, so a rename keeps the player's progress. Seven
+          guards stop a run that would publish wrong data.
+        </p>
+      </div>
+
+      <!-- ===================== CHAPTER 1 ===================== -->
+      <section id="ch1">
+        <div class="chapter-head">
+          <span class="chapter-num">01</span>
+          <div>
+            <h2>What a quest is keyed by</h2>
+            <p class="kicker">
+              A quest has two keys, and the recorded progress of the player hangs off both
+              of them. Every decision in this change follows from that fact, so read this
+              chapter first.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The published database gives each quest a row key in <code>Quests.Id</code>. The
+          key is base64 of the wiki page address of the quest. Until this change the
+          pipeline computed that key again from the current page title on every run.
+        </p>
+        <p>
+          The app has a second key. No published database ever carried a
+          <code>NormalizedName</code> column, so both the released build and main compute
+          one from the quest name in SQL.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/QuestDbService.cs</span><span>LoadBaseQuestsAsync, the column-absent path</span></div>
+          <pre><code>LOWER(REPLACE(REPLACE(REPLACE(Name, ' ', '-'), '''', ''), '.', '')) AS NormalizedName</code></pre>
+        </div>
+
+        <p>
+          Recorded progress is a row in the database of the user:
+          <code>QuestProgress(ProfileId, Id, NormalizedName, Status)</code>. A write files
+          the row under the <code>Id</code> of the quest and stores the name key beside it.
+          A load keys each row by <code>normalizedName ?? id</code>, so a row written
+          before the name key existed answers to the row key alone.
+        </p>
+        <p>
+          A read therefore asks both keys, always.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/QuestProgressService.cs</span><span>IsRecordedAs</span></div>
+          <pre><code>private static bool IsRecordedAs(ProgressSnapshot snapshot, TarkovTask task, QuestStatus status)
+    =&gt; RecordedUnder(snapshot, ProgressKeyOf(task), status)
+       || RecordedUnder(snapshot, task.NormalizedName, status);</code></pre>
+        </div>
+
+        <p>
+          Now put the two facts together. The row key came from the page title, and the
+          name key came from the quest name. A patch that renames the page moves both keys
+          at once. The recorded row then matches neither key, and the completion of the
+          player disappears from the screen.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">The rule to carry through the guide</p>
+          <p>
+            A quest keeps the progress of the player only if it keeps at least one of its
+            two keys. This change keeps both.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== CHAPTER 2 ===================== -->
+      <section id="ch2">
+        <div class="chapter-head">
+          <span class="chapter-num">02</span>
+          <div>
+            <h2>The pipeline stopped reading the game</h2>
+            <p class="kicker">
+              The refresh had one source for the game rules, and that source went down in
+              July. Two older defects had already emptied the fields the app needs most.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The app describes a game that no longer exists. Patch 1.1 landed on 2026-08-03.
+          Quests it removed are still listed, quests it added are missing, and dissolved
+          chains still show quests as locked. The Kappa gauge counts 248 quests where the
+          game now requires 13.
+        </p>
+        <p>
+          The pipeline could not correct any of that. Its only source of game rules was the
+          tarkov.dev GraphQL endpoint, which has answered HTTP 422 since about 2026-07-22.
+          The queries it sent would not have helped in any case.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>the only task query the pipeline ever sent</span><span>before this change</span></div>
+          <pre><code>{ tasks(lang: en) { id tarkovDataId name normalizedName wikiLink trader { name } } }
+<span class="cmt">// No minimum level. No Kappa flag. No loyalty. No prerequisites. No faction.</span></code></pre>
+        </div>
+
+        <p>
+          Two older defects made the state worse. The first defect is an empty cache. A
+          fetch could receive a valid HTTP 200 that carried an error body. It wrote that
+          body to the cache as an empty set, and the refresh reported success.
+        </p>
+        <p>
+          The January 2026 regeneration ran that way. Since then <code>BsgId</code>, the
+          identifier the game itself uses, is NULL on all 488 quests and all 4014 items.
+          Two features read that column and both have been dead for seven months. Log sync
+          matches no quest event, and hideout item requirements resolve 0 of 317 rows.
+        </p>
+        <p>
+          The second defect is silence. A failed export batch was counted and ignored. An
+          empty wiki cache returned success with zero quests, and a missing item cache let
+          the run continue. Chapter 8 covers the guards that close each path.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">Why the empty cache matters more than it looks</p>
+          <p>
+            An empty cache does not fail. It publishes. The identifiers it dropped are the
+            same identifiers the rename carry-over in chapter 3 depends on. One silent
+            failure in January set the trap that patch 1.1 sprang.
+          </p>
+        </div>
+
+        <p>
+          The replacement source is the JSON API at <code>json.tarkov.dev</code>, which the
+          tarkov.dev front end itself reads. <code>TarkovDevJsonClient</code> fetches four
+          endpoints with their locale files, and it refuses an empty or malformed answer.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/TarkovDevJsonClient.cs</span><span>FetchTasksAsync, abbreviated</span></div>
+          <pre><code>var payload = Deserialize&lt;JsonEnvelope&lt;JsonTasksData&gt;&gt;(group.Bodies[0], TasksPath);
+var rawTasks = payload?.Data?.Tasks;
+if (rawTasks == null || rawTasks.Count == 0)
+{
+    <span class="cmt">// Never write an empty cache: see the class remarks.</span>
+    throw new InvalidOperationException(
+        $"{_baseUrl}{TasksPath} returned no tasks. Refusing to overwrite the cache with an empty set.");
+}
+
+foreach (var (id, task) in rawTasks)
+{
+    if (string.IsNullOrEmpty(task?.Id))
+        throw new InvalidOperationException($"{TasksPath}: task '{id}' has no id.");
+    if (string.IsNullOrEmpty(task.WikiLink))
+        throw new InvalidOperationException($"{TasksPath}: task '{task.Id}' has no wikiLink.");
+    <span class="cmt">// ... maps the task into the cache model</span>
+}</code></pre>
+        </div>
+
+        <p>
+          The client carries the fields the old query omitted: <code>minPlayerLevel</code>,
+          <code>kappaRequired</code>, <code>factionName</code>, <code>taskRequirements</code>
+          and the per-trader <code>traderRequirements</code>. It reads Korean and Japanese
+          names from the locale files beside each endpoint. It sends the stored ETag, so a
+          repeat run costs one 304 answer for each file.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 3 ===================== -->
+      <section id="ch3">
+        <div class="chapter-head">
+          <span class="chapter-num">03</span>
+          <div>
+            <h2>Ninety-one renames and eight reused titles</h2>
+            <p class="kicker">
+              This is the defect the change exists for. A refresh done the old way loses
+              progress on ninety-one quests, and moves progress onto the wrong quest on
+              eight of them.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Patch 1.1 de-numbered the multi-part chains. Measured against the 488 published
+          quests: 91 are renames to a page that still exists, 35 were removed from the
+          game, and 1 is a punctuation redirect.
+        </p>
+        <p>
+          Eight titles are worse than a rename. The Sew it Good, Punisher and Tarkov
+          Shooter parts were renumbered, so a title that named one quest now names another
+          one.
+        </p>
+
+        <div class="tbl">
+          <table>
+            <thead>
+              <tr><th>Published row</th><th>Its game record</th><th>Its 1.1 page</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Sew it Good - Part 4</td><td>5ae4497b86f7744cf402ed00</td><td>Sew it Good - Part 2</td></tr>
+              <tr><td>Sew it Good - Part 3</td><td>5ae4496986f774459e77beb6</td><td>Sew it Good - Part 4</td></tr>
+              <tr><td>A Shooter Born in Heaven</td><td>5c0bde0986f77479cf22c2f8</td><td>Shooter Born in Heaven</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          Read the first two rows together. A page-keyed refresh mints the row key for
+          "Sew it Good - Part 4" from that title, exactly as it did before. The completion
+          of the old Part 4 is filed under that same key. So the completion shows against
+          a quest the player has never done.
+        </p>
+        <p>
+          The answer is to follow the identifier of the game instead.
+          <code>QuestIdentityResolver</code> matches each wiki page to a task, and then
+          looks up the previous row that holds the same <code>BsgId</code>. Where it finds
+          one, the quest keeps the key of that row and its name key under the new title.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/QuestIdentityResolver.cs</span><span>Resolve, the identity step</span></div>
+          <pre><code>var carried = task == null ? null : previous.ByBsgId(task.Id);
+
+resolution.Quests.Add(new ResolvedQuest
+{
+    Title = page.Title,
+    WikiPageLink = WikiQuestIdentity.PageLinkFor(page.Title),
+    Id = carried?.Id ?? WikiQuestIdentity.IdFor(page.Title),
+    <span class="cmt">// A previous database without the NormalizedName column (every publish</span>
+    <span class="cmt">// before this one) still pins the value both builds computed for that row</span>
+    <span class="cmt">// themselves, which is what their stored progress is keyed by.</span>
+    NormalizedName = carried == null
+        ? QuestNormalizedName.SqlForm(page.Title)
+        : carried.NormalizedName ?? QuestNormalizedName.SqlForm(carried.Name),
+    Task = task,
+    FactionPairShared = factionPairShared,
+    PreviousName = carried?.Name,
+});</code></pre>
+        </div>
+
+        <p>
+          The carry-over is a property of the data, not of new app code. That matters,
+          because every install in the field runs the July release. Data reaches those
+          builds within minutes, and an app update cannot.
+        </p>
+        <p>
+          The carry-over has one precondition. It reads <code>BsgId</code> from the
+          previous database, and chapter 2 says that column is NULL on every row.
+          <code>BsgIdBackfillService</code> copies the identifiers back from the December
+          2025 snapshot, which holds 473 of the 488. One rename has no identifier to copy,
+          and the runbook sets that one by hand.
+        </p>
+      </section>
+
+      <div class="lab" id="lab-a">
+        <div class="lab-head">
+          <span class="lab-tag">Lab A</span>
+          <h3>Where the completion lands</h3>
+          <p class="sub">
+            The three published rows and the three 1.1 pages are the fixtures of
+            <code>QuestIdentityResolverTests.A_reused_title_moves_with_its_task_and_is_flagged</code>.
+            The lab runs the same identity step, and then looks the progress up the way
+            <code>QuestProgressService.IsRecordedAs</code> does: the row key, or the name
+            key. The other two tests it obeys are
+            <code>A_previous_row_without_an_external_id_cannot_be_carried</code> and
+            <code>RefreshGuardTests.An_unbackfilled_previous_database_fails_the_run_and_names_the_fix</code>.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">The refresh</span>
+            <div class="seg" id="labAWorld">
+              <button type="button" data-a-world="page" data-tone="bad" aria-pressed="true">keyed by the page</button>
+              <button type="button" data-a-world="unbackfilled">keyed by the game id, ids still NULL</button>
+              <button type="button" data-a-world="shipped" data-tone="good">keyed by the game id, ids restored</button>
+            </div>
+          </div>
+
+          <div class="lanes">
+            <div class="lane">
+              <div class="lane-head">
+                <span>Recorded before the refresh</span>
+                <span class="rev">user_data.db</span>
+              </div>
+              <div class="reads" id="labAStored"></div>
+            </div>
+          </div>
+
+          <div class="lanes" style="margin-top:14px;">
+            <div class="lane">
+              <div class="lane-head">
+                <span>After the refresh</span>
+                <span class="rev" id="labAWhen">written</span>
+              </div>
+              <div class="tbl">
+                <table>
+                  <thead>
+                    <tr><th>1.1 quest</th><th>Row key minted from</th><th>Name key</th><th>Shows</th></tr>
+                  </thead>
+                  <tbody id="labARows"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">Completions still on their quest</p>
+              <p class="v" id="labAKept">0 of 2</p>
+            </div>
+            <div class="stat">
+              <p class="k">Landed on the wrong quest</p>
+              <p class="v" id="labAWrong">1</p>
+            </div>
+            <div class="stat">
+              <p class="k">Row keys minted fresh</p>
+              <p class="v" id="labAMinted">3</p>
+            </div>
+            <div class="stat">
+              <p class="k">The run reaches the write</p>
+              <p class="v" id="labARuns">yes</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labAVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== CHAPTER 4 ===================== -->
+      <section id="ch4">
+        <div class="chapter-head">
+          <span class="chapter-num">04</span>
+          <div>
+            <h2>One page, several game records</h2>
+            <p class="kicker">
+              Ten wiki titles are the link target of two or three tasks. A page has to take
+              one of them, and which one it takes decides whose log events match.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          A quest row holds one <code>BsgId</code>. Ten pages have more than one candidate,
+          for two different reasons. Some quests exist as a BEAR record and a USEC record
+          behind one page. Others exist as an old record and a re-created record.
+        </p>
+        <p>
+          The first draft took the lowest identifier. That rule is not evidence, and on The
+          Tarkov Shooter - Part 5 it takes the dead record. Part 6 lists the other record as
+          its prerequisite, so the dead record also drops the only prerequisite Part 6 has.
+        </p>
+        <p>
+          <code>ChooseAmong</code> replaces the guess with a fixed order of evidence. The
+          order is reproducible, and the refresh report prints every candidate with the
+          rule that decided.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/QuestIdentityResolver.cs</span><span>ChooseAmong</span></div>
+          <pre><code>if (candidates.Count == 1)
+    return (candidates[0], CollisionRule.Single);
+
+<span class="cmt">// 1. A BEAR/USEC pair behind one page: the page serves both factions, as the four</span>
+<span class="cmt">//    published rows for Drip-Out and Textile do today.</span>
+if (candidates.Count == 2 &amp;&amp; IsFactionPair(candidates[0], candidates[1]))
+    return (LowestId(candidates), CollisionRule.FactionPair);
+
+<span class="cmt">// 2. The record the rest of the game data believes in: some other task requires it.</span>
+var requiredByAnother = candidates.Where(c =&gt; index.IsRequiredByAnotherTask(c.Id)).ToList();
+if (requiredByAnother.Count &gt; 0)
+    return (LowestId(requiredByAnother), CollisionRule.RequiredByAnotherTask);
+
+<span class="cmt">// 3. The record the user's own log events have already been matching.</span>
+var previousId = previous.ByPageTitle(title)?.BsgId;
+var previouslyHeld = candidates.FirstOrDefault(c =&gt;
+    string.Equals(c.Id, previousId, StringComparison.OrdinalIgnoreCase));
+if (previouslyHeld != null)
+    return (previouslyHeld, CollisionRule.PreviousRow);
+
+<span class="cmt">// 4. Nothing to go on: the record the game created most recently.</span>
+return (NewestId(candidates), CollisionRule.NewestId);</code></pre>
+        </div>
+
+        <p>
+          Step 1 also sets <code>FactionPairShared</code>, which keeps <code>Faction</code>
+          NULL on the row. That matters more than it looks. The released build compares the
+          faction string for equality, so a row that takes the BEAR side hides the quest
+          from every USEC player.
+        </p>
+        <p>
+          Step 4 needs the creation time of a record. The first eight hex digits of a game
+          identifier are a Unix timestamp, so the newest record is a sort. An identifier
+          that is not in that shape sorts oldest, and therefore never wins the tie-break by
+          accident.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/QuestIdentityResolver.cs</span><span>CreationTimeOf</span></div>
+          <pre><code>internal static long CreationTimeOf(TarkovDevQuestCacheItem task)
+{
+    if (task.Id.Length &lt; 8)
+        return long.MinValue;
+
+    return long.TryParse(task.Id.AsSpan(0, 8), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var seconds)
+        ? seconds
+        : long.MinValue;
+}</code></pre>
+        </div>
+
+        <p>
+          A task is claimed by one page only. The three match passes run in order of
+          strength: the page address against <code>wikiLink</code>, then the page title
+          against the slug of the task, then the committed alias list. Pages are sorted by
+          title before the passes, so two pages that compete for one task always resolve
+          the same way.
+        </p>
+      </section>
+
+      <div class="lab" id="lab-b">
+        <div class="lab-head">
+          <span class="lab-tag">Lab B</span>
+          <h3>The order of evidence</h3>
+          <p class="sub">
+            Each page here is the fixture of one test:
+            <code>A_faction_pair_behind_one_page_takes_the_lowest_id_and_stays_faction_neutral</code>,
+            <code>A_record_another_task_requires_beats_one_nothing_requires</code> and
+            <code>Otherwise_the_record_the_previous_row_already_held_wins</code>. Empty the
+            previous database to see step 4, which
+            <code>With_nothing_else_to_go_on_the_newest_record_wins</code> pins. The
+            identifiers are the ones those tests use.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">Rule</span>
+            <div class="seg" id="labBRule">
+              <button type="button" data-b-rule="lowest" data-tone="bad" aria-pressed="true">the lowest identifier</button>
+              <button type="button" data-b-rule="evidence" data-tone="good">the order of evidence</button>
+            </div>
+            <span class="ctl-label">Page</span>
+            <div class="seg" id="labBPage">
+              <button type="button" data-b-page="dripout" aria-pressed="true">Drip-Out - Part 1</button>
+              <button type="button" data-b-page="shooter5">The Tarkov Shooter - Part 5</button>
+              <button type="button" data-b-page="battery">Battery Change</button>
+            </div>
+            <span class="ctl-label">Previous database</span>
+            <div class="seg" id="labBPrevious">
+              <button type="button" data-b-previous="have" aria-pressed="true">backfilled</button>
+              <button type="button" data-b-previous="none">empty</button>
+            </div>
+          </div>
+
+          <div class="lanes">
+            <div class="lane">
+              <div class="lane-head">
+                <span>The candidates for this page</span>
+                <span class="rev" id="labBCount">2 records</span>
+              </div>
+              <div class="tbl">
+                <table>
+                  <thead>
+                    <tr><th>Record</th><th>Created</th><th>Faction</th><th>Required by another task</th><th>Held by the previous row</th></tr>
+                  </thead>
+                  <tbody id="labBCands"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="lanes" style="margin-top:14px;">
+            <div class="lane">
+              <div class="lane-head">
+                <span>The order of evidence</span>
+                <span class="lane-note">the step that decided is gold</span>
+              </div>
+              <div class="steps" id="labBSteps"></div>
+            </div>
+          </div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">Record the row takes</p>
+              <p class="v" id="labBChosen">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Rule that decided</p>
+              <p class="v" id="labBWhy">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Faction on the row</p>
+              <p class="v" id="labBFaction">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Cost</p>
+              <p class="v" id="labBCost">-</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labBVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== CHAPTER 5 ===================== -->
+      <section id="ch5">
+        <div class="chapter-head">
+          <span class="chapter-num">05</span>
+          <div>
+            <h2>The key the app computes for itself</h2>
+            <p class="kicker">
+              The schema grows by two additive pieces. One of them is a column whose
+              spelling decides whether recorded progress is found at all.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Chapter 1 showed the app computing a name key in SQL because no column holds one.
+          This change adds the column, and every build switches to it the moment it exists.
+          That is the hazard. The stored progress of the player is keyed by the value the
+          SQL expression produced, so the column has to produce the same value.
+        </p>
+        <p>
+          The editor already had a name normalizer, and it writes the tarkov.dev spelling:
+          <code>sew-it-good-part-4</code> where the app computes
+          <code>sew-it-good---part-4</code>. The two forms differ on 228 of the 488
+          published quests.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">The one change that is invisible to the drift guard</p>
+          <p>
+            A column of tarkov.dev spellings is additive. <code>DataFormatDriftTests</code>
+            reports it as widened, and the publish goes out. In the field it un-keys the
+            recorded progress of 228 quests in every build at once.
+          </p>
+        </div>
+
+        <p>
+          <code>QuestNormalizedName.SqlForm</code> is therefore a port of the SQL
+          expression, and not of the editor normalizer. It lowers A to Z only, because that
+          is all SQLite does. The bundled e_sqlite3 is built without ICU, so
+          <code>LOWER</code> leaves every non-ASCII letter alone.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/QuestNormalizedName.cs</span><span>SqlForm</span></div>
+          <pre><code>var result = new StringBuilder(name.Length);
+foreach (var c in name)
+{
+    switch (c)
+    {
+        case ' ':
+            result.Append('-');
+            break;
+        case '\'':
+        case '.':
+            break;
+        default:
+            result.Append(c is &gt;= 'A' and &lt;= 'Z' ? (char)(c + ('a' - 'A')) : c);
+            break;
+    }
+}</code></pre>
+        </div>
+
+        <p>
+          The typographic apostrophe U+2019 in "What&rsquo;s on the Flash Drive?" survives
+          this function. It survives the SQL expression too, because
+          <code>REPLACE</code> only ever looks for the ASCII apostrophe U+0027. The port is
+          correct exactly where it looks wrong.
+        </p>
+        <p>
+          One invariant holds the two keys together:
+          <code>NormalizedName == SqlForm(TitleOf(Id))</code>, where
+          <code>TitleOf</code> decodes the page title the row key was minted from. It holds
+          for a renamed row as well, because both sides then describe the original title.
+          Chapter 8 shows the guard that checks it on every row before a write.
+        </p>
+
+        <h3>The second piece: loyalty per trader</h3>
+        <p>
+          The roadmap expected each loyalty requirement to name the trader who gives the
+          quest, and chose a single column. The 1.1 data disagrees. Besides Collector, four
+          ordinary quests require loyalty with a trader other than their giver, and one of
+          them names five traders.
+        </p>
+        <p>
+          A single column would have dropped those gates in silence, so
+          <code>QuestTraderRequirements</code> is a child table that mirrors
+          <code>HideoutTraderRequirements</code>. Nothing on screen changes in this phase.
+          Builds in the field ignore the table, and phase 4 reads it.
+        </p>
+      </section>
+
+      <div class="lab" id="lab-c">
+        <div class="lab-head">
+          <span class="lab-tag">Lab C</span>
+          <h3>Two spellings of one name</h3>
+          <p class="sub">
+            The lab runs <code>QuestNormalizedName.SqlForm</code> and the editor
+            <code>NormalizeQuestName</code> side by side, and then looks the recorded
+            progress up. <code>QuestNormalizedNameTests.SqlForm_agrees_with_the_apps_SQL_expression_over_the_published_names</code>
+            evaluates the SQL expression over every published name and asserts equality
+            with the C# function, so the two cannot drift.
+            <code>SqlForm_removes_the_ascii_apostrophe_and_keeps_the_typographic_one</code>
+            pins the apostrophe row.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">The column the pipeline writes</span>
+            <div class="seg" id="labCStyle">
+              <button type="button" data-c-style="dev" data-tone="bad" aria-pressed="true">the tarkov.dev spelling</button>
+              <button type="button" data-c-style="sql" data-tone="good">the SQL form of the app</button>
+            </div>
+          </div>
+
+          <div class="tbl">
+            <table>
+              <thead>
+                <tr><th>Quest name</th><th>Written to NormalizedName</th><th>Progress is filed under</th><th>Found</th></tr>
+              </thead>
+              <tbody id="labCRows"></tbody>
+            </table>
+          </div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">Found in this sample</p>
+              <p class="v" id="labCMatched">3 of 6</p>
+            </div>
+            <div class="stat">
+              <p class="k">Un-keyed in the real data</p>
+              <p class="v" id="labCUnkeyed">228 of 488</p>
+            </div>
+            <div class="stat">
+              <p class="k">DataFormatDriftTests</p>
+              <p class="v" id="labCDrift">widened</p>
+            </div>
+            <div class="stat">
+              <p class="k">AssertPublishConstraints</p>
+              <p class="v" id="labCGuard">throws</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labCVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== CHAPTER 6 ===================== -->
+      <section id="ch6">
+        <div class="chapter-head">
+          <span class="chapter-num">06</span>
+          <div>
+            <h2>What ships is what both sources have</h2>
+            <p class="kicker">
+              The wiki lists quests the app has never shown, and the game data lists quests
+              the game removed. A quest ships when both sources have it, with one exception
+              the wiki itself writes.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The wiki quest category now holds 47 pages for the questline of the separate
+          Arena game, plus pages kept for removed quests. The JSON API still lists 35
+          quests the game removed. Neither source alone answers the question of what exists
+          today.
+        </p>
+        <p>
+          So a page becomes a quest when the crawl found it in the quest category, no
+          excluded category holds it, and a task matched it. Requiring both sources needs
+          no hand-maintained list of exceptions.
+        </p>
+        <p>
+          One exception is needed. The JSON API carries no record for the eighteen KORD
+          BREACH quests of the current season, in any game mode. Those pages come in on the
+          word of the wiki alone, recognised by the requirement line the pages themselves
+          carry.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/WikiQuestService.cs</span><span>ExtractIsSeasonal, abbreviated</span></div>
+          <pre><code>var reqMatch = Regex.Match(content, @"==\s*Requirements\s*==\s*(.*?)(?===|\z)", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+if (!reqMatch.Success)
+    return false;
+
+foreach (Match bullet in Regex.Matches(
+    reqMatch.Groups[1].Value,
+    @"^\*+\s*Must be playing in the\s*\[\[([^\]|]+)",
+    RegexOptions.IgnoreCase | RegexOptions.Multiline))
+{
+    var target = bullet.Groups[1].Value.Trim();
+    if (target.StartsWith("Seasons#", StringComparison.OrdinalIgnoreCase)
+        || target.Equals("PvP Season", StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+}
+
+return false;</code></pre>
+        </div>
+
+        <p>
+          The reader is deliberately narrow. It reads the link target of a requirement
+          bullet, and not the words around it. A page that mentions a season in prose is
+          not imported without a game record.
+        </p>
+        <p>
+          A narrow reader has a failure mode: the wiki changes the wording, no page matches,
+          and eighteen quests leave the app in silence. <code>MentionsSeasonalMode</code> is
+          the loose counterpart. When pages mention a seasonal mode and none of them
+          matches the strict reader, the run fails and names the reason.
+        </p>
+        <p>
+          A seasonal quest carries no <code>BsgId</code> until the API adds a record, so log
+          sync cannot mark it. When the API catches up, the page matches by its address, the
+          row key does not move, and a data-only publish fills the gap.
+        </p>
+
+        <h3>The one hand-maintained list</h3>
+        <p>
+          Three prestige tasks point their <code>wikiLink</code> at
+          <code>Neuanfang</code>, a German title with no page, and no normalization maps
+          "New Beginning (Prestige 2)" to <code>new-beginning-2</code>. Without help those
+          three published quests would leave the app.
+        </p>
+        <p>
+          <code>quest-match-overrides.json</code> bridges them. Each entry names the
+          upstream report it waits on, so the list is a workaround and not a second source
+          of truth. The refresh report flags an entry whose page matches without it, which
+          is how an entry gets retired.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Resources/Data/quest-match-overrides.json</span><span>one of three entries</span></div>
+          <pre><code>{
+  "pageTitle": "New Beginning (Prestige 2)",
+  "taskId": "6761ff17cdc36bd66102e9d0",
+  "upstreamIssue": "https://github.com/the-hideout/tarkov-data-manager/issues/851",
+  "note": "wikiLink points at the German title Neuanfang, which has no page; normalizedName is new-beginning-2 against the page's new-beginning-prestige-2."
+}</code></pre>
+        </div>
+
+        <p>
+          Prestige 5 and Prestige 6 have no record at all, and no seasonal marker. They
+          leave the app until the API carries them. Recorded progress on
+          them stays in the data of the user and reappears when they return.
+        </p>
+      </section>
+
+      <!-- ===================== CHAPTER 7 ===================== -->
+      <section id="ch7">
+        <div class="chapter-head">
+          <span class="chapter-num">07</span>
+          <div>
+            <h2>One prerequisite, two statuses</h2>
+            <p class="kicker">
+              Prerequisites now come from the game data. Fourteen of them name more than one
+              satisfying status, and a requirement row can hold only one.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The wiki chain is no longer usable. Patch 1.1 dissolved most chains, and the wiki
+          lists more prerequisites than the game on 111 quests and fewer on 60. The API list
+          is the game list, so the pipeline takes it.
+        </p>
+        <p>
+          The API has no OR groups. Fifteen quests had one in the published data, and they
+          collapse to the AND list of the game. The report shows each one before and after.
+        </p>
+        <p>
+          Then live 1.1 data produced a failure the spec did not anticipate. Fourteen
+          prerequisites name two statuses: ten name active or complete, and four name
+          complete or failed. The row key is the triple
+          <code>(quest, prerequisite, group)</code>, so one row for each status collides on
+          the primary key.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/RefreshDataService.cs</span><span>MapRequirementStatuses</span></div>
+          <pre><code>public static string MapRequirementStatuses(IReadOnlyList&lt;string&gt; statuses, string questTitle)
+{
+    <span class="cmt">// An entry with no status at all means the ordinary "must be completed".</span>
+    if (statuses.Count == 0)
+        return "Complete";
+
+    var types = statuses.Select(s =&gt; MapRequirementStatus(s, questTitle)).ToList();
+
+    if (types.Contains("Accept")) return "Accept";
+    if (types.Contains("Complete")) return "Complete";
+    return "Fail";
+}</code></pre>
+        </div>
+
+        <p>
+          The most permissive type wins. That choice is not arbitrary. The released build
+          treats <code>Accept</code> as satisfied by an active prerequisite and by a
+          completed one. So "active or complete" collapses onto <code>Accept</code> with
+          nothing lost.
+        </p>
+        <p>
+          "Complete or failed" has no single equivalent, and it takes <code>Complete</code>.
+          A player who failed the prerequisite may take the quest in the game, and the app
+          keeps it locked. Four quests are affected, the report lists them, and the PR asks
+          a reviewer to confirm the trade.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">The other direction is worse</p>
+          <p>
+            An unknown requirement type is never satisfied by
+            <code>QuestProgressService.IsStatusSatisfied</code>, so it locks the quest for
+            ever. A quest shown a little early is the smaller harm, and
+            <code>DeduplicateRequirements</code> resolves duplicate rows the same way.
+          </p>
+        </div>
+
+        <h3>Collector is computed, and now it can shrink</h3>
+        <p>
+          The prerequisite list of Collector is the Kappa set, derived from the flags rather
+          than curated. It used to be written after the transaction, which meant the code
+          could only insert. A quest that lost its Kappa flag kept its Collector row for
+          ever, and the published data carries one such leftover.
+        </p>
+        <p>
+          The rows are now built in memory, and they go through the same table-global diff
+          as every other requirement. A quest that leaves the Kappa set now leaves the list
+          of Collector with it. The Kappa count falls from 248 to 13.
+        </p>
+        <p>
+          The API also gives Collector five prerequisites of its own, and all five are
+          already in the Kappa set. Taking both would write the same row twice, so the
+          builder skips Collector on the same name test the synthesis matches on.
+        </p>
+      </section>
+
+      <div class="lab" id="lab-d">
+        <div class="lab-head">
+          <span class="lab-tag">Lab D</span>
+          <h3>The collapse</h3>
+          <p class="sub">
+            The lab runs <code>MapRequirementStatuses</code> and then the reading of the
+            released build, <code>QuestProgressService.IsStatusSatisfied</code>. Two tests
+            pin the pair:
+            <code>RefreshGuardTests.A_prerequisite_that_names_several_statuses_collapses_to_the_most_permissive</code>
+            and
+            <code>A_prerequisite_naming_several_statuses_produces_one_row_not_a_key_collision</code>.
+            The status vocabulary is pinned by
+            <code>A_prerequisite_status_the_app_cannot_read_fails_the_run</code>.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">The pipeline writes</span>
+            <div class="seg" id="labDWorld">
+              <button type="button" data-d-world="perstatus" data-tone="bad" aria-pressed="true">one row for each status</button>
+              <button type="button" data-d-world="collapse" data-tone="good">the most permissive type</button>
+            </div>
+            <span class="ctl-label">The game data says</span>
+            <div class="seg" id="labDStatus">
+              <button type="button" data-d-status="complete">complete</button>
+              <button type="button" data-d-status="active-complete" aria-pressed="true">active or complete</button>
+              <button type="button" data-d-status="complete-failed">complete or failed</button>
+              <button type="button" data-d-status="none">no status named</button>
+            </div>
+            <span class="ctl-label">The player has the prerequisite</span>
+            <div class="seg" id="labDPlayer">
+              <button type="button" data-d-player="notstarted">not started</button>
+              <button type="button" data-d-player="active" aria-pressed="true">active</button>
+              <button type="button" data-d-player="done">done</button>
+              <button type="button" data-d-player="failed">failed</button>
+            </div>
+          </div>
+
+          <div class="lanes">
+            <div class="lane">
+              <div class="lane-head">
+                <span>Rows the refresh builds</span>
+                <span class="lane-note">the row key is a hash of this string</span>
+              </div>
+              <div class="reads" id="labDRows"></div>
+            </div>
+          </div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">Rows for this prerequisite</p>
+              <p class="v" id="labDCount">2</p>
+            </div>
+            <div class="stat">
+              <p class="k">Type on the published row</p>
+              <p class="v" id="labDType">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">The write</p>
+              <p class="v" id="labDWrite">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">The quest on screen</p>
+              <p class="v" id="labDUnlock">-</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labDVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== CHAPTER 8 ===================== -->
+      <section id="ch8">
+        <div class="chapter-head">
+          <span class="chapter-num">08</span>
+          <div>
+            <h2>Nothing publishes quietly</h2>
+            <p class="kicker">
+              Every guard here describes a way this pipeline has already failed in silence.
+              A crossed threshold is a source problem, and never something to publish.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Seven guards stop a run before it writes. Three of them are presence tests. An
+          empty wiki cache fails the run. An empty or missing task cache fails it, and so
+          does an empty or missing trader cache. Each message names the menu command that
+          fixes it. An export batch that failed now aggregates and throws after the loop,
+          instead of being counted and ignored.
+        </p>
+        <p>
+          Three more are thresholds. Each threshold is a constant with a comment that names
+          the spec.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovDBEditor/Services/RefreshDataService.cs</span><span>RefreshGuards</span></div>
+          <pre><code><span class="cmt">/// Above this share of previous quests without an external ID, the carry-over</span>
+<span class="cmt">/// cannot work: every renamed quest would be minted a fresh row key while its page</span>
+<span class="cmt">/// still matched, so all 91 of them would lose their recorded progress. The</span>
+<span class="cmt">/// match-rate guard does not catch this, because the pages do still match.</span>
+public const double MaxPreviousQuestsWithoutBsgId = 0.10;
+
+<span class="cmt">/// Above this share of previously published quests losing their game record, the</span>
+<span class="cmt">/// task set is wrong (an outage serving a partial file, a game mode with fewer</span>
+<span class="cmt">/// tasks), not the game.</span>
+public const double MaxLostMatches = 0.05;
+
+<span class="cmt">/// Above this share of imported quests without a trader, the trader cache is wrong.</span>
+public const double MaxTradersMissing = 0.05;
+
+<span class="cmt">/// How far the task cache may lag the wiki crawl before the pair stops describing</span>
+<span class="cmt">/// one moment in the game.</span>
+public static readonly TimeSpan MaxTaskCacheLag = TimeSpan.FromDays(7);</code></pre>
+        </div>
+
+        <p>
+          The first constant is the guard the whole carry-over rests on. Lab A shows why the
+          match-rate guard cannot cover it. A run from a database whose identifiers are
+          still NULL matches every page. Nothing looks wrong, and every renamed quest gets a
+          fresh row key.
+        </p>
+        <p>
+          The seventh guard is the seasonal marker of chapter 6. Pages that mention a
+          seasonal mode with no page marked seasonal means the wording moved upstream.
+        </p>
+
+        <h3>The last gate before a write</h3>
+        <p>
+          <code>AssertPublishConstraints</code> checks the value vocabularies and the NULL
+          rules the released build depends on. Each item on its list is a way an additive
+          publish can still break a build that is already installed.
+        </p>
+        <ul>
+          <li>
+            <strong>The requirement type</strong> is one of Complete, Accept and Fail. An
+            unknown type is never satisfied, which locks the quest for ever.
+          </li>
+          <li>
+            <strong>The faction</strong> is NULL, Bear or Usec. The released build compares
+            the string for equality, so any other value hides the quest.
+          </li>
+          <li>
+            <strong>The name key</strong> equals <code>SqlForm(TitleOf(Id))</code> on every
+            row, is never empty, and is unique. Progress recorded against a row that fails
+            this test is not found.
+          </li>
+          <li>
+            <strong>The trader</strong> is present on all but a small share of rows, and no
+            two quests share a row key.
+          </li>
+        </ul>
+        <p>
+          The exception collects every problem and names the offending rows, rather than
+          throwing on the first one. An operator who must fix a source wants the whole list.
+        </p>
+
+        <h3>The report a regeneration is reviewed against</h3>
+        <p>
+          About every quest row changes in this refresh, and no one can review that in a
+          database browser. <code>tools/DataDiff</code> is a console project in the solution
+          that compares the published database against the candidate and writes markdown.
+        </p>
+        <p>
+          It joins quests by <code>BsgId</code> first and by row key second. A rename
+          therefore reads as a rename, and not as one removal with one addition. It calls
+          out the titles that changed owner and the prerequisite edges added and removed. It
+          also lists the objective lists whose shape changed, the icon coverage and the NULL
+          rates. It replaces <code>CheckDb</code>, an untouched Hello World scaffold, and
+          its comparison core has its own tests.
+        </p>
+        <p>
+          This PR also gives the pipeline its first tests, about 120 of them across six
+          suites. Before this change no service in the editor other than the publish service
+          had one.
+        </p>
+      </section>
+
+      <!-- ===================== QUIZ ===================== -->
+      <section id="quiz">
+        <div class="chapter-head">
+          <span class="chapter-num">09</span>
+          <div>
+            <h2>Comprehension gate</h2>
+            <p class="kicker">
+              There are eight questions. Each one needs the reasoning, and not the words.
+              The approval checklist below opens when all eight answers are correct. Each
+              incorrect answer gives an explanation, so you can read the chapter again.
+            </p>
+          </div>
+        </div>
+
+        <div class="quiz-intro">
+          <div class="quiz-score" id="quizScore">0/8</div>
+          <div>
+            <strong>This gate controls your speed. It is not a formality.</strong>
+            <p style="margin:4px 0 0;color:#c2c2c2;">
+              Questions 2 and 4 are the important ones. Both name a way this change can
+              publish data that looks correct and is not. If you cannot answer them, you did
+              not review this change. Answer each question, read the explanation, and
+              correct your understanding.
+            </p>
+          </div>
+        </div>
+
+        <div id="quizList"></div>
+
+        <div class="gate is-locked" id="gate">
+          <h3 id="gateTitle">Approval checklist: locked</h3>
+          <p id="gateBody">Answer all eight questions correctly to unlock the reviewer checklist.</p>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          Sources. The product decision is
+          <code>docs/decisions/feature-quest-data-1-1-refresh.md</code>. The technical design
+          is <code>docs/decisions/feature-quest-data-1-1-refresh.spec.md</code>. The research
+          both rest on is
+          <code>docs/assessments/2026-08-quest-data-1-1-refresh-grounds.md</code>. This PR
+          appends a superseded note to
+          <code>docs/decisions/feature-eft-1-1-roadmap.md</code> and its spec, and it updates
+          the reference documents <code>docs/database-schema.md</code> and
+          <code>docs/database-update-mechanism.md</code>.
+        </p>
+        <p>
+          The labs obey the same decision logic as the code, and they use the fixtures of the
+          tests. But they are examples, and they are not the released code.
+        </p>
+        <p>
+          These tests hold the shipped behaviour.
+          <code>QuestIdentityResolverTests</code> holds the matching, the collision order and
+          the identity carry-over of lab A and lab B.
+          <code>QuestNormalizedNameTests</code> holds the name key of lab C, and compares the
+          C# function against the SQL expression over every published name.
+          <code>RefreshGuardTests</code> drives the refresh against throwaway caches and holds
+          every guard of chapter 8, the prerequisite collapse of lab D among them.
+        </p>
+        <p>
+          <code>TarkovDevJsonClientTests</code> holds the client of chapter 2, including the
+          empty answer and the error body served with 200.
+          <code>BsgIdBackfillTests</code> holds the backfill.
+          <code>WikiQuestParsingTests</code> holds the seasonal marker of chapter 6.
+          <code>DataDiffTests</code> holds the report sections.
+          <code>ProgressCarryOverE2ETests</code> and <code>LegacySmokeE2ETests</code> drive
+          the carry-over through a real app window.
+        </p>
+        <p>
+          One test has never executed. <code>LegacySmokeE2ETests</code> needs an extracted
+          v2026.7.0 release and a candidate database, and neither exists on the machine this
+          change was written on. The PR body says so.
+        </p>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+
+    function bindSegment(root, attr, onPick) {
+      var buttons = Array.prototype.slice.call(root.querySelectorAll("[" + attr + "]"));
+      buttons.forEach(function (b) {
+        b.addEventListener("click", function () {
+          buttons.forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+          onPick(b.getAttribute(attr));
+        });
+      });
+    }
+
+    function say(node, tone, title, body) {
+      node.setAttribute("data-tone", tone);
+      node.innerHTML = "";
+      node.appendChild(el("b", null, title));
+      node.appendChild(document.createTextNode(body));
+    }
+
+    function chip(parent, text, cls) {
+      parent.appendChild(el("span", "step" + (cls ? " " + cls : ""), text));
+    }
+
+    function row(parent, key, value, tone, note, cls) {
+      var r = el("div", "read-row" + (cls ? " " + cls : ""));
+      r.appendChild(el("span", "rk", key));
+      var v = el("span", "rv", value);
+      if (tone) v.setAttribute("data-tone", tone);
+      r.appendChild(v);
+      r.appendChild(el("span", "ro", note || ""));
+      parent.appendChild(r);
+    }
+
+    function trow(tbody, cells, rowTone) {
+      var tr = el("tr");
+      if (rowTone) tr.setAttribute("data-row", rowTone);
+      cells.forEach(function (c) {
+        var td = el("td", null, c.t);
+        if (c.tone) td.setAttribute("data-tone", c.tone);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    }
+
+    function setTone(node, tone) {
+      if (tone) node.setAttribute("data-tone", tone);
+      else node.removeAttribute("data-tone");
+    }
+
+    /* ================= the two key functions, ported ================= */
+
+    var WIKI = "https://escapefromtarkov.fandom.com/wiki/";
+    var B64AZ = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    function base64(input) {
+      var out = "";
+      for (var i = 0; i < input.length; i += 3) {
+        var c1 = input.charCodeAt(i);
+        var c2 = i + 1 < input.length ? input.charCodeAt(i + 1) : -1;
+        var c3 = i + 2 < input.length ? input.charCodeAt(i + 2) : -1;
+        out += B64AZ.charAt(c1 >> 2);
+        out += B64AZ.charAt(((c1 & 3) << 4) | (c2 < 0 ? 0 : c2 >> 4));
+        out += c2 < 0 ? "=" : B64AZ.charAt(((c2 & 15) << 2) | (c3 < 0 ? 0 : c3 >> 6));
+        out += c3 < 0 ? "=" : B64AZ.charAt(c3 & 63);
+      }
+      return out;
+    }
+
+    function unbase64(text) {
+      var clean = text.replace(/=+$/, "");
+      var out = "";
+      var acc = 0;
+      var bits = 0;
+      for (var i = 0; i < clean.length; i++) {
+        var v = B64AZ.indexOf(clean.charAt(i));
+        if (v < 0) return null;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+          bits -= 8;
+          out += String.fromCharCode((acc >> bits) & 255);
+        }
+      }
+      return out;
+    }
+
+    // WikiQuestIdentity.PageLinkFor / IdFor / TitleOf.
+    function pageLinkFor(title) {
+      var encoded = encodeURIComponent(title.split(" ").join("_"))
+        .split("%28").join("(")
+        .split("%29").join(")");
+      return WIKI + encoded;
+    }
+
+    function idFor(title) { return base64(pageLinkFor(title)); }
+
+    function titleOf(questId) {
+      var url = unbase64(questId);
+      if (url == null || url.indexOf(WIKI) !== 0) return null;
+      var encoded = url.slice(WIKI.length);
+      if (!encoded.length) return null;
+      return decodeURIComponent(encoded).split("_").join(" ");
+    }
+
+    // QuestNormalizedName.SqlForm: spaces to dashes, the ASCII apostrophe and the period
+    // dropped, A to Z lowered, and nothing else touched.
+    function sqlForm(name) {
+      var out = "";
+      for (var i = 0; i < name.length; i++) {
+        var c = name.charAt(i);
+        if (c === " ") out += "-";
+        else if (c === "'" || c === ".") out += "";
+        else if (c >= "A" && c <= "Z") out += String.fromCharCode(c.charCodeAt(0) + 32);
+        else out += c;
+      }
+      return out;
+    }
+
+    // QuestIdentityResolver.NormalizeQuestName: the tarkov.dev slug spelling.
+    function devForm(name) {
+      var n = name.toLowerCase();
+      if (n.slice(-8) === " (quest)") n = n.slice(0, -8);
+      n = n.split(" ").join("-");
+      n = n.replace(/[^a-z0-9\-]/g, "");
+      n = n.replace(/-+/g, "-");
+      return n.replace(/^-+/, "").replace(/-+$/, "");
+    }
+
+    function shortKey(value) {
+      return value.length > 20 ? value.slice(0, 16) + "..." : value;
+    }
+
+    /* ================= Lab A: where the completion lands ================= */
+
+    var A = { world: "page" };
+
+    // The three published rows the resolver tests use as fixtures. NormalizedName is null
+    // on all of them, because no published database has ever carried the column.
+    var A_PREVIOUS = [
+      { name: "Sew it Good - Part 4", bsgId: "5ae4497b86f7744cf402ed00", storedBy: "name", status: "Done" },
+      { name: "Sew it Good - Part 3", bsgId: "5ae4496986f774459e77beb6", storedBy: null, status: null },
+      { name: "A Shooter Born in Heaven", bsgId: "5c0bde0986f77479cf22c2f8", storedBy: "id", status: "Done" }
+    ];
+
+    // The 1.1 pages, each with the game record its wikiLink names.
+    var A_PAGES = [
+      { title: "Sew it Good - Part 2", taskId: "5ae4497b86f7744cf402ed00" },
+      { title: "Sew it Good - Part 4", taskId: "5ae4496986f774459e77beb6" },
+      { title: "Shooter Born in Heaven", taskId: "5c0bde0986f77479cf22c2f8" }
+    ];
+
+    // UserDataDbService keys each stored row by normalizedName ?? id, so a row written
+    // before the name key existed answers to the row key alone.
+    var A_PROGRESS = A_PREVIOUS
+      .filter(function (r) { return r.status != null; })
+      .map(function (r) {
+        return {
+          quest: r.name,
+          status: r.status,
+          bsgId: r.bsgId,
+          key: r.storedBy === "id" ? idFor(r.name) : sqlForm(r.name),
+          storedBy: r.storedBy
+        };
+      });
+
+    var aStored = document.getElementById("labAStored");
+    var aRows = document.getElementById("labARows");
+    var aWhen = document.getElementById("labAWhen");
+    var aKept = document.getElementById("labAKept");
+    var aWrong = document.getElementById("labAWrong");
+    var aMinted = document.getElementById("labAMinted");
+    var aRuns = document.getElementById("labARuns");
+    var aVerdict = document.getElementById("labAVerdict");
+
+    function aResolve(world) {
+      // The backfill has not run in the unbackfilled world, so every previous row carries
+      // a null external id and the resolver finds nothing to carry.
+      var previous = A_PREVIOUS.map(function (r) {
+        return { name: r.name, bsgId: world === "unbackfilled" ? null : r.bsgId, normalizedName: null };
+      });
+
+      var byBsgId = {};
+      if (world !== "page") {
+        previous.forEach(function (r) {
+          if (r.bsgId) byBsgId[r.bsgId.toLowerCase()] = r;
+        });
+      }
+
+      return A_PAGES.map(function (page) {
+        var carried = byBsgId[page.taskId.toLowerCase()] || null;
+        return {
+          title: page.title,
+          taskId: page.taskId,
+          id: carried ? idFor(carried.name) : idFor(page.title),
+          nn: carried
+            ? (carried.normalizedName != null ? carried.normalizedName : sqlForm(carried.name))
+            : sqlForm(page.title),
+          carried: carried != null
+        };
+      });
+    }
+
+    // QuestProgressService.IsRecordedAs asks the row key and the name key.
+    function aFinds(quest, stored) {
+      return stored.key === quest.nn || stored.key === quest.id;
+    }
+
+    function renderA() {
+      var quests = aResolve(A.world);
+      var refused = A.world === "unbackfilled";
+
+      aStored.innerHTML = "";
+      A_PROGRESS.forEach(function (p) {
+        row(aStored, p.quest, p.status, "good",
+          p.storedBy === "id" ? "filed under the row key" : "filed under the name key");
+      });
+
+      var kept = 0;
+      var wrong = 0;
+      var minted = 0;
+
+      aRows.innerHTML = "";
+      quests.forEach(function (q) {
+        if (!q.carried) minted++;
+
+        var landed = A_PROGRESS.filter(function (p) { return aFinds(q, p); });
+        var owner = landed.filter(function (p) { return p.bsgId === q.taskId; });
+        var stranger = landed.filter(function (p) { return p.bsgId !== q.taskId; });
+
+        kept += owner.length;
+        wrong += stranger.length;
+
+        var shows = landed.length === 0 ? "nothing" : landed[0].status;
+        var tone = stranger.length > 0 ? "bad" : (owner.length > 0 ? "good" : "dim");
+        var note = stranger.length > 0 ? " (recorded on " + stranger[0].quest + ")" : "";
+
+        trow(aRows, [
+          { t: q.title },
+          { t: titleOf(q.id) || "unknown", tone: q.carried ? "good" : "dim" },
+          { t: q.nn },
+          { t: shows + note, tone: tone }
+        ], stranger.length > 0 ? "wrong" : (owner.length > 0 ? "kept" : null));
+      });
+
+      aWhen.textContent = refused ? "refused, this is what it would have written" : "written";
+      aKept.textContent = kept + " of " + A_PROGRESS.length;
+      aWrong.textContent = String(wrong);
+      aMinted.textContent = String(minted);
+      aRuns.textContent = refused ? "refused" : "yes";
+
+      setTone(aKept, kept === A_PROGRESS.length ? "good" : "bad");
+      setTone(aWrong, wrong > 0 ? "bad" : "good");
+      setTone(aMinted, minted > 0 ? "bad" : "good");
+      setTone(aRuns, refused ? "good" : (wrong > 0 ? "bad" : "good"));
+
+      if (A.world === "page") {
+        say(aVerdict, "bad", "Both completions are gone, and one of them moved. ",
+          "The refresh minted three fresh row keys. The completion of the old Part 4 now shows against the quest that took that title, which the player has never done.");
+      } else if (refused) {
+        say(aVerdict, "good", "The run stops before it writes. ",
+          "All three rows carry no external id, which is above the ten percent limit, so the refresh refuses to start and names the backfill command. Without this guard the table above is what reaches every install.");
+      } else {
+        say(aVerdict, "good", "Both completions stay on their own quest. ",
+          "No row key was minted, so the released build finds each one under the key it recorded. The row key still decodes to the title the quest was first published under, which is what the publish guard checks.");
+      }
+    }
+
+    bindSegment(document.getElementById("labAWorld"), "data-a-world", function (v) {
+      A.world = v;
+      renderA();
+    });
+
+    /* ================= Lab B: the order of evidence ================= */
+
+    var B = { rule: "lowest", page: "dripout", previous: "have" };
+
+    var B_PAGES = {
+      dripout: {
+        key: "dripout",
+        title: "Drip-Out - Part 1",
+        previousBsgId: null,
+        candidates: [
+          { id: "5e4d515e86f77439374a0d62", faction: "USEC", requiredByAnother: false },
+          { id: "5e4d4ac186f774264f758336", faction: "BEAR", requiredByAnother: false }
+        ]
+      },
+      shooter5: {
+        key: "shooter5",
+        title: "The Tarkov Shooter - Part 5",
+        previousBsgId: null,
+        candidates: [
+          { id: "5bc4826c86f774106d22d88b", faction: null, requiredByAnother: false },
+          { id: "5bc4836986f7740c0152911c", faction: null, requiredByAnother: true }
+        ]
+      },
+      battery: {
+        key: "battery",
+        title: "Battery Change",
+        previousBsgId: "639136df4b15ca31f76bc31f",
+        candidates: [
+          { id: "6a45208043b8d7604d00b8d5", faction: null, requiredByAnother: false },
+          { id: "639136df4b15ca31f76bc31f", faction: null, requiredByAnother: false }
+        ]
+      }
+    };
+
+    var B_STEPS = [
+      "1 a faction pair",
+      "2 another task requires it",
+      "3 the previous row held it",
+      "4 the newest record"
+    ];
+
+    // QuestIdentityResolver.CreationTimeOf: the first eight hex digits are a Unix time.
+    function creationTimeOf(id) {
+      if (id.length < 8) return -Infinity;
+      var seconds = parseInt(id.slice(0, 8), 16);
+      return isNaN(seconds) ? -Infinity : seconds;
+    }
+
+    function createdOn(id) {
+      var seconds = creationTimeOf(id);
+      if (seconds === -Infinity) return "unknown";
+      return new Date(seconds * 1000).toISOString().slice(0, 10);
+    }
+
+    function lowestId(candidates) {
+      return candidates.slice().sort(function (a, b) {
+        return a.id.toLowerCase() < b.id.toLowerCase() ? -1 : 1;
+      })[0];
+    }
+
+    function newestId(candidates) {
+      return candidates.slice().sort(function (a, b) {
+        var d = creationTimeOf(b.id) - creationTimeOf(a.id);
+        if (d !== 0) return d;
+        return a.id.toLowerCase() < b.id.toLowerCase() ? 1 : -1;
+      })[0];
+    }
+
+    function isFactionPair(a, b) {
+      var factions = [a.faction, b.faction];
+      return factions.indexOf("BEAR") >= 0 && factions.indexOf("USEC") >= 0;
+    }
+
+    // ChooseAmong, with the first draft kept beside it.
+    function bChoose(page, rule, hasPrevious) {
+      var c = page.candidates;
+      if (c.length === 1) return { task: c[0], rule: "Single", step: 0 };
+      if (rule === "lowest") return { task: lowestId(c), rule: "LowestId", step: -1 };
+      if (c.length === 2 && isFactionPair(c[0], c[1])) return { task: lowestId(c), rule: "FactionPair", step: 1 };
+      var required = c.filter(function (x) { return x.requiredByAnother; });
+      if (required.length > 0) return { task: lowestId(required), rule: "RequiredByAnotherTask", step: 2 };
+      var previousId = hasPrevious ? page.previousBsgId : null;
+      var held = previousId
+        ? c.filter(function (x) { return x.id.toLowerCase() === previousId.toLowerCase(); })[0]
+        : null;
+      if (held) return { task: held, rule: "PreviousRow", step: 3 };
+      return { task: newestId(c), rule: "NewestId", step: 4 };
+    }
+
+    function bFaction(page, choice) {
+      if (choice.rule === "FactionPair") return "NULL";
+      if (choice.task.faction === "BEAR") return "Bear";
+      if (choice.task.faction === "USEC") return "Usec";
+      return "NULL";
+    }
+
+    function bCost(page, choice, faction) {
+      if (page.key === "dripout") {
+        return faction === "NULL" ? "both factions see it" : "one faction loses it";
+      }
+      if (page.key === "shooter5") {
+        return choice.task.requiredByAnother ? "Part 6 keeps its chain" : "Part 6 loses its chain";
+      }
+      return choice.task.id === page.previousBsgId ? "log events still match" : "log events stop matching";
+    }
+
+    var bCands = document.getElementById("labBCands");
+    var bStepsBox = document.getElementById("labBSteps");
+    var bCount = document.getElementById("labBCount");
+    var bChosen = document.getElementById("labBChosen");
+    var bWhy = document.getElementById("labBWhy");
+    var bFactionOut = document.getElementById("labBFaction");
+    var bCostOut = document.getElementById("labBCost");
+    var bVerdict = document.getElementById("labBVerdict");
+
+    function renderB() {
+      var page = B_PAGES[B.page];
+      var hasPrevious = B.previous === "have";
+      var choice = bChoose(page, B.rule, hasPrevious);
+      var faction = bFaction(page, choice);
+      var cost = bCost(page, choice, faction);
+      var losing = cost === "one faction loses it"
+        || cost === "Part 6 loses its chain"
+        || cost === "log events stop matching";
+
+      bCount.textContent = page.candidates.length + " records";
+
+      bCands.innerHTML = "";
+      page.candidates.forEach(function (c) {
+        var chosen = c.id === choice.task.id;
+        var heldByPrevious = hasPrevious && page.previousBsgId === c.id;
+        trow(bCands, [
+          { t: c.id, tone: chosen ? "good" : "dim" },
+          { t: createdOn(c.id) },
+          { t: c.faction || "Any" },
+          { t: c.requiredByAnother ? "yes" : "no" },
+          { t: heldByPrevious ? "yes" : "no" }
+        ], chosen ? "kept" : null);
+      });
+
+      bStepsBox.innerHTML = "";
+      if (B.rule === "lowest") {
+        chip(bStepsBox, "the lowest identifier", "is-now");
+        B_STEPS.forEach(function (label) { chip(bStepsBox, label); });
+      } else {
+        B_STEPS.forEach(function (label, index) {
+          var step = index + 1;
+          chip(bStepsBox, label,
+            step === choice.step ? "is-now" : (step < choice.step ? "is-done" : null));
+        });
+      }
+
+      bChosen.textContent = shortKey(choice.task.id);
+      bWhy.textContent = choice.rule;
+      bFactionOut.textContent = faction;
+      bCostOut.textContent = cost;
+      setTone(bChosen, losing ? "bad" : "good");
+      setTone(bCostOut, losing ? "bad" : "good");
+      setTone(bFactionOut, faction === "NULL" ? "good" : (page.key === "dripout" ? "bad" : null));
+
+      if (B.rule === "lowest" && losing) {
+        say(bVerdict, "bad", "The lowest identifier is not evidence. ",
+          "It takes the wrong record here, and the loss leaves no mark in the data. Nothing in the published database says which record the page should have taken.");
+      } else if (B.rule === "lowest") {
+        say(bVerdict, "bad", "Right answer, wrong reason. ",
+          "The lowest identifier happens to name the record the evidence would also have picked. Change the page above and the same rule takes the wrong one.");
+      } else if (choice.rule === "FactionPair") {
+        say(bVerdict, "good", "Step 1 holds the page faction neutral. ",
+          "One page serves a BEAR record and a USEC record, so the row keeps Faction NULL. The released build compares that string for equality, and any value hides the quest from the other side.");
+      } else if (choice.rule === "RequiredByAnotherTask") {
+        say(bVerdict, "good", "Step 2 follows the rest of the game data. ",
+          "Part 6 names this record as its prerequisite, so the record is the one the game uses. The other record is dead, and nothing requires it.");
+      } else if (choice.rule === "PreviousRow") {
+        say(bVerdict, "good", "Step 3 keeps what the player already matched. ",
+          "Both records are identical in every field, and neither is required by another task. The record the previous row held is the only choice that changes nothing for the player.");
+      } else {
+        say(bVerdict, "bad", "Step 4 is the last resort, and it can be wrong. ",
+          "With no previous row to consult, the newest record wins on its creation time. Here that takes the re-created record, and the log events of the player stop matching.");
+      }
+    }
+
+    bindSegment(document.getElementById("labBRule"), "data-b-rule", function (v) { B.rule = v; renderB(); });
+    bindSegment(document.getElementById("labBPage"), "data-b-page", function (v) { B.page = v; renderB(); });
+    bindSegment(document.getElementById("labBPrevious"), "data-b-previous", function (v) { B.previous = v; renderB(); });
+
+    /* ================= Lab C: two spellings of one name ================= */
+
+    var C = { style: "dev" };
+
+    var C_NAMES = [
+      "Sew it Good - Part 4",
+      "A Shooter Born in Heaven",
+      "What’s on the Flash Drive?",
+      "The Tarkov Shooter - Part 5",
+      "Stirrup",
+      "Collector"
+    ];
+
+    var cRows = document.getElementById("labCRows");
+    var cMatched = document.getElementById("labCMatched");
+    var cUnkeyed = document.getElementById("labCUnkeyed");
+    var cDrift = document.getElementById("labCDrift");
+    var cGuard = document.getElementById("labCGuard");
+    var cVerdict = document.getElementById("labCVerdict");
+
+    function renderC() {
+      var found = 0;
+      var guardHolds = true;
+
+      cRows.innerHTML = "";
+      C_NAMES.forEach(function (name) {
+        var written = C.style === "sql" ? sqlForm(name) : devForm(name);
+        var filed = sqlForm(name);
+        var hit = written === filed;
+        if (hit) found++;
+
+        // AssertPublishConstraints: NormalizedName == SqlForm(TitleOf(Id)).
+        if (sqlForm(titleOf(idFor(name)) || "") !== written) guardHolds = false;
+
+        trow(cRows, [
+          { t: name },
+          { t: written, tone: hit ? "good" : "bad" },
+          { t: filed },
+          { t: hit ? "yes" : "no", tone: hit ? "good" : "bad" }
+        ], hit ? "kept" : "wrong");
+      });
+
+      cMatched.textContent = found + " of " + C_NAMES.length;
+      cUnkeyed.textContent = C.style === "sql" ? "none" : "228 of 488";
+      cDrift.textContent = "widened, either way";
+      cGuard.textContent = guardHolds ? "holds" : "throws";
+      setTone(cMatched, found === C_NAMES.length ? "good" : "bad");
+      setTone(cUnkeyed, C.style === "sql" ? "good" : "bad");
+      setTone(cGuard, guardHolds ? "good" : "bad");
+
+      if (C.style === "sql") {
+        say(cVerdict, "good", "Every name key is the value the app computed for itself. ",
+          "The typographic apostrophe survives, because SQLite only ever replaces the ASCII one. The publish guard reads the row key back to the title and compares, row by row.");
+      } else {
+        say(cVerdict, "bad", "Three of the six names move, and the progress under them is lost. ",
+          "In the published data that is 228 quests of 488. The schema guard reports an added column and passes, because the meaning change does not show in a schema.");
+      }
+    }
+
+    bindSegment(document.getElementById("labCStyle"), "data-c-style", function (v) { C.style = v; renderC(); });
+
+    /* ================= Lab D: the collapse ================= */
+
+    var D = { world: "perstatus", status: "active-complete", player: "active" };
+
+    var D_STATUSES = {
+      "complete": ["complete"],
+      "active-complete": ["active", "complete"],
+      "complete-failed": ["complete", "failed"],
+      "none": []
+    };
+
+    var D_KEY = "REQ|the quest|its prerequisite|0";
+
+    function mapOne(status) {
+      if (status === "complete") return "Complete";
+      if (status === "active") return "Accept";
+      if (status === "failed") return "Fail";
+      return null;
+    }
+
+    // RefreshDataService.MapRequirementStatuses.
+    function mapStatuses(statuses) {
+      if (statuses.length === 0) return "Complete";
+      var types = statuses.map(mapOne);
+      if (types.indexOf("Accept") >= 0) return "Accept";
+      if (types.indexOf("Complete") >= 0) return "Complete";
+      return "Fail";
+    }
+
+    // QuestProgressService.IsStatusSatisfied, for one requirement row.
+    function satisfied(type, player) {
+      if (type === "Accept") return player === "active" || player === "done";
+      if (type === "Complete") return player === "done";
+      if (type === "Fail") return player === "failed";
+      return false;
+    }
+
+    var dRows = document.getElementById("labDRows");
+    var dCount = document.getElementById("labDCount");
+    var dType = document.getElementById("labDType");
+    var dWrite = document.getElementById("labDWrite");
+    var dUnlock = document.getElementById("labDUnlock");
+    var dVerdict = document.getElementById("labDVerdict");
+
+    function renderD() {
+      var statuses = D_STATUSES[D.status];
+      var perStatus = D.world === "perstatus";
+      var types = perStatus
+        ? (statuses.length === 0 ? ["Complete"] : statuses.map(mapOne))
+        : [mapStatuses(statuses)];
+      var collides = types.length > 1;
+
+      dRows.innerHTML = "";
+      types.forEach(function (type, index) {
+        var duplicate = index > 0;
+        row(dRows, D_KEY, type, duplicate ? "bad" : "good",
+          duplicate ? "the same key again" : "one requirement row",
+          duplicate ? "is-dropped" : null);
+      });
+
+      var published = collides ? null : types[0];
+      var unlocked = published != null && satisfied(published, D.player);
+
+      dCount.textContent = String(types.length);
+      dType.textContent = published || "no row";
+      dWrite.textContent = collides ? "constraint failed (19)" : "one row";
+      dUnlock.textContent = collides ? "the refresh never finished" : (unlocked ? "available" : "locked");
+      setTone(dCount, collides ? "bad" : "good");
+      setTone(dType, collides ? "bad" : "good");
+      setTone(dWrite, collides ? "bad" : "good");
+      setTone(dUnlock, collides ? "bad" : (unlocked ? "good" : null));
+
+      var overLocked = !collides && D.status === "complete-failed" && D.player === "failed";
+
+      if (collides) {
+        say(dVerdict, "bad", "Two rows share one key, and the transaction fails. ",
+          "A requirement row is identified by the quest, the prerequisite and the group. One row for each status is not an alternative, it is the same row twice.");
+      } else if (overLocked) {
+        say(dVerdict, "bad", "This is the trade the PR asks a reviewer to confirm. ",
+          "The game accepts a failed prerequisite here, and the app keeps the quest locked. Four quests carry this pattern, and the refresh report lists each one.");
+      } else if (D.status === "active-complete") {
+        say(dVerdict, "good", "Accept covers both statuses, so nothing is lost. ",
+          "The released build treats Accept as satisfied by an active prerequisite and by a completed one. Ten prerequisites collapse this way.");
+      } else if (D.status === "none") {
+        say(dVerdict, "good", "An entry with no status is the ordinary case. ",
+          "It means the prerequisite must be complete, so the row takes Complete and the quest waits for the completion.");
+      } else if (D.status === "complete-failed") {
+        say(dVerdict, "good", "Complete is the path a player normally follows. ",
+          "The row locks the quest until the prerequisite is done. Move the player to failed to see the case the report lists for review.");
+      } else {
+        say(dVerdict, "good", "One status, one row, no choice to make. ",
+          "This is what most prerequisites look like, and it is why the collision stayed hidden until live 1.1 data reached the pipeline.");
+      }
+    }
+
+    bindSegment(document.getElementById("labDWorld"), "data-d-world", function (v) { D.world = v; renderD(); });
+    bindSegment(document.getElementById("labDStatus"), "data-d-status", function (v) { D.status = v; renderD(); });
+    bindSegment(document.getElementById("labDPlayer"), "data-d-player", function (v) { D.player = v; renderD(); });
+
+    renderA();
+    renderB();
+    renderC();
+    renderD();
+
+    /* ================= comprehension gate ================= */
+
+    var QUESTIONS = [
+      {
+        q: "A page-keyed refresh puts the completion of the old Sew it Good - Part 4 onto a quest the player has never done. Which fact makes that happen?",
+        options: [
+          "The wiki deleted the old page, so the recorded row lost its target",
+          "Both keys are computed from the page title. Patch 1.1 gave that title to a different quest, so the recorded row matches that quest under both keys",
+          "The progress table has no foreign key, so any row can attach to any quest",
+          "BsgId was NULL, so the resolver skipped the quest and left it unmatched"
+        ],
+        answer: 1,
+        why: "Lab A shows it. Select the page-keyed refresh: the row key of Sew it Good - Part 4 is minted from that title again, and so is the name key. The recorded row was filed under exactly those values."
+      },
+      {
+        q: "The refresh refuses to start when more than ten percent of previous quests carry no external id. Why does the match-rate guard not cover that case?",
+        options: [
+          "The match-rate guard runs after the write, so it is too late",
+          "The match-rate guard counts items rather than quests",
+          "Every page still matches a task, so no match is lost. The carry-over fails silently, because there is no external id to look the previous row up by",
+          "Five percent is too high a threshold to catch it"
+        ],
+        answer: 2,
+        why: "The two guards watch different things. Matching is about pages and tasks, and it is healthy in this case. Carry-over is about the previous row, and it is dead. Lab A pairs them: the unbackfilled world resolves exactly like the page-keyed one."
+      },
+      {
+        q: "The new NormalizedName column reproduces the SQL expression of the app rather than the tarkov.dev spelling. What breaks if it does not?",
+        options: [
+          "The column would not be unique, so the index would fail",
+          "Both builds switch to the column the moment it exists, and stored progress is keyed by what the SQL expression produced. The two spellings differ on 228 of 488 quests",
+          "SQLite cannot store the repeated dashes the SQL expression produces",
+          "The tarkov.dev spelling changes whenever upstream renames a task"
+        ],
+        answer: 1,
+        why: "Lab C shows the loss. The name key is not a display value, it is the key recorded progress is filed under. A column that spells it differently orphans that progress in every install at once."
+      },
+      {
+        q: "A column of tarkov.dev spellings would be additive. What would fail the run, and what would not?",
+        options: [
+          "DataFormatDriftTests would go red, because the column changes meaning",
+          "Nothing would fail, and the wrong data would publish",
+          "The schema guard reports an added column and passes. AssertPublishConstraints is the check that sees it, because it compares each name key against the row key it decodes",
+          "The publish tool would refuse, because the user_version stayed at 1"
+        ],
+        answer: 2,
+        why: "A schema guard reads shapes, and the shape is correct. The publish constraint reads meaning: NormalizedName must equal SqlForm(TitleOf(Id)) on every row. That is why the invariant is written as a comparison the run can make."
+      },
+      {
+        q: "The Tarkov Shooter - Part 5 exists as two records. Taking the lowest identifier costs more than the identity choice. What else does it cost?",
+        options: [
+          "It takes the record nothing requires, so Part 6 loses the only prerequisite it has",
+          "It takes the record with the wrong faction, so USEC players lose the quest",
+          "It leaves both records unclaimed, so the page is held back",
+          "It duplicates the page, so two quest rows carry the same title"
+        ],
+        answer: 0,
+        why: "Lab B shows it. Select The Tarkov Shooter - Part 5 with the lowest identifier: the dead record wins, and the row Part 6 points at is not imported. Step 2 exists because the rest of the game data already names the live record."
+      },
+      {
+        q: "When a BEAR record and a USEC record share one page, the row keeps Faction NULL. What does a faction value cost there?",
+        options: [
+          "It sorts the quest to the end of the list",
+          "It makes the row fail the drift guard, which allows one value for each column",
+          "The released build compares the faction string for equality. A row that takes one side hides the quest from every player on the other side",
+          "It stops the log sync from matching either record"
+        ],
+        answer: 2,
+        why: "The four published rows for Drip-Out and Textile are faction neutral today, and the page serves both sides. Lab B shows the lowest-identifier rule taking the BEAR record and its faction with it."
+      },
+      {
+        q: "Four prerequisites name complete or failed, and the row takes Complete. Why is that the better of the two errors?",
+        options: [
+          "Fail is not a value the published data allows",
+          "Complete is what the wiki says, and the wiki wins on prerequisites",
+          "The two types cost the same, and Complete was chosen by a coin toss",
+          "Complete over-locks a player who failed the prerequisite. Fail would lock every player who completed it, which is the path a player normally follows"
+        ],
+        answer: 3,
+        why: "Lab D shows both sides. Move the player through the four states with complete or failed selected: Complete holds only the failed player back. The report lists the four quests, and the PR asks a reviewer to confirm the trade."
+      },
+      {
+        q: "The Collector prerequisites are now built in memory and fed through the normal upsert. What did the old order make impossible?",
+        options: [
+          "It ran after the write and could only insert, so a quest that lost its Kappa flag kept its Collector row for ever",
+          "It could not read the Kappa flags, because they are written later in the same transaction",
+          "It ran inside the delete loop, so it removed rows it had just written",
+          "It could not name Collector, because the quest is matched by its row key"
+        ],
+        answer: 0,
+        why: "The published data carries the proof: a stale Grenadier row in a list of 248. Rows built before the write go through the same table-global diff as every other requirement. A quest that leaves the Kappa set now leaves the list with it."
+      }
+    ];
+
+    var CHECKLIST = [
+      "QuestIdentityResolver carries the row key and the name key by external id. It derives the name key from the previous row name when the column is absent.",
+      "ChooseAmong keeps the four steps in order, and the faction pair step holds Faction NULL on the row.",
+      "QuestNormalizedName.SqlForm lowers A to Z only, drops the ASCII apostrophe and the period, and leaves every other character alone.",
+      "AssertPublishConstraints checks the requirement type, the faction, the trader and the name key against the row key, and it collects every problem before it throws.",
+      "The refresh refuses an unbackfilled previous database and an empty wiki cache. It refuses an empty task or trader cache, a stale task cache, a collapsed match rate and a moved seasonal marker.",
+      "TarkovDevJsonClient refuses an empty task set and a task without a wikiLink, and it never writes an empty cache.",
+      "MapRequirementStatuses and DeduplicateRequirements both take the most permissive type, and the status vocabulary fails the run on anything else.",
+      "The Collector rows are synthesized before the write, the upsert exemption is gone, and the API prerequisites of Collector are skipped."
+    ];
+
+    var answered = {};
+    var quizList = document.getElementById("quizList");
+    var quizScore = document.getElementById("quizScore");
+    var railLabel = document.getElementById("railGateLabel");
+    var railHint = document.getElementById("railGateHint");
+    var railBar = document.getElementById("railGateBar");
+
+    QUESTIONS.forEach(function (item, qi) {
+      var card = el("div", "q");
+
+      var head = el("div", "q-head");
+      head.appendChild(el("span", "q-num", String(qi + 1).padStart(2, "0")));
+      head.appendChild(el("p", "q-text", item.q));
+      card.appendChild(head);
+
+      var why = el("div", "q-why");
+
+      var opts = el("div", "q-opts");
+      item.options.forEach(function (text, oi) {
+        var label = el("label", "opt");
+        var input = document.createElement("input");
+        input.type = "radio";
+        input.name = "q" + qi;
+        input.value = String(oi);
+        label.appendChild(input);
+        label.appendChild(el("span", null, text));
+        opts.appendChild(label);
+
+        input.addEventListener("change", function () {
+          answered[qi] = oi;
+          var correct = oi === item.answer;
+          card.setAttribute("data-state", correct ? "right" : "wrong");
+
+          Array.prototype.forEach.call(opts.children, function (child, ci) {
+            child.classList.remove("is-right", "is-wrong");
+            if (ci === item.answer && (correct || ci === oi)) child.classList.add("is-right");
+            if (ci === oi && !correct) child.classList.add("is-wrong");
+          });
+
+          why.innerHTML = "";
+          var p = el("p");
+          var word = el("span", "verdict-word", correct ? "Correct. " : "Not quite. ");
+          p.appendChild(word);
+          p.appendChild(document.createTextNode(item.why));
+          why.appendChild(p);
+
+          updateGate();
+        });
+      });
+      card.appendChild(opts);
+      card.appendChild(why);
+
+      quizList.appendChild(card);
+    });
+
+    var gate = document.getElementById("gate");
+    var gateTitle = document.getElementById("gateTitle");
+    var gateBody = document.getElementById("gateBody");
+
+    function updateGate() {
+      var correct = 0;
+      QUESTIONS.forEach(function (item, i) { if (answered[i] === item.answer) correct++; });
+
+      quizScore.textContent = correct + "/" + QUESTIONS.length;
+      railHint.textContent = correct + " of " + QUESTIONS.length + " correct";
+      railBar.style.width = (100 * correct / QUESTIONS.length) + "%";
+
+      if (correct === QUESTIONS.length) {
+        railLabel.textContent = "Gate open";
+        gate.className = "gate is-open";
+        gateTitle.textContent = "Approval checklist: unlocked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Eight of eight. You know the design. Now compare the changes with it. Check these items before you approve:"));
+        var ul = el("ul");
+        CHECKLIST.forEach(function (line) { ul.appendChild(el("li", null, line)); });
+        gateBody.appendChild(ul);
+        var pre = el("pre", "approval",
+          "Reviewed the quest pipeline rebuild on PR #50.\n" +
+          "Guide: docs/2026-08-quest-data-1-1-refresh-code-guide.html\n" +
+          "Comprehension gate: 8/8\n" +
+          "Checklist items examined:\n" +
+          "1. The identity carry-over and the absent-column path.\n" +
+          "2. The four steps of the collision order.\n" +
+          "3. The SQL form of the name key.\n" +
+          "4. The publish constraints, and what they collect.\n" +
+          "5. The seven guards that stop a run before a write.\n" +
+          "6. The client refusals that never write an empty cache.\n" +
+          "7. The status collapse and the vocabulary it allows.\n" +
+          "8. The Collector synthesis, before the write.");
+        gateBody.appendChild(pre);
+      } else {
+        railLabel.textContent = "Gate locked";
+        gate.className = "gate is-locked";
+        gateTitle.textContent = "Approval checklist: locked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Answer all eight questions correctly to open the reviewer checklist. You have " +
+          correct + " of " + QUESTIONS.length + " correct. Each incorrect answer gives an explanation, so read the chapter again."));
+      }
+    }
+
+    updateGate();
+  })();
+  </script>
+</body>
+</html>
