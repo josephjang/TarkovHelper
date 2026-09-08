@@ -509,7 +509,17 @@ namespace TarkovHelper.Services
                 // the Traders table has no row. An unrecognised name ranks last rather than
                 // wrong, and this decides display only.
                 var rank = TraderDbService.DisplayRank(requirement.TraderName?.ToLowerInvariant());
-                if (best == null || rank < bestRank)
+
+                // Alphabetical among equal ranks, which is only ever the unranked newcomers. Said
+                // explicitly rather than left to the order the rows arrive in: the loader happens
+                // to sort them by trader name today, and a badge that changed which trader it
+                // names because a query's ORDER BY moved would be a hard defect to see.
+                if (best == null
+                    || rank < bestRank
+                    || (rank == bestRank
+                        && string.Compare(
+                            requirement.TraderName, best.TraderName,
+                            StringComparison.OrdinalIgnoreCase) < 0))
                 {
                     best = requirement;
                     bestRank = rank;

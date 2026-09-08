@@ -253,6 +253,25 @@ public sealed class QuestStatusLoyaltyTests
     }
 
     [Fact]
+    public void Two_unranked_traders_are_broken_by_name_not_by_the_order_the_rows_arrived_in()
+    {
+        // The case a data publish creates the day a trader the display order does not name starts
+        // gating a quest. Both rank last, so the tie-break decides, and it must not be "whichever
+        // row the query returned first".
+        var task = Quest(
+            "q", "Prapor",
+            ("newcomer-v", "Voevoda", 2), ("newcomer-t", "Taran", 2));
+        var reversed = Quest(
+            "q", "Prapor",
+            ("newcomer-t", "Taran", 2), ("newcomer-v", "Voevoda", 2));
+
+        Assert.Equal(
+            "Taran", QuestProgressService.FirstUnmetTraderLoyalty(task, Settings())!.TraderName);
+        Assert.Equal(
+            "Taran", QuestProgressService.FirstUnmetTraderLoyalty(reversed, Settings())!.TraderName);
+    }
+
+    [Fact]
     public void There_is_no_unmet_row_when_every_requirement_is_met_or_absent()
     {
         Assert.Null(QuestProgressService.FirstUnmetTraderLoyalty(
