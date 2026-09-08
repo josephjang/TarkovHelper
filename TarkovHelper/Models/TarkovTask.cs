@@ -132,7 +132,7 @@ namespace TarkovHelper.Models
         public string? ExcludedEdition { get; set; }
 
         /// <summary>
-        /// Required prestige level for this quest (0-5)
+        /// Required prestige level for this quest (0-6; patch 1.1 added prestige 5 and 6)
         /// </summary>
         [JsonPropertyName("requiredPrestigeLevel")]
         public int? RequiredPrestigeLevel { get; set; }

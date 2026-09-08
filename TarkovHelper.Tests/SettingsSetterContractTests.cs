@@ -237,6 +237,53 @@ public sealed class SettingsSetterContractTests : IDisposable
     }
 
     /// <summary>
+    /// The two bounds patch 1.1 outgrew, pinned as VALUES rather than through the constants.
+    /// <para>
+    /// Every other case here reads <c>SettingsService.Max*</c>, so it would follow the constant
+    /// wherever it moved and prove nothing about which values a player can enter. The published
+    /// data cannot pin these either: it carries no prestige requirement above 3 and no karma
+    /// requirement below -3, because both bounds describe the PLAYER's own state rather than
+    /// anything a quest asks for. This is the case that fails if either constant is moved back.
+    /// </para>
+    /// </summary>
+    [Theory]
+    // Prestige 5 and 6 are the levels patch 1.1 added; both are now enterable.
+    [InlineData("app.prestigeLevel", "5", nameof(ProfileSettingsSnapshot.PrestigeLevel), 5)]
+    [InlineData("app.prestigeLevel", "6", nameof(ProfileSettingsSnapshot.PrestigeLevel), 6)]
+    // ...and 7 is still not, so the clamp is doing something.
+    [InlineData("app.prestigeLevel", "7", nameof(ProfileSettingsSnapshot.PrestigeLevel), 6)]
+    public async Task The_widened_prestige_bound_accepts_the_levels_patch_1_1_added(
+        string key, string stored, string field, int expected)
+        => await AssertStoredValueReadsBack(key, stored, field, expected);
+
+    [Theory]
+    // Fence's reputation bands start at -7 in patch 1.1.
+    [InlineData("app.scavRep", "-7", -7.0)]
+    [InlineData("app.scavRep", "-6.5", -6.5)]
+    // ...and no further: the floor is a bound, not a removal.
+    [InlineData("app.scavRep", "-8", -7.0)]
+    public async Task The_widened_scav_rep_floor_accepts_the_reputation_the_game_can_reach(
+        string key, string stored, double expected)
+        => await AssertStoredValueReadsBack(
+            key, stored, nameof(ProfileSettingsSnapshot.ScavRep), expected);
+
+    /// <summary>Reads one stored row back through a published reload and asserts the field.</summary>
+    private async Task AssertStoredValueReadsBack(
+        string key, string stored, string field, object expected)
+    {
+        var store = NewStore();
+        var target = ProfileService.GetProfileId(AppProfile.PveZone);
+        await store.SetProfileSettingAsync(target, key, stored);
+        var service = NewService(Seeded(NewProfileId("other")), store: store);
+
+        service.ReloadForProfile(AppProfile.PveZone, revision: 1);
+
+        var property = typeof(ProfileSettingsSnapshot).GetProperty(field);
+        Assert.True(property != null, $"ProfileSettingsSnapshot has no property '{field}'");
+        Assert.Equal(expected, property!.GetValue(service.ProfileSettings));
+    }
+
+    /// <summary>
     /// The prefixed loyalty rows go through the same clamp as the keyed values, one row at a
     /// time. Kept out of <see cref="OutOfRangeRows"/> because the field is a map rather than an
     /// int, and worth its own case for what an unclamped row would do: a hand-written 9 would
