@@ -445,6 +445,26 @@ build that predates the change clamps a stored -7.0 to -6.0 on read, which is
 the pre-existing behaviour of that build and harmless; the row is not
 rewritten by the read, so the value returns on upgrade.
 
+**A profile-settings reload needs one signal that is raised whatever the
+snapshot holds** (appended during implementation). The design above has the
+drawer repaint its loyalty groups on `TraderLoyaltyChanged`, which
+`RaiseProfileSettingsChanged` announces once per stored entry. That is enough
+for an edit and not enough for a reload: a profile that has entered no levels,
+which every profile is until the player fills the drawer once and which every
+profile is again after a reset, announces no loyalty event at all, so a drawer
+listening only to that event would keep the previous profile's highlights on
+screen under the new profile's name. Every other profile value escapes this
+because its event is announced on every publish, row or no row. So
+`SettingsService` gains `ProfileSettingsReloaded`, raised last in
+`RaiseProfileSettingsChanged` under the same liveness guard as the value events
+and never for a single edit: the signal a reader that must repaint from the
+snapshot rather than from a value it was handed can use. `MainWindow` repaints
+the loyalty groups on it; `QuestListPage` does not need it, since
+`PlayerLevelChanged` already books its coalesced refresh on every publish.
+Considered instead: announcing loyalty for the union of the outgoing and
+incoming snapshots' traders, which needs the previous snapshot threaded into
+the fan-out for a result the reader can read off the snapshot anyway.
+
 ## Open Questions
 
 - Whether and when the upstream API adds the eighteen KORD BREACH quests with
