@@ -322,10 +322,15 @@ public sealed class SeasonalProfileE2ETests : E2ETestBase
             using var connection = new SqliteConnection($"Data Source={assetDb};Mode=ReadOnly");
             connection.Open();
 
+            // NormalizedName is READ, never derived from the display name. The two agree for most
+            // quests and must not be assumed to: a rename keeps the normalized name its recorded
+            // progress is filed under, which is the whole point of the dual key. The first quest
+            // this query returns is exactly such a row - patch 1.1 renamed "Database - Part 2" to
+            // "A Big Loss" and the published NormalizedName is still "database---part-2" - so a
+            // derived key seeded a progress row the app never reads back, and the Done-filtered
+            // list came up empty.
             var quest = ReadRow(connection, @"
-                SELECT Id,
-                       lower(replace(replace(replace(Name, ' ', '-'), '''', ''), '.', '')),
-                       Name
+                SELECT Id, NormalizedName, Name
                 FROM Quests q
                 WHERE NOT EXISTS (SELECT 1 FROM QuestRequirements r WHERE r.QuestId = q.Id)
                   AND q.Faction IS NULL AND q.RequiredEdition IS NULL
@@ -333,6 +338,7 @@ public sealed class SeasonalProfileE2ETests : E2ETestBase
                   AND (q.RequiredDecodeCount IS NULL OR q.RequiredDecodeCount = 0)
                   AND (q.MinLevel IS NULL OR q.MinLevel <= 12)
                   AND q.MinScavKarma IS NULL
+                  AND q.NormalizedName IS NOT NULL AND q.NormalizedName <> ''
                 ORDER BY q.Name LIMIT 1", 3, "standalone quest");
 
             var hideout = ReadRow(connection, @"
