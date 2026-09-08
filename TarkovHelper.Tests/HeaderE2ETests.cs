@@ -1,3 +1,5 @@
+using TarkovHelper.Pages;
+
 namespace TarkovHelper.Tests;
 
 /// <summary>
@@ -70,7 +72,7 @@ public sealed class HeaderE2ETests : E2ETestBase
     }
 
     [E2EFact]
-    public void Profile_drawer_holds_the_level_stepper()
+    public void Profile_drawer_holds_the_level_stepper_and_the_loyalty_inputs()
     {
         using var app = AppDriver.Launch(NewConfigDir());
 
@@ -80,8 +82,19 @@ public sealed class HeaderE2ETests : E2ETestBase
         app.InvokeElement("BtnProfile");
         app.WaitForElementVisibility("TxtPlayerLevel", visible: true);
 
+        // The loyalty groups are built from the loaded quest data rather than declared in XAML,
+        // so unlike the stepper they only exist once the roster is known. Prapor is in it for
+        // every published database this build reads (fourteen quests gate on Prapor's loyalty),
+        // and the group toggles with the drawer like everything else in it.
+        app.WaitForElementVisibility("Loyalty_prapor_1", visible: true);
+        app.WaitForElementVisibility("Loyalty_prapor_4", visible: true);
+        // Nothing entered yet, so level 1 is the selection every trader reads at.
+        Assert.Equal(QuestStatusTags.ChipSelected, app.GetItemStatus("Loyalty_prapor_1"));
+        Assert.Equal(QuestStatusTags.ChipUnselected, app.GetItemStatus("Loyalty_prapor_4"));
+
         app.InvokeElement("BtnProfile");
         app.WaitForElementVisibility("TxtPlayerLevel", visible: false);
+        app.WaitForElementVisibility("Loyalty_prapor_1", visible: false);
 
         // Opening Settings force-closes an open drawer (it would otherwise keep
         // floating beneath the overlay scrim with a stale up-chevron). The sync
