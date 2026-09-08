@@ -108,6 +108,38 @@ public sealed class E2EQuestDataTests
     }
 
     [Fact]
+    public async Task Loyalty_gated_quest_exists_and_is_locked_only_by_its_loyalty_row()
+    {
+        var (questName, questId, traderNormalizedName, level) = E2EQuestData.FindLoyaltyGatedQuest();
+
+        Assert.False(string.IsNullOrWhiteSpace(questName));
+        Assert.Equal(questId, E2EQuestData.QuestIdByName(questName));
+        Assert.False(string.IsNullOrWhiteSpace(traderNormalizedName));
+        Assert.InRange(level, 2, SettingsService.MaxTraderLoyaltyLevel);
+
+        // Locked on a fresh profile, which is the state the e2e's first assertion reads...
+        Assert.Equal(QuestStatus.LevelLocked, await FreshProfileStatus(questName));
+
+        // ...and by the loyalty row alone: entering that one trader's level makes it Active. If
+        // any other gate were also holding it, the e2e's single drawer click would not flip it.
+        Assert.True(await QuestDbService.Instance.LoadQuestsAsync(), "asset db did not load");
+        var task = QuestDbService.Instance.AllQuests.Single(q => q.Name == questName);
+        var traderId = task.TraderLoyaltyRequirements!.Single().TraderId;
+        var entered = ProfileSettingsSnapshot.Defaults("fresh", 0)
+            with { TraderLoyalty = TraderLoyaltyLevels.Empty.With(traderId, level) };
+
+        var service = ProgressServiceHarness.Create(
+            new ProgressStoreFake(), AppProfile.PvpSeason,
+            QuestDbService.Instance.AllQuests.ToArray());
+        Assert.Equal(QuestStatus.Active, service.GetStatus(task, service.Snapshot, entered));
+
+        // Completing it must cascade nothing: the e2e never opens a dialog for it.
+        var c = await Cascade(questName);
+        Assert.Empty(c.Prereqs);
+        Assert.Empty(c.Failures);
+    }
+
+    [Fact]
     public async Task Quest_with_single_alternative_exists_and_resolves_ids()
     {
         var (questName, altName, questId, altId) = E2EQuestData.FindQuestWithSingleAlternative();

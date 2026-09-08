@@ -17,6 +17,10 @@ public sealed class ProfileResetE2ETests : E2ETestBase
     private const string ActiveProfileSetting = "app.activeGameMode";
     private const string DialogTitle = "Reset Profile";
 
+    /// <summary>Prapor's loyalty row, keyed by the tarkov.dev trader id the app stores under.</summary>
+    private static readonly string PraporLoyaltyKey =
+        SettingsService.TraderLoyaltyKey("54cb50c76803fa8b248b4571");
+
     /// <summary>Seeds two profiles' worth of data and selects the season profile.</summary>
     private string SeedTwoProfiles()
     {
@@ -30,6 +34,13 @@ public sealed class ProfileResetE2ETests : E2ETestBase
         E2EDb.SeedProfileSetting(configDir, ProfileService.SeasonProfileId, "app.playerLevel", "42");
         E2EDb.SeedProfileSetting(configDir, ProfileService.SeasonProfileId, "app.hasEodEdition", "True");
         E2EDb.SeedProfileSetting(configDir, ProfileService.PveProfileId, "app.playerLevel", "17");
+        // Trader loyalty is the one profile value addressed by a key PREFIX rather than by a key
+        // the survivor allowlist could ever name, so it is seeded on both profiles: the reset
+        // must wipe the target's and leave the other's, with no change to the reset itself.
+        E2EDb.SeedProfileSetting(
+            configDir, ProfileService.SeasonProfileId, PraporLoyaltyKey, "4");
+        E2EDb.SeedProfileSetting(
+            configDir, ProfileService.PveProfileId, PraporLoyaltyKey, "3");
 
         E2EDb.SeedSetting(configDir, ActiveProfileSetting, "SEASON");
         E2EDb.SeedSetting(configDir, "app.logMonitoringEnabled", "False");
@@ -106,6 +117,9 @@ public sealed class ProfileResetE2ETests : E2ETestBase
         // The target profile owns nothing any more (PRD R3)...
         Assert.Null(E2EDb.ReadQuestProgress(configDir, ProfileService.SeasonProfileId, "e2e-season-quest"));
         Assert.Null(E2EDb.ReadProfileSetting(configDir, ProfileService.SeasonProfileId, "app.playerLevel"));
+        // ...the prefixed loyalty row included, which the reset never had to learn about: its
+        // delete is an allowlist, so a key the allowlist does not name goes by default.
+        Assert.Null(E2EDb.ReadProfileSetting(configDir, ProfileService.SeasonProfileId, PraporLoyaltyKey));
 
         // ...the editions and the fence survive in its partition (PRD R4, R6)...
         Assert.Equal("True",
@@ -113,11 +127,13 @@ public sealed class ProfileResetE2ETests : E2ETestBase
         Assert.NotNull(
             E2EDb.ReadProfileSetting(configDir, ProfileService.SeasonProfileId, "app.progressResetAt"));
 
-        // ...and the other profile is untouched (PRD R4).
+        // ...and the other profile is untouched (PRD R4), its own loyalty row included.
         Assert.Equal("Done",
             E2EDb.ReadQuestProgress(configDir, ProfileService.PveProfileId, "e2e-pve-quest"));
         Assert.Equal("17",
             E2EDb.ReadProfileSetting(configDir, ProfileService.PveProfileId, "app.playerLevel"));
+        Assert.Equal("3",
+            E2EDb.ReadProfileSetting(configDir, ProfileService.PveProfileId, PraporLoyaltyKey));
     }
 
     [E2EFact]

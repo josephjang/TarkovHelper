@@ -177,6 +177,55 @@ internal static class E2EQuestData
         });
     }
 
+    /// <summary>
+    /// A quest that is loyalty-locked and nothing else on a fresh profile: exactly one trader
+    /// loyalty row, naming its own trader at level 2 or more, with no prerequisite, no
+    /// alternative, no categorical gate, and a minimum level the default profile reaches. So it
+    /// reads LevelLocked with an <c>LL{n}</c> badge before anything is entered and Active the
+    /// moment that one trader's level is set, which is the whole flow
+    /// <see cref="QuestLoyaltyE2ETests"/> drives.
+    /// <para>
+    /// Its own trader, not another's, so the badge is the narrow <c>LL{n}</c> form and one click
+    /// in one drawer group clears it. The English name is a unique search substring like the
+    /// other queries. Twenty-five candidates in the 1.1.0 seed.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// The quest's name and id, the trader's NormalizedName (the drawer's automation ids are
+    /// built from it) and the level the row asks for.
+    /// </returns>
+    public static (string QuestName, string QuestId, string TraderNormalizedName, int Level)
+        FindLoyaltyGatedQuest()
+    {
+        var sql = $@"
+            SELECT q.Name, q.Id, t.NormalizedName, r.RequiredLevel
+            FROM Quests q
+            JOIN QuestTraderRequirements r ON r.QuestId = q.Id
+            JOIN Traders t ON t.Id = r.TraderId
+            WHERE (SELECT COUNT(*) FROM QuestTraderRequirements r2 WHERE r2.QuestId = q.Id) = 1
+              AND lower(r.TraderName) = lower(q.Trader)
+              AND r.RequiredLevel >= 2
+              AND t.NormalizedName IS NOT NULL AND t.NormalizedName <> ''
+              AND NOT EXISTS (SELECT 1 FROM QuestRequirements qr WHERE qr.QuestId = q.Id)
+              AND {Ungated("q")}
+              -- ReachableAtDefaultLevel is not usable here: its third clause excludes exactly
+              -- the quests this query looks for. Its other two are spelled out instead.
+              AND (q.MinLevel IS NULL OR q.MinLevel <= {SettingsService.DefaultPlayerLevel})
+              AND q.MinScavKarma IS NULL
+              AND {NoAlternatives("q")}
+              AND {UniqueSearchName("q")}
+            ORDER BY q.Name
+            LIMIT 1";
+
+        return Query(sql, command =>
+        {
+            using var reader = command.ExecuteReader();
+            Assert.True(reader.Read(),
+                "tarkov_data.db has no quest gated solely on its own trader's loyalty matching the test constraints");
+            return (reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3));
+        });
+    }
+
     /// <summary>The asset-db Id of the quest with this exact English name (QuestProgress rows are keyed by it).</summary>
     public static string QuestIdByName(string name)
         => Query("SELECT Id FROM Quests WHERE Name = $name", command =>
