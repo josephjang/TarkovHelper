@@ -233,6 +233,22 @@ public class SettingsService
     /// </summary>
     public event EventHandler<TraderLoyaltyChange>? TraderLoyaltyChanged;
 
+    /// <summary>
+    /// A whole profile-scoped snapshot was published and announced: a profile switch, a settings
+    /// self-heal, or a completed profile reset. Raised once at the end of the fan-out, never for
+    /// a single edit.
+    /// <para>
+    /// The value events above are enough for anything stored under one key, because every one of
+    /// them is announced on every publish whether it has a row or not. Trader loyalty is not:
+    /// it is a family of rows, its event fires once per STORED entry, and a profile with no
+    /// entries therefore announces nothing at all. A reader that repainted only on
+    /// <see cref="TraderLoyaltyChanged"/> would keep showing the previous profile's levels after
+    /// a switch to a profile that has entered none, and after a reset that deleted them. This
+    /// event is what such a reader repaints from the snapshot on.
+    /// </para>
+    /// </summary>
+    public event EventHandler? ProfileSettingsReloaded;
+
     private SettingsService()
     {
         LoadSettings();
@@ -572,6 +588,11 @@ public class SettingsService
         {
             Announce(() => TraderLoyaltyChanged?.Invoke(this, new TraderLoyaltyChange(traderId, level)));
         }
+
+        // Last, and under the same guard: a reader that has to repaint from the snapshot rather
+        // than from a value it was handed needs one signal that arrives whatever the snapshot
+        // holds. See ProfileSettingsReloaded for why the value events cannot serve that.
+        Announce(() => ProfileSettingsReloaded?.Invoke(this, EventArgs.Empty));
 
         void Announce(Action raise)
         {

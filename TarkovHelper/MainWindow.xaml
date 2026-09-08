@@ -600,7 +600,8 @@
             <Border.Effect>
                 <DropShadowEffect BlurRadius="8" ShadowDepth="2" Direction="270" Opacity="0.3"/>
             </Border.Effect>
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="16,12">
+            <StackPanel Margin="16,12">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                 <!-- Player Level Control (moved here from the title bar) -->
                 <Border Background="{StaticResource BackgroundMediumBrush}"
                         CornerRadius="4" Padding="8,6" Margin="0,0,16,0"
@@ -733,6 +734,16 @@
                                 ToolTip="Increase prestige level"/>
                     </StackPanel>
                 </Border>
+            </StackPanel>
+
+            <!-- Trader Loyalty Controls. One bordered group per trader the loaded quest data
+                 gates on, built in code by MainWindow.BuildLoyaltyGroup because the roster
+                 comes from the database rather than from this file. A WrapPanel so the seven
+                 groups fit the 600px minimum window on two or three lines; collapsed when the
+                 data gates nothing on loyalty. -->
+            <WrapPanel x:Name="LoyaltyGroup" Orientation="Horizontal"
+                       HorizontalAlignment="Center" Margin="0,12,0,0"
+                       Visibility="Collapsed"/>
             </StackPanel>
         </Border>
 

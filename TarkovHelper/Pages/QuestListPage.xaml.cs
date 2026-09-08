@@ -205,6 +205,7 @@ namespace TarkovHelper.Pages
             SettingsService.Instance.PlayerLevelChanged += OnPlayerLevelChanged;
             SettingsService.Instance.ScavRepChanged += OnScavRepChanged;
             SettingsService.Instance.PlayerFactionChanged += OnPlayerFactionChanged;
+            SettingsService.Instance.TraderLoyaltyChanged += OnTraderLoyaltyChanged;
             QuestDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
         }
 
@@ -220,6 +221,7 @@ namespace TarkovHelper.Pages
             SettingsService.Instance.PlayerLevelChanged -= OnPlayerLevelChanged;
             SettingsService.Instance.ScavRepChanged -= OnScavRepChanged;
             SettingsService.Instance.PlayerFactionChanged -= OnPlayerFactionChanged;
+            SettingsService.Instance.TraderLoyaltyChanged -= OnTraderLoyaltyChanged;
             QuestDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
         }
 
@@ -351,7 +353,7 @@ namespace TarkovHelper.Pages
             });
         }
 
-        // The seven profile-scoped settings events this page consumes all need the same refresh, so
+        // The eight profile-scoped settings events this page consumes all need the same refresh, so
         // they route through one coalesced request and differ only in delegate signature. Faction
         // additionally mirrors the selection into the radio buttons, which is cheap and has to land
         // before the refresh reads it, so that part stays inline.
@@ -370,6 +372,13 @@ namespace TarkovHelper.Pages
         private void OnPlayerLevelChanged(object? sender, int e) => _settingsRefresh.Request();
 
         private void OnScavRepChanged(object? sender, double e) => _settingsRefresh.Request();
+
+        // The eighth. A published reload of a profile with no loyalty rows raises this for no
+        // trader at all, which costs this page nothing: PlayerLevelChanged is announced on every
+        // publish and already books the same coalesced refresh. What this subscription is for is
+        // the single edit, where it is the only event raised.
+        private void OnTraderLoyaltyChanged(object? sender, TraderLoyaltyChange e)
+            => _settingsRefresh.Request();
 
         /// <summary>
         /// The refresh a profile-scoped settings change needs. Runs on the dispatcher, once per
@@ -425,7 +434,7 @@ namespace TarkovHelper.Pages
         /// Refreshes the whole page for an externally-driven progress change: MainWindow calls this
         /// after applying a quest event from the game logs and after the in-progress quest input
         /// dialog. Profile-scoped SETTINGS changes do not come through here - the page subscribes to
-        /// those seven events itself and coalesces them (see <see cref="_settingsRefresh"/>).
+        /// those eight events itself and coalesces them (see <see cref="_settingsRefresh"/>).
         /// Runs the SAME sequence as the internal state-change handlers
         /// (<see cref="RefreshAllForStateChange"/>) rather than a shorter copy of it:
         /// level and karma flip quests between LevelLocked and Active, and the
@@ -701,19 +710,57 @@ namespace TarkovHelper.Pages
             return trader.Length >= 2 ? trader[..2].ToUpper() : trader.ToUpper();
         }
 
+        /// <summary>
+        /// A loyalty requirement's trader in the app's language, falling back to the nickname the
+        /// row itself carries. The one resolver the badge and the Requirements lines share.
+        /// </summary>
+        private string TraderDisplayName(QuestTraderRequirement requirement)
+            => _loc.GetTraderDisplayName(requirement.TraderId, requirement.TraderName);
+
+        /// <summary>
+        /// The detail pane's loyalty lines for one quest, empty when it names no trader.
+        /// <para>
+        /// Ordered the way the badge picks its trader - the quest's own first, then the game's
+        /// trader order - so a player reading the badge finds the same trader at the top of this
+        /// list rather than having to look for it.
+        /// </para>
+        /// </summary>
+        private List<LoyaltyRequirementViewModel> BuildLoyaltyRequirementLines(TarkovTask task)
+        {
+            if (!task.HasTraderLoyaltyRequirements) return new List<LoyaltyRequirementViewModel>();
+
+            var settings = SettingsService.Instance.ProfileSettings;
+            var metBrush = (Brush)FindResource("TextPrimaryBrush");
+
+            return task.TraderLoyaltyRequirements!
+                .OrderByDescending(r => QuestProgressService.IsGivenBy(task, r))
+                .ThenBy(r => TraderDbService.DisplayRank(r.TraderName?.ToLowerInvariant()))
+                .ThenBy(r => r.TraderName, StringComparer.OrdinalIgnoreCase)
+                .Select(requirement =>
+                {
+                    var entered = settings.TraderLoyalty.LevelOf(requirement.TraderId);
+                    return new LoyaltyRequirementViewModel
+                    {
+                        DisplayText = string.Format(
+                            _loc.RequirementLoyaltyFormat,
+                            TraderDisplayName(requirement), requirement.Level, entered),
+                        Foreground = entered >= requirement.Level ? metBrush : LevelLockedBrush,
+                    };
+                })
+                .ToList();
+        }
+
         private string GetStatusText(QuestStatus status, TarkovTask? task = null)
         {
             if (status == QuestStatus.LevelLocked && task != null)
             {
-                // Check if it's level-locked or karma-locked
-                if (task.RequiredLevel.HasValue && !_progressService.IsLevelRequirementMet(task))
-                {
-                    return $"Lv.{task.RequiredLevel}";
-                }
-                if (task.RequiredScavKarma.HasValue && !_progressService.IsScavKarmaRequirementMet(task))
-                {
-                    return $"Rep {task.RequiredScavKarma:0.#}";
-                }
+                // Which of the three gates behind this one status is holding the quest. The rule
+                // lives in QuestRequirementBadge so the row and the detail pane cannot drift
+                // apart, which they had: the detail badge omitted the task and read the literal
+                // "Level" for every level-locked quest.
+                var badge = QuestRequirementBadge.For(
+                    task, SettingsService.Instance.ProfileSettings, TraderDisplayName);
+                if (badge != null) return badge;
             }
 
             if (status == QuestStatus.Unavailable && task != null)
@@ -1336,7 +1383,10 @@ namespace TarkovHelper.Pages
 
             // Trader & Status
             TxtDetailTrader.Text = task.Trader;
-            TxtDetailStatus.Text = GetStatusText(status);
+            // The task is passed, so the detail badge names the gate the way the row does. It
+            // used to omit it and read the literal "Level" for every level-locked quest, which
+            // said nothing about which of the three requirements was actually holding it.
+            TxtDetailStatus.Text = GetStatusText(status, task);
             DetailStatusBadge.Background = GetStatusBrush(status);
 
             // Maps
@@ -1363,16 +1413,10 @@ namespace TarkovHelper.Pages
             {
                 var playerLevel = SettingsService.Instance.PlayerLevel;
                 var reqLevel = task.RequiredLevel!.Value;
-                if (playerLevel >= reqLevel)
-                {
-                    TxtRequiredLevel.Text = $"Level {reqLevel} (Current: {playerLevel})";
-                    TxtRequiredLevel.Foreground = (Brush)FindResource("TextPrimaryBrush");
-                }
-                else
-                {
-                    TxtRequiredLevel.Text = $"Level {reqLevel} (Current: {playerLevel})";
-                    TxtRequiredLevel.Foreground = LevelLockedBrush;
-                }
+                TxtRequiredLevel.Text = string.Format(_loc.RequirementLevelFormat, reqLevel, playerLevel);
+                TxtRequiredLevel.Foreground = playerLevel >= reqLevel
+                    ? (Brush)FindResource("TextPrimaryBrush")
+                    : LevelLockedBrush;
                 TxtRequiredLevel.Visibility = Visibility.Visible;
             }
             else
@@ -1387,7 +1431,9 @@ namespace TarkovHelper.Pages
                 var reqKarma = task.RequiredScavKarma!.Value;
                 var isMet = _progressService.IsScavKarmaRequirementMet(task);
                 var comparison = reqKarma < 0 ? "≤" : "≥";
-                TxtRequiredScavKarma.Text = $"Scav Karma {comparison} {reqKarma:0.#} (Current: {playerScavRep:0.#})";
+                TxtRequiredScavKarma.Text = string.Format(
+                    _loc.RequirementScavKarmaFormat,
+                    comparison, reqKarma.ToString("0.#"), playerScavRep.ToString("0.#"));
                 TxtRequiredScavKarma.Foreground = isMet ? (Brush)FindResource("TextPrimaryBrush") : LevelLockedBrush;
                 TxtRequiredScavKarma.Visibility = Visibility.Visible;
             }
@@ -1396,10 +1442,15 @@ namespace TarkovHelper.Pages
                 TxtRequiredScavKarma.Visibility = Visibility.Collapsed;
             }
 
+            // Requirements - trader loyalty, one line per trader the quest names
+            var loyaltyLines = BuildLoyaltyRequirementLines(task);
+            LoyaltyRequirementsList.ItemsSource = loyaltyLines;
+
             // Show requirements section if any requirement exists
-            RequirementsSectionWrapper.Visibility = (hasLevelRequirement || hasScavKarmaRequirement)
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+            RequirementsSectionWrapper.Visibility =
+                (hasLevelRequirement || hasScavKarmaRequirement || loyaltyLines.Count > 0)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
 
             // Prerequisites - show direct prerequisites with OR/AND grouping
             if (task.TaskRequirements != null && task.TaskRequirements.Count > 0)

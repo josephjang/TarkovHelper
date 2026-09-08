@@ -166,9 +166,9 @@ public partial class LocalizationService
 
     public string HeaderProfileTooltip => CurrentLanguage switch
     {
-        AppLanguage.KO => "플레이어 프로필 — 레벨, 스캐브 평판, DSP, 에디션, 프레스티지",
-        AppLanguage.JA => "プレイヤープロフィール — レベル、スカーヴ評判、DSP、エディション、プレステージ",
-        _ => "Player profile — level, Scav Rep, DSP, edition, prestige"
+        AppLanguage.KO => "플레이어 프로필 — 레벨, 스캐브 평판, DSP, 에디션, 프레스티지, 충성도",
+        AppLanguage.JA => "プレイヤープロフィール — レベル、スカーヴ評判、DSP、エディション、プレステージ、ロイヤルティ",
+        _ => "Player profile — level, Scav Rep, DSP, edition, prestige, loyalty"
     };
 
     /// <summary>Concise UIA name for the profile chip (the tooltip is too verbose for a Name).</summary>
@@ -321,6 +321,14 @@ public partial class LocalizationService
         AppLanguage.KO => "프레스티지",
         AppLanguage.JA => "プレステージ",
         _ => "Prestige"
+    };
+
+    /// <summary>Heading of the drawer's per-trader loyalty inputs.</summary>
+    public string ProfileLoyaltyLabel => CurrentLanguage switch
+    {
+        AppLanguage.KO => "충성도",
+        AppLanguage.JA => "ロイヤルティ",
+        _ => "Loyalty"
     };
 
     #endregion
@@ -521,19 +529,19 @@ public partial class LocalizationService
             "- 은신처 진행도\n" +
             "- 아이템 인벤토리\n" +
             "- 이 프로필의 레이드 기록\n" +
-            "- 플레이어 레벨, 스캐브 평판, 진영, 프레스티지, DSP 해독 횟수",
+            "- 플레이어 레벨, 스캐브 평판, 진영, 프레스티지, DSP 해독 횟수, 상인 충성도",
         AppLanguage.JA =>
             "- クエストと目標の進行状況\n" +
             "- ハイドアウトの進行状況\n" +
             "- アイテムインベントリ\n" +
             "- このプロフィールのレイド記録\n" +
-            "- プレイヤーレベル、スカーヴ評判、陣営、プレステージ、DSP解読回数",
+            "- プレイヤーレベル、スカーヴ評判、陣営、プレステージ、DSP解読回数、トレーダーロイヤルティ",
         _ =>
             "- Quest and objective progress\n" +
             "- Hideout progress\n" +
             "- Item inventory\n" +
             "- Raid history recorded for this profile\n" +
-            "- Player level, Scav Rep, faction, prestige, and DSP decode count"
+            "- Player level, Scav Rep, faction, prestige, DSP decode count, and trader loyalty"
     };
 
     /// <summary>What a reset never touches (PRD R4).</summary>

@@ -627,6 +627,19 @@
                                             <TextBlock x:Name="TxtRequiredScavKarma" FontSize="{DynamicResource FontSizeXSmall}"
                                                        Foreground="{StaticResource TextPrimaryBrush}"
                                                        Margin="0,0,0,4"/>
+                                            <!-- One line per trader loyalty requirement, in the
+                                                 same order the badge names them (giver first,
+                                                 then the game's trader order). -->
+                                            <ItemsControl x:Name="LoyaltyRequirementsList">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding DisplayText}"
+                                                                   Foreground="{Binding Foreground}"
+                                                                   FontSize="{DynamicResource FontSizeXSmall}"
+                                                                   Margin="0,0,0,4"/>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
                                         </StackPanel>
                                     </Border>
                                 </StackPanel>
