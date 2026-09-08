@@ -48,6 +48,16 @@ namespace TarkovHelper.Pages
     }
 
     /// <summary>
+    /// One trader loyalty line in the detail pane's Requirements section: the trader, the level
+    /// required and the level entered, coloured the way the Level line above it is when unmet.
+    /// </summary>
+    public class LoyaltyRequirementViewModel
+    {
+        public string DisplayText { get; set; } = string.Empty;
+        public Brush Foreground { get; set; } = Brushes.White;
+    }
+
+    /// <summary>
     /// Prerequisite group view model for displaying OR/AND grouped prerequisites
     /// </summary>
     public class PrerequisiteGroupViewModel

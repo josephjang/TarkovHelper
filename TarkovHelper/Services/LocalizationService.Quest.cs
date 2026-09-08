@@ -441,4 +441,70 @@ public partial class LocalizationService
     };
 
     #endregion
+
+    #region Quest detail: Requirements section
+
+    // The level and Scav Karma lines were English literals in QuestListPage from before the
+    // localization pass. They move here with the loyalty line rather than after it: a third
+    // localized line beside two unlocalized ones reads as a defect in KO and JA, and the section
+    // is being rebuilt anyway.
+
+    /// <summary>{0} = required player level, {1} = the player's current level.</summary>
+    public string RequirementLevelFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO => "레벨 {0} (현재: {1})",
+        AppLanguage.JA => "レベル {0} (現在: {1})",
+        _ => "Level {0} (Current: {1})"
+    };
+
+    /// <summary>
+    /// {0} = the comparison symbol, {1} = required karma, {2} = the player's current karma. The
+    /// symbol is a slot rather than part of the text because the requirement can be "at most"
+    /// (a bad-karma quest) as well as "at least".
+    /// </summary>
+    public string RequirementScavKarmaFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO => "스캐브 카르마 {0} {1} (현재: {2})",
+        AppLanguage.JA => "スカーヴカルマ {0} {1} (現在: {2})",
+        _ => "Scav Karma {0} {1} (Current: {2})"
+    };
+
+    /// <summary>
+    /// {0} = the trader's localized name, {1} = required loyalty level, {2} = the level entered
+    /// for that trader. "LL" stays English, as the badge abbreviations and the status chips do.
+    /// </summary>
+    public string RequirementLoyaltyFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO => "{0} LL{1} (현재: {2})",
+        AppLanguage.JA => "{0} LL{1} (現在: {2})",
+        _ => "{0} LL{1} (Current: {2})"
+    };
+
+    /// <summary>
+    /// A trader's name in the app's language, for the loyalty inputs, the badge and the
+    /// Requirements lines.
+    /// <para>
+    /// Resolved through the Traders table by id, because that is where the KO and JA names live;
+    /// <paramref name="fallback"/> (the requirement row's own English nickname) covers a trader
+    /// the table has no row for, and the English name covers a trader whose row carries no
+    /// translation, which is most of them in JA today.
+    /// </para>
+    /// </summary>
+    public string GetTraderDisplayName(string traderId, string fallback)
+    {
+        var trader = TraderDbService.Instance.GetTraderById(traderId);
+        if (trader == null) return fallback;
+
+        var localized = CurrentLanguage switch
+        {
+            AppLanguage.KO => trader.NameKo,
+            AppLanguage.JA => trader.NameJa,
+            _ => trader.Name
+        };
+
+        if (!string.IsNullOrWhiteSpace(localized)) return localized!;
+        return string.IsNullOrWhiteSpace(trader.Name) ? fallback : trader.Name;
+    }
+
+    #endregion
 }

@@ -73,6 +73,13 @@ public partial class MainWindow : Window
         _settingsService.HasEodEditionChanged += OnEditionChanged;
         _settingsService.HasUnheardEditionChanged += OnEditionChanged;
         _settingsService.PrestigeLevelChanged += OnPrestigeLevelChanged;
+        _settingsService.TraderLoyaltyChanged += OnTraderLoyaltyChanged;
+        _settingsService.ProfileSettingsReloaded += OnProfileSettingsReloaded;
+
+        // The drawer's loyalty roster is data: it has to be rebuilt whenever the quest rows are,
+        // because a publish that starts gating on a new trader must grow the drawer without an
+        // app change. QuestDbService raises this on the UI thread after every reload.
+        QuestDbService.Instance.DataRefreshed += OnQuestDataRefreshedForLoyalty;
 
         _profileTransitionCueTimer = new DispatcherTimer
         {
@@ -189,6 +196,12 @@ public partial class MainWindow : Window
         TxtDspLabel.Text = _loc.ProfileDspLabel;
         TxtEditionLabel.Text = _loc.ProfileEditionLabel;
         TxtPrestigeLabel.Text = _loc.ProfilePrestigeLabel;
+
+        // The loyalty groups carry trader names, which are localized: rebuilt rather than
+        // relabelled because the label controls are created by BuildLoyaltyGroup and there is
+        // no XAML name to write to. A no-op before the first quest load, when the roster is
+        // empty.
+        BuildLoyaltyGroup();
 
         // Language-dependent composite texts (profile chip, status chip, version chip)
         UpdatePlayerLevelUI();
@@ -586,6 +599,11 @@ public partial class MainWindow : Window
             _log.Debug($"HideoutPage created: {_hideoutPage != null}");
             _itemsPage = new ItemsPage();
             _collectorPage = new CollectorPage();
+
+            // The drawer's loyalty roster comes from the quest rows just loaded, so it is built
+            // here rather than in Window_Loaded beside the other Update*UI calls: at that point
+            // QuestDbService has nothing loaded and the roster would be empty.
+            BuildLoyaltyGroup();
 
             // Show tab area with Quests selected
             TxtWelcome.Visibility = Visibility.Collapsed;
@@ -1290,6 +1308,210 @@ public partial class MainWindow : Window
     private void OnPrestigeLevelChanged(object? sender, int newLevel)
     {
         Dispatcher.Invoke(UpdatePrestigeLevelUI);
+    }
+
+    #endregion
+
+    #region Trader Loyalty
+
+    /// <summary>
+    /// One trader's input group in the drawer, as built by <see cref="BuildLoyaltyGroup"/>: the
+    /// trader it stands for and the four level buttons whose highlight
+    /// <see cref="UpdateLoyaltyUI"/> repaints. Held rather than looked up by name because the
+    /// controls do not exist in XAML: the roster comes from the loaded database.
+    /// </summary>
+    private sealed record LoyaltyInputGroup(LoyaltyTrader Trader, Button[] LevelButtons);
+
+    private readonly List<LoyaltyInputGroup> _loyaltyGroups = new();
+
+    /// <summary>
+    /// Rebuilds the drawer's loyalty inputs from
+    /// <see cref="QuestDbService.LoyaltyTraders"/>: one bordered group per trader any loaded
+    /// quest gates on, in the game's order, each a label plus buttons 1 to 4 in the shape the
+    /// DSP control already uses.
+    /// <para>
+    /// Built in code rather than declared in XAML because the roster is data: the day a publish
+    /// starts gating a quest on a trader that is not here today, the drawer grows on the next
+    /// quest load with no app change. Collapsed entirely when the loaded data gates nothing on
+    /// loyalty, which is what a database published before the 1.1 refresh looks like.
+    /// </para>
+    /// </summary>
+    private void BuildLoyaltyGroup()
+    {
+        LoyaltyGroup.Children.Clear();
+        _loyaltyGroups.Clear();
+
+        var traders = QuestDbService.Instance.LoyaltyTraders;
+        if (traders.Count == 0)
+        {
+            LoyaltyGroup.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        foreach (var trader in traders)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+
+            var label = new TextBlock
+            {
+                Text = _loc.GetTraderDisplayName(trader.TraderId, trader.TraderName),
+                FontWeight = FontWeights.SemiBold,
+                Foreground = (Brush)FindResource("TextSecondaryBrush"),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0),
+            };
+            label.SetResourceReference(TextBlock.FontSizeProperty, "FontSizeXSmall");
+            AutomationProperties.SetAutomationId(label, LoyaltyLabelAutomationId(trader));
+            row.Children.Add(label);
+
+            var buttons = new Button[
+                SettingsService.MaxTraderLoyaltyLevel - SettingsService.MinTraderLoyaltyLevel + 1];
+
+            for (var level = SettingsService.MinTraderLoyaltyLevel;
+                 level <= SettingsService.MaxTraderLoyaltyLevel;
+                 level++)
+            {
+                var button = new Button
+                {
+                    Content = level.ToString(),
+                    Width = 24,
+                    Height = 24,
+                    Padding = new Thickness(0),
+                    FontWeight = FontWeights.Bold,
+                    // The trader and the level this button stands for, read back by the click
+                    // handler: one handler for every button, as BtnDsp_Click already is.
+                    Tag = new LoyaltyButtonTag(trader.TraderId, level),
+                    Margin = level == SettingsService.MinTraderLoyaltyLevel
+                        ? new Thickness(0)
+                        : new Thickness(2, 0, 0, 0),
+                    ToolTip = string.Format(_loc.RequirementLoyaltyFormat,
+                        _loc.GetTraderDisplayName(trader.TraderId, trader.TraderName), level,
+                        _settingsService.GetTraderLoyalty(trader.TraderId)),
+                };
+                button.SetResourceReference(Control.FontSizeProperty, "FontSizeSmall");
+                AutomationProperties.SetAutomationId(button, LoyaltyButtonAutomationId(trader, level));
+                button.Click += BtnLoyalty_Click;
+
+                buttons[level - SettingsService.MinTraderLoyaltyLevel] = button;
+                row.Children.Add(button);
+            }
+
+            LoyaltyGroup.Children.Add(new Border
+            {
+                Background = (Brush)FindResource("BackgroundMediumBrush"),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(8, 6, 8, 6),
+                Margin = new Thickness(0, 0, 8, 8),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = row,
+            });
+
+            _loyaltyGroups.Add(new LoyaltyInputGroup(trader, buttons));
+        }
+
+        LoyaltyGroup.Visibility = Visibility.Visible;
+        UpdateLoyaltyUI();
+    }
+
+    /// <summary>The automation id of one trader's group label, as the e2e addresses it.</summary>
+    private static string LoyaltyLabelAutomationId(LoyaltyTrader trader)
+        => $"Loyalty_{trader.NormalizedName}";
+
+    /// <summary>The automation id of one level button within a trader's group.</summary>
+    private static string LoyaltyButtonAutomationId(LoyaltyTrader trader, int level)
+        => $"Loyalty_{trader.NormalizedName}_{level}";
+
+    /// <summary>Which trader and level a loyalty button stands for.</summary>
+    private sealed record LoyaltyButtonTag(string TraderId, int Level);
+
+    /// <summary>
+    /// Repaints every loyalty group: the entered level highlighted the way the DSP control's
+    /// selection is, and published to UI Automation as ItemStatus Selected/Unselected, which is
+    /// the chip convention and the only surface the e2e can read a button's selection from.
+    /// </summary>
+    private void UpdateLoyaltyUI()
+    {
+        using var echoGuard = SuppressSettingsEcho();
+
+        var accent = (Brush)FindResource("AccentBrush");
+        var medium = (Brush)FindResource("BackgroundMediumBrush");
+        var primaryText = (Brush)FindResource("TextPrimaryBrush");
+        var darkText = (Brush)FindResource("BackgroundDarkBrush");
+
+        foreach (var group in _loyaltyGroups)
+        {
+            var entered = _settingsService.GetTraderLoyalty(group.Trader.TraderId);
+
+            for (var index = 0; index < group.LevelButtons.Length; index++)
+            {
+                var button = group.LevelButtons[index];
+                var level = SettingsService.MinTraderLoyaltyLevel + index;
+                var isSelected = level == entered;
+
+                button.Background = isSelected ? accent : medium;
+                button.Foreground = isSelected ? darkText : primaryText;
+                AutomationProperties.SetItemStatus(
+                    button,
+                    isSelected ? QuestStatusTags.ChipSelected : QuestStatusTags.ChipUnselected);
+                button.ToolTip = string.Format(_loc.RequirementLoyaltyFormat,
+                    _loc.GetTraderDisplayName(group.Trader.TraderId, group.Trader.TraderName),
+                    level, entered);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Handle a loyalty level button click. One handler for every trader's every button; the
+    /// button's Tag says which.
+    /// </summary>
+    private void BtnLoyalty_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isLoading || _isUpdatingSettingsUI) return;
+
+        if (sender is Button { Tag: LoyaltyButtonTag tag })
+        {
+            _settingsService.SetTraderLoyalty(tag.TraderId, tag.Level);
+        }
+    }
+
+    /// <summary>
+    /// Handle a loyalty change from the settings service (a player edit, a profile switch, or a
+    /// reset). Window controls only; the quest list refreshes itself once per burst (see
+    /// <see cref="OnPlayerLevelChanged"/>).
+    /// <para>
+    /// Repaints EVERY group rather than the one the event names: a published reload announces
+    /// one event per stored entry, so repainting only the named trader would leave a wiped
+    /// trader's old highlight on screen beside a freshly painted one.
+    /// </para>
+    /// </summary>
+    private void OnTraderLoyaltyChanged(object? sender, TraderLoyaltyChange change)
+    {
+        Dispatcher.Invoke(UpdateLoyaltyUI);
+    }
+
+    /// <summary>
+    /// Repaint the loyalty groups after a whole snapshot was published (a profile switch, a
+    /// reset, a settings self-heal).
+    /// <para>
+    /// Not redundant with <see cref="OnTraderLoyaltyChanged"/>: a profile that has entered no
+    /// levels raises no loyalty event at all, so without this the previous profile's highlights
+    /// would stay on screen under the new profile's name. The other drawer controls need no such
+    /// handler because each of their events is announced on every publish, row or no row.
+    /// </para>
+    /// </summary>
+    private void OnProfileSettingsReloaded(object? sender, EventArgs e)
+    {
+        Dispatcher.Invoke(UpdateLoyaltyUI);
+    }
+
+    /// <summary>
+    /// Rebuild the loyalty inputs after the quest data reloaded, which is when the roster can
+    /// have changed. Raised on the UI thread by the service, but dispatched anyway for the same
+    /// belt-and-braces reason the other handlers here are.
+    /// </summary>
+    private void OnQuestDataRefreshedForLoyalty(object? sender, EventArgs e)
+    {
+        Dispatcher.Invoke(BuildLoyaltyGroup);
     }
 
     #endregion
@@ -2912,6 +3134,10 @@ public partial class MainWindow : Window
         // background timer and would otherwise dispatch onto a closed window.
         DatabaseUpdateService.Instance.DatabaseUpdated -= OnDatabaseUpdated;
         DatabaseUpdateService.Instance.UpdateCheckCompleted -= OnDatabaseCheckCompleted;
+        // Raised off the same hourly background update, one service further along: the quest
+        // reload that follows a downloaded database is what rebuilds the drawer's loyalty
+        // roster, and it must not do that against a closed window.
+        QuestDbService.Instance.DataRefreshed -= OnQuestDataRefreshedForLoyalty;
 
         // WPF does not guarantee Unloaded at shutdown, so the map page's view
         // state (map/zoom/pan) gets its close-time save here as a backstop.

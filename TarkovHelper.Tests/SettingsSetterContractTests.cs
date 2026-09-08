@@ -432,6 +432,66 @@ public sealed class SettingsSetterContractTests : IDisposable
         Assert.Empty(events);
     }
 
+    /// <summary>
+    /// The reload signal exists for readers that cannot repaint from a value event, because the
+    /// value they show may have no event on a given publish: trader loyalty announces once per
+    /// STORED entry, so a profile that has entered none announces nothing at all. Without this,
+    /// the drawer would keep the previous profile's loyalty highlights under the new profile's
+    /// name after a switch, and its old ones after a reset.
+    /// </summary>
+    [Fact]
+    public void A_fan_out_raises_the_reload_signal_once_even_when_the_snapshot_holds_no_loyalty()
+    {
+        var service = NewService(
+            Seeded(NewProfileId("live")) with { TraderLoyalty = TraderLoyaltyLevels.Empty });
+        var reloads = 0;
+        var loyaltyEvents = 0;
+        service.ProfileSettingsReloaded += (_, _) => reloads++;
+        service.TraderLoyaltyChanged += (_, _) => loyaltyEvents++;
+
+        RaiseProfileSettingsChanged(service, service.ProfileSettings);
+
+        Assert.Equal(0, loyaltyEvents);
+        Assert.Equal(1, reloads);
+    }
+
+    // ...and it is a fan-out signal, not an edit signal: a single setter announces its own value
+    // and nothing else, so a reader that rebuilds everything on a reload is not made to do it on
+    // every click in the drawer.
+    [Fact]
+    public async Task A_single_edit_does_not_raise_the_reload_signal()
+    {
+        var store = NewStore();
+        var service = NewService(Seeded(NewProfileId("onscreen")), store: store);
+        var reloads = 0;
+        service.ProfileSettingsReloaded += (_, _) => reloads++;
+
+        service.PlayerLevel = 51;
+        service.SetTraderLoyalty(SeededTraderId, 2);
+
+        Assert.Equal(0, reloads);
+        // The edits really happened, so the zero above is not an edit path that did nothing.
+        Assert.Equal(51, service.PlayerLevel);
+        Assert.Equal(2, service.GetTraderLoyalty(SeededTraderId));
+        Assert.Equal("2", await store.GetProfileSettingAsync(
+            service.ProfileSettings.ProfileId, SettingsService.TraderLoyaltyKey(SeededTraderId)));
+    }
+
+    // A fan-out the cache has moved past announces nothing, the reload signal included: it is
+    // raised under the same guard as the value events, and a reader that rebuilt on it would
+    // otherwise repaint from a snapshot that is no longer live.
+    [Fact]
+    public void A_superseded_fan_out_does_not_raise_the_reload_signal()
+    {
+        var service = NewService(Seeded(NewProfileId("live")));
+        var reloads = 0;
+        service.ProfileSettingsReloaded += (_, _) => reloads++;
+
+        RaiseProfileSettingsChanged(service, Seeded(NewProfileId("superseded")));
+
+        Assert.Equal(0, reloads);
+    }
+
     // The same question is re-asked before EVERY event, not once up front, because each handler
     // can block the raising thread for as long as the dispatcher takes to run it. Here the switch
     // lands from inside the first handler, which is the one place a single-threaded test can be

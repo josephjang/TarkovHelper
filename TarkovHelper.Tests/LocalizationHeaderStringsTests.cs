@@ -33,7 +33,12 @@ public class LocalizationHeaderStringsTests
         "SyncStatusTooltip",
         // Profile drawer
         "ProfileLevelLabel", "ProfileScavRepLabel", "ProfileDspLabel",
-        "ProfileEditionLabel", "ProfilePrestigeLabel",
+        "ProfileEditionLabel", "ProfilePrestigeLabel", "ProfileLoyaltyLabel",
+        // Quest detail Requirements lines (LocalizationService.Quest.cs). They live in the other
+        // partial but are checked by the same completeness rule, and the loyalty line arrived
+        // beside two English literals that moved here with it
+        // (feature-quest-loyalty-gating.spec.md).
+        "RequirementLevelFormat", "RequirementScavKarmaFormat", "RequirementLoyaltyFormat",
         // Settings pre-existing rows (migrated from inline switches; the overlay
         // title reuses the Core "Settings" property)
         "Settings", "SettingsLogFolderLabel", "SettingsLogFolderDesc",
@@ -58,7 +63,54 @@ public class LocalizationHeaderStringsTests
         "HeaderUpdateForDataTooltipFormat",
         "SettingsCurrentVersionFormat", "SettingsUpdateToFormat", "TimeMinutesAgoFormat",
         "ProfileResetTargetFormat", "ProfileResetSuccessFormat", "ProfileResetConfirmButtonFormat",
+        "RequirementLevelFormat", "RequirementScavKarmaFormat", "RequirementLoyaltyFormat",
     };
+
+    /// <summary>
+    /// The Requirements lines and how many slots each of them fills. A translation that dropped
+    /// {2} would silently print a requirement with no current value beside it, which reads as a
+    /// met requirement.
+    /// </summary>
+    public static IEnumerable<object[]> RequirementFormatSlots() =>
+        from language in new[] { AppLanguage.EN, AppLanguage.KO, AppLanguage.JA }
+        from key in new[]
+        {
+            ("RequirementLevelFormat", 2),
+            ("RequirementScavKarmaFormat", 3),
+            ("RequirementLoyaltyFormat", 3),
+        }
+        select new object[] { language, key.Item1, key.Item2 };
+
+    [Theory]
+    [MemberData(nameof(RequirementFormatSlots))]
+    public void Requirement_lines_keep_every_slot_in_every_language(
+        AppLanguage language, string key, int slots)
+    {
+        var value = GetString(TestLocalization.WithLanguage(language), key);
+
+        for (var slot = 0; slot < slots; slot++)
+        {
+            Assert.Contains("{" + slot + "}", value);
+        }
+    }
+
+    /// <summary>
+    /// The profile tooltip and the reset dialog both enumerate what the profile owns, and both
+    /// gained trader loyalty when the inputs did. A list that stopped naming it would tell the
+    /// player a reset leaves their entered levels alone, which it does not.
+    /// </summary>
+    [Theory]
+    [InlineData(AppLanguage.EN, "loyalty")]
+    [InlineData(AppLanguage.KO, "충성도")]
+    [InlineData(AppLanguage.JA, "ロイヤルティ")]
+    public void The_profile_tooltip_and_the_reset_list_both_name_trader_loyalty(
+        AppLanguage language, string word)
+    {
+        var loc = TestLocalization.WithLanguage(language);
+
+        Assert.Contains(word, loc.HeaderProfileTooltip, StringComparison.Ordinal);
+        Assert.Contains(word, loc.ProfileResetCategories, StringComparison.Ordinal);
+    }
 
     private static string GetString(LocalizationService loc, string key)
     {
