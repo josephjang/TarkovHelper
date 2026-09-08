@@ -609,9 +609,12 @@ public class SettingsService
     public const int DefaultPlayerLevel = 15;
 
     /// <summary>
-    /// Scav Rep constants
+    /// Scav Rep constants. The floor is -7.0 rather than -6.0 because Fence's reputation bands
+    /// start at -7 in patch 1.1, so a player at the bottom of them could not describe their
+    /// character. Widening the constant is the whole change: <c>ProfileSettingsSnapshot.From</c>,
+    /// the setter's clamp, the legacy import and the drawer all read it, and nothing stored moves.
     /// </summary>
-    public const double MinScavRep = -6.0;
+    public const double MinScavRep = -7.0;
     public const double MaxScavRep = 6.0;
     public const double DefaultScavRep = 1.0;
     public const double ScavRepStep = 0.1;
@@ -641,10 +644,14 @@ public class SettingsService
     public const int DefaultSyncDaysRange = 0;
 
     /// <summary>
-    /// Prestige level constants
+    /// Prestige level constants. Patch 1.1 added prestige 5 and 6 (six prestige entries upstream,
+    /// six New Beginning quests on the wiki), so the input's maximum moved from 5 to 6: a player
+    /// past that point could not describe their character. What keeps every one of these bounds
+    /// honest against the next patch is <c>ProfileBoundsCoverDataTests</c>, which fails when the
+    /// published data carries a value an input cannot be set to.
     /// </summary>
     public const int MinPrestigeLevel = 0;
-    public const int MaxPrestigeLevel = 5;
+    public const int MaxPrestigeLevel = 6;
     public const int DefaultPrestigeLevel = 0;
 
     /// <summary>
@@ -940,7 +947,7 @@ public class SettingsService
     }
 
     /// <summary>
-    /// Player's prestige level (0-5)
+    /// Player's prestige level (0-6)
     /// </summary>
     public int PrestigeLevel
     {
