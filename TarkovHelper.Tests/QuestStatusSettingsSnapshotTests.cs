@@ -41,7 +41,10 @@ public class QuestStatusSettingsSnapshotTests
             PlayerFaction: null,
             HasEodEdition: null,
             HasUnheardEdition: null,
-            PrestigeLevel: prestige);
+            PrestigeLevel: prestige,
+            // Empty, not null: the gated quest here names no trader, so the loyalty gate is met
+            // whatever this holds, and the level/prestige contrast stays the subject.
+            TraderLoyalty: TraderLoyaltyLevels.Empty);
 
     [Fact]
     public void A_status_answers_from_the_settings_snapshot_it_was_given()

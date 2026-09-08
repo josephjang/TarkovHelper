@@ -11,8 +11,8 @@ namespace TarkovHelper.Tests;
 /// of <c>ProfileResetHooksTests</c>.
 /// <para>
 /// Centralised for the reason <see cref="TestReflection"/> is: the seed, the uninitialized-service
-/// construction and the seven-event recorder were copied into all of them, and the recorder's
-/// copies are the dangerous kind. An eighth profile-scoped event compiles fine with only one list
+/// construction and the changed-event recorder were copied into all of them, and the recorder's
+/// copies are the dangerous kind. A further profile-scoped event compiles fine with only one list
 /// updated, which would silently stop the other suites asserting on it and quietly weaken the
 /// <see cref="AllChangedEvents"/> order contract. One list, one place.
 /// </para>
@@ -46,7 +46,18 @@ internal static class SettingsServiceTestSupport
         PlayerFaction: "bear",
         HasEodEdition: true,
         HasUnheardEdition: true,
-        PrestigeLevel: 4);
+        PrestigeLevel: 4,
+        // Non-empty for the same reason every value above differs from its default: the ninth
+        // value is a map, and "the other fields were left alone" is only a meaningful assertion
+        // about it while it holds something an accident could not have produced.
+        TraderLoyalty: TraderLoyaltyLevels.Empty.With(SeededTraderId, 3));
+
+    /// <summary>
+    /// The trader the seeded snapshot carries a loyalty entry for. A real tarkov.dev id (Prapor)
+    /// rather than a made-up one, so a case that goes on to look the trader up in the asset
+    /// database finds it.
+    /// </summary>
+    internal const string SeededTraderId = "54cb50c76803fa8b248b4571";
 
     /// <summary>
     /// A <see cref="SettingsService"/> with no constructor run (see <see cref="TestReflection"/>):
@@ -72,15 +83,34 @@ internal static class SettingsServiceTestSupport
     }
 
     /// <summary>
-    /// The seven events a published reload raises, in the order the reset contract pins. The one
-    /// list the three suites compare against, so an event added to
+    /// The seven single-value events a published reload always raises, in the order the reset
+    /// contract pins. The one list the three suites compare against, so an event added to
     /// <see cref="Subscribe"/> without a place in this order fails them all at once.
+    /// <para>
+    /// Not the whole fan-out: trader loyalty announces once per STORED entry rather than always
+    /// once, so what a given publish raises depends on the snapshot it published. Use
+    /// <see cref="EventsFor"/> and hand it that snapshot.
+    /// </para>
     /// </summary>
     internal static readonly string[] AllChangedEvents =
     {
         "PlayerLevel", "ScavRep", "DspDecodeCount", "PlayerFaction",
         "HasEodEdition", "HasUnheardEdition", "PrestigeLevel",
     };
+
+    /// <summary>
+    /// Every event name a fan-out over <paramref name="published"/> raises, in order: the seven
+    /// above, then one "TraderLoyalty" per stored loyalty entry.
+    /// <para>
+    /// Derived from the snapshot rather than tabulated, so a case that publishes DEFAULTS (no
+    /// loyalty rows, hence no loyalty event) and a case that publishes the seeded snapshot (one
+    /// entry, hence one) both stay exact without either of them restating the rule.
+    /// </para>
+    /// </summary>
+    internal static string[] EventsFor(ProfileSettingsSnapshot published)
+        => AllChangedEvents
+            .Concat(Enumerable.Repeat("TraderLoyalty", published.TraderLoyalty.Count))
+            .ToArray();
 
     /// <summary>
     /// Subscribes <paramref name="record"/> to every profile-scoped changed event, handing it the
@@ -96,6 +126,7 @@ internal static class SettingsServiceTestSupport
         service.HasEodEditionChanged += (_, v) => record("HasEodEdition", v);
         service.HasUnheardEditionChanged += (_, v) => record("HasUnheardEdition", v);
         service.PrestigeLevelChanged += (_, v) => record("PrestigeLevel", v);
+        service.TraderLoyaltyChanged += (_, v) => record("TraderLoyalty", v);
     }
 
     /// <summary>

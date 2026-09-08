@@ -4,7 +4,7 @@ namespace TarkovHelper.Services.Settings;
 /// One profile's player settings, together with the identity of the profile they belong to and
 /// the transition they were loaded for, as a single immutable value.
 /// <para>
-/// These eight values used to be eight independent nullable fields whose partition key was
+/// The first eight of these values used to be eight independent nullable fields whose partition key was
 /// "whatever <see cref="ProfileService"/> currently reports". Each field was filled by its own
 /// query against the selection as it stood at that moment, so a profile switch landing between
 /// two of the reads left the cache holding one profile's level beside another's faction, with
@@ -43,6 +43,14 @@ namespace TarkovHelper.Services.Settings;
 /// <param name="HasEodEdition">Stored Edge of Darkness ownership, or null when unset.</param>
 /// <param name="HasUnheardEdition">Stored The Unheard ownership, or null when unset.</param>
 /// <param name="PrestigeLevel">Stored prestige level, or null when unset.</param>
+/// <param name="TraderLoyalty">
+/// The loyalty level entered for each trader, from the <c>app.traderLoyalty.</c> rows. NEVER
+/// null, unlike the eight above it: "no entry" is a real answer here rather than a missing one
+/// (<see cref="TraderLoyaltyLevels.LevelOf"/> hands back level 1, which is where every trader
+/// starts in the game), so the empty value carries it and no <c>...OrDefault</c> getter is
+/// needed. It is also the one value that is not one row: it is a family of rows under a prefix,
+/// one per trader, which is why it has no entry in <c>SettingsService.ProfileSpecificKeys</c>.
+/// </param>
 internal sealed record ProfileSettingsSnapshot(
     string ProfileId,
     long Revision,
@@ -53,7 +61,8 @@ internal sealed record ProfileSettingsSnapshot(
     string? PlayerFaction,
     bool? HasEodEdition,
     bool? HasUnheardEdition,
-    int? PrestigeLevel)
+    int? PrestigeLevel,
+    TraderLoyaltyLevels TraderLoyalty)
 {
     /// <summary>
     /// A snapshot naming a profile none of whose rows are known: every value null, so every
@@ -62,7 +71,8 @@ internal sealed record ProfileSettingsSnapshot(
     /// under a different profile's name is the defect this type exists to remove.
     /// </summary>
     internal static ProfileSettingsSnapshot Defaults(string profileId, long revision)
-        => new(profileId, revision, null, null, null, null, null, null, null, null);
+        => new(profileId, revision, null, null, null, null, null, null, null, null,
+               TraderLoyaltyLevels.Empty);
 
     /// <summary>
     /// One profile's stored rows parsed into a snapshot, per key, with exactly the fallbacks the
@@ -134,7 +144,48 @@ internal sealed record ProfileSettingsSnapshot(
             PrestigeLevel:
                 int.TryParse(Value(SettingsService.KeyPrestigeLevel), out var prestige)
                     ? Math.Clamp(prestige, SettingsService.MinPrestigeLevel, SettingsService.MaxPrestigeLevel)
-                    : null);
+                    : null,
+            TraderLoyalty: ReadTraderLoyalty(values));
+    }
+
+    /// <summary>
+    /// The <c>app.traderLoyalty.&lt;traderId&gt;</c> rows of one profile, as one value.
+    /// <para>
+    /// The only value read by PREFIX rather than by an exact key, because it is one row per
+    /// trader rather than one row. Clamped like every bounded value beside it and for the same
+    /// reason: an entry of 9 hand-written into the table would otherwise reach the gate as 9 and
+    /// unlock quests the drawer cannot express, and an entry of 0 would lock a requirement of 1
+    /// that the game has already met.
+    /// </para>
+    /// <para>
+    /// Trader ids are NOT validated against the loaded quest data here. A row naming a trader the
+    /// current database gates nothing on is kept: it is harmless (nothing reads it) and it is
+    /// ready for the data publish that starts naming that trader, which is the case the drawer's
+    /// data-driven roster exists for.
+    /// </para>
+    /// </summary>
+    private static TraderLoyaltyLevels ReadTraderLoyalty(IReadOnlyDictionary<string, string> values)
+    {
+        var entries = new List<KeyValuePair<string, int>>();
+
+        foreach (var (key, stored) in values)
+        {
+            if (!key.StartsWith(SettingsService.TraderLoyaltyKeyPrefix, StringComparison.Ordinal))
+                continue;
+
+            var traderId = key[SettingsService.TraderLoyaltyKeyPrefix.Length..];
+            if (traderId.Length == 0) continue;
+            if (!int.TryParse(stored, out var level)) continue;
+
+            entries.Add(new KeyValuePair<string, int>(
+                traderId,
+                Math.Clamp(
+                    level,
+                    SettingsService.MinTraderLoyaltyLevel,
+                    SettingsService.MaxTraderLoyaltyLevel)));
+        }
+
+        return entries.Count == 0 ? TraderLoyaltyLevels.Empty : TraderLoyaltyLevels.From(entries);
     }
 
     // "No stored row means the property answers its default" has one home per value, below,

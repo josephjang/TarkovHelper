@@ -10,6 +10,13 @@ using TarkovHelper.Services.Settings;
 namespace TarkovHelper.Services;
 
 /// <summary>
+/// One trader's entered loyalty level, as carried by
+/// <see cref="SettingsService.TraderLoyaltyChanged"/>. The trader id is the tarkov.dev id the
+/// requirement rows and the stored key both use.
+/// </summary>
+public sealed record TraderLoyaltyChange(string TraderId, int Level);
+
+/// <summary>
 /// Application settings service for managing user preferences
 /// Settings are stored in user_data.db (UserSettings table)
 /// </summary>
@@ -50,6 +57,9 @@ public class SettingsService
     // ProfileSpecificKeys is NOT the reset's list - the reset takes its sibling
     // ProfileKeysSurvivingReset and deletes everything else - it is the list the one-time
     // UserSettings-to-ProfileSettings migration walks.
+    //
+    // These eight are one row each. The ninth profile-scoped value, trader loyalty, is a family
+    // of rows under TraderLoyaltyKeyPrefix (declared below with why it belongs to neither array).
     internal const string KeyPlayerLevel = "app.playerLevel";
     internal const string KeyScavRep = "app.scavRep";
     internal const string KeyShowLevelLockedQuests = "app.showLevelLockedQuests";
@@ -58,6 +68,28 @@ public class SettingsService
     internal const string KeyHasEodEdition = "app.hasEodEdition";
     internal const string KeyHasUnheardEdition = "app.hasUnheardEdition";
     internal const string KeyPrestigeLevel = "app.prestigeLevel";
+
+    /// <summary>
+    /// The prefix of the per-trader loyalty rows: one row per trader, keyed
+    /// <c>app.traderLoyalty.&lt;tarkov.dev trader id&gt;</c>
+    /// (docs/decisions/feature-quest-loyalty-gating.spec.md).
+    /// <para>
+    /// Deliberately NOT in <see cref="ProfileSpecificKeys"/> below: that array is the list the
+    /// one-time UserSettings-to-ProfileSettings migration walks key by key, and loyalty has no
+    /// legacy value to migrate - it never existed before ProfileSettings did, and it is a family
+    /// of keys rather than one key, so the array's exact-key walk has nothing to do here.
+    /// </para>
+    /// <para>
+    /// Deliberately NOT in <see cref="ProfileKeysSurvivingReset"/> either: the reset deletes
+    /// every profile row whose key is not on that allowlist, so these rows are wiped with the
+    /// rest of the profile's progress, which is what the PRD asks for (R5). Deletion being the
+    /// default is exactly why a prefix needs no change to the reset at all.
+    /// </para>
+    /// </summary>
+    internal const string TraderLoyaltyKeyPrefix = "app.traderLoyalty.";
+
+    /// <summary>The ProfileSettings key one trader's entered loyalty level is stored under.</summary>
+    internal static string TraderLoyaltyKey(string traderId) => TraderLoyaltyKeyPrefix + traderId;
 
     // One-time flag: legacy profile-specific settings copied from UserSettings to ProfileSettings('pvp')
     private const string KeyProfileSettingsMigrated = "app.profileSettingsMigrated";
@@ -194,6 +226,12 @@ public class SettingsService
     public event EventHandler<bool>? HasEodEditionChanged;
     public event EventHandler<bool>? HasUnheardEditionChanged;
     public event EventHandler<int>? PrestigeLevelChanged;
+
+    /// <summary>
+    /// One trader's entered loyalty level changed. Carries the trader rather than the whole map,
+    /// so the drawer repaints one group; a published reload raises it once per stored entry.
+    /// </summary>
+    public event EventHandler<TraderLoyaltyChange>? TraderLoyaltyChanged;
 
     private SettingsService()
     {
@@ -525,6 +563,16 @@ public class SettingsService
         Announce(() => HasUnheardEditionChanged?.Invoke(this, snapshot.HasUnheardEditionOrDefault));
         Announce(() => PrestigeLevelChanged?.Invoke(this, snapshot.PrestigeLevelOrDefault));
 
+        // One announce per STORED entry, not one per trader in the drawer's roster: a trader
+        // with no row answers the default without being told, and this fan-out has no idea which
+        // traders the loaded data even gates on. A snapshot with no entries therefore raises
+        // nothing here, which is correct and is what the reset case relies on - every reader
+        // already reads level 1 for a trader whose row has just been deleted.
+        foreach (var (traderId, level) in snapshot.TraderLoyalty.Entries)
+        {
+            Announce(() => TraderLoyaltyChanged?.Invoke(this, new TraderLoyaltyChange(traderId, level)));
+        }
+
         void Announce(Action raise)
         {
             if (!ReferenceEquals(Volatile.Read(ref _profileSettings), snapshot)) return;
@@ -577,6 +625,25 @@ public class SettingsService
     public const int MinPrestigeLevel = 0;
     public const int MaxPrestigeLevel = 5;
     public const int DefaultPrestigeLevel = 0;
+
+    /// <summary>
+    /// Trader loyalty constants (docs/decisions/feature-quest-loyalty-gating.md).
+    /// <para>
+    /// Four is a constant rather than published data: every trader with loyalty levels has had
+    /// exactly four for as long as loyalty has existed, the gate itself never needs the bound
+    /// (it compares integers), and only the drawer's button row and the read clamp do. What
+    /// keeps it honest is a content test over the published database
+    /// (<c>PublishedDataContentTests</c>): a requirement above this level fails the build on the
+    /// publish PR, which is earlier than any player would notice.
+    /// </para>
+    /// <para>
+    /// One is both the minimum and the default because a trader with no entry reads as level 1
+    /// in every profile, which is where the game starts every trader.
+    /// </para>
+    /// </summary>
+    public const int MinTraderLoyaltyLevel = 1;
+    public const int MaxTraderLoyaltyLevel = 4;
+    public const int DefaultTraderLoyaltyLevel = 1;
 
     /// <summary>
     /// Player level for quest filtering
@@ -865,6 +932,43 @@ public class SettingsService
                 KeyPrestigeLevel, clampedValue.ToString(),
                 () => PrestigeLevelChanged?.Invoke(this, clampedValue));
         }
+    }
+
+    /// <summary>
+    /// The loyalty level entered for one trader in the active profile, or
+    /// <see cref="DefaultTraderLoyaltyLevel"/> when the profile has no entry for it.
+    /// </summary>
+    /// <param name="traderId">tarkov.dev trader id, as the requirement rows carry it.</param>
+    public int GetTraderLoyalty(string traderId) => ProfileSettings.TraderLoyalty.LevelOf(traderId);
+
+    /// <summary>
+    /// Records one trader's loyalty level for the active profile.
+    /// <para>
+    /// A method rather than one of the property setters above because the value is addressed by
+    /// trader; everything else about it follows the same path they do, down to the derivation
+    /// that returns null when the snapshot already holds the value. That guard is a REFERENCE
+    /// check, which is exactly what <see cref="TraderLoyaltyLevels.With"/> returning the same
+    /// instance for an unchanged level buys.
+    /// </para>
+    /// </summary>
+    /// <param name="traderId">
+    /// Ignored when empty: there is no trader to key a row under, and a row keyed on the bare
+    /// prefix would be read back as an entry with no id (the read drops it) forever after.
+    /// </param>
+    /// <param name="level">Clamped to [<see cref="MinTraderLoyaltyLevel"/>, <see cref="MaxTraderLoyaltyLevel"/>].</param>
+    public void SetTraderLoyalty(string traderId, int level)
+    {
+        if (string.IsNullOrEmpty(traderId)) return;
+
+        var clampedValue = Math.Clamp(level, MinTraderLoyaltyLevel, MaxTraderLoyaltyLevel);
+        ApplyProfileEdit(
+            s =>
+            {
+                var next = s.TraderLoyalty.With(traderId, clampedValue);
+                return ReferenceEquals(next, s.TraderLoyalty) ? null : s with { TraderLoyalty = next };
+            },
+            TraderLoyaltyKey(traderId), clampedValue.ToString(),
+            () => TraderLoyaltyChanged?.Invoke(this, new TraderLoyaltyChange(traderId, clampedValue)));
     }
 
     #region Map Settings (Facade - delegates to MapSettings)

@@ -92,7 +92,7 @@ public sealed class SettingsReloadRaceTests : IDisposable
 
         Assert.Equal(IdOf(AppProfile.PveZone), service.ProfileSettings.ProfileId);
         Assert.Equal(SettingsService.DefaultPlayerLevel, service.PlayerLevel);
-        Assert.Equal(AllChangedEvents, events);
+        Assert.Equal(EventsFor(service.ProfileSettings), events);
     }
 
     // Two transitions announced in quick succession: whichever load finishes last, the values
@@ -154,7 +154,7 @@ public sealed class SettingsReloadRaceTests : IDisposable
         // The older load asked again under the gate and dropped its rows. The seven events are
         // the newer transition's single fan-out: the older one raised none.
         Assert.Equal(IdOf(AppProfile.PvpZone), service.ProfileSettings.ProfileId);
-        Assert.Equal(AllChangedEvents, events);
+        Assert.Equal(EventsFor(service.ProfileSettings), events);
     }
 
     [Fact]
@@ -763,7 +763,7 @@ public sealed class SettingsReloadRaceTests : IDisposable
 
         Assert.Equal(IdOf(AppProfile.PveZone), service.ProfileSettings.ProfileId);
         Assert.Equal(7, service.PlayerLevel);
-        Assert.Equal(AllChangedEvents, events);
+        Assert.Equal(EventsFor(service.ProfileSettings), events);
     }
 
     #endregion
