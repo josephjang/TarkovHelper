@@ -159,6 +159,27 @@ namespace TarkovHelper.Models
         public bool HasAlternatives => AlternativeQuests is { Count: > 0 };
 
         /// <summary>
+        /// Trader loyalty levels this quest requires, one entry per trader it names. Null or
+        /// empty means the quest has no loyalty gate.
+        /// <para>
+        /// Usually one entry naming the quest's own <see cref="Trader"/>, but not always: five
+        /// quests in the 1.1 data gate on a trader other than the one who gives them (Chemical -
+        /// Part 3 is Skier's and needs Jaeger 2), and Collector names seven traders at once. So
+        /// this is a list rather than a level on the task, and the gate reads every entry.
+        /// </para>
+        /// </summary>
+        [JsonPropertyName("traderLoyaltyRequirements")]
+        public List<QuestTraderRequirement>? TraderLoyaltyRequirements { get; set; }
+
+        /// <summary>
+        /// Whether this quest is gated on any trader's loyalty level. The single definition
+        /// shared by the status engine, the badge and the detail pane, like
+        /// <see cref="HasAlternatives"/>.
+        /// </summary>
+        [JsonIgnore]
+        public bool HasTraderLoyaltyRequirements => TraderLoyaltyRequirements is { Count: > 0 };
+
+        /// <summary>
         /// Task requirements with status conditions from tarkov.dev API
         /// Each requirement specifies which status(es) the prerequisite task must have
         /// </summary>
@@ -177,6 +198,34 @@ namespace TarkovHelper.Models
         /// </summary>
         [JsonPropertyName("wikiPageLink")]
         public string? WikiPageLink { get; set; }
+    }
+
+    /// <summary>
+    /// One trader loyalty level a quest requires, as published in QuestTraderRequirements.
+    /// Mirrors <see cref="HideoutTraderRequirement"/>, the sibling shape on the hideout side.
+    /// </summary>
+    public class QuestTraderRequirement
+    {
+        /// <summary>
+        /// tarkov.dev trader id. The identifier everything compares on: the entered level is
+        /// stored under it and the gate looks it up by it, because a nickname can change upstream
+        /// while the id cannot.
+        /// </summary>
+        [JsonPropertyName("traderId")]
+        public string TraderId { get; set; } = string.Empty;
+
+        /// <summary>
+        /// The trader's English nickname as the row carries it. Display fallback only, for when
+        /// the Traders table has no row for <see cref="TraderId"/>; it is also what the badge
+        /// compares against <see cref="TarkovTask.Trader"/> to decide whether the quest's own
+        /// trader is the one being asked for.
+        /// </summary>
+        [JsonPropertyName("traderName")]
+        public string TraderName { get; set; } = string.Empty;
+
+        /// <summary>Loyalty level required, 2 to 4 in the published data.</summary>
+        [JsonPropertyName("level")]
+        public int Level { get; set; }
     }
 
     /// <summary>

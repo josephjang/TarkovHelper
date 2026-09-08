@@ -8,6 +8,14 @@ using TarkovHelper.Services.Logging;
 namespace TarkovHelper.Services;
 
 /// <summary>
+/// One trader the loaded quest data gates at least one quest on, as the profile drawer needs it:
+/// the id an entered level is stored under, the English nickname to fall back to, and the
+/// normalized name used both for the display order and for the automation ids of the trader's
+/// input group.
+/// </summary>
+public sealed record LoyaltyTrader(string TraderId, string TraderName, string NormalizedName);
+
+/// <summary>
 /// SQLite DB에서 퀘스트 데이터를 로드하는 서비스.
 /// tarkov_data.db의 Quests, QuestRequirements, QuestObjectives, QuestRequiredItems 테이블 사용.
 /// </summary>
@@ -21,10 +29,27 @@ public sealed class QuestDbService
     private List<TarkovTask> _allQuests = new();
     private Dictionary<string, TarkovTask> _questsById = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, TarkovTask> _questsByNormalizedName = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<LoyaltyTrader> _loyaltyTraders = Array.Empty<LoyaltyTrader>();
     private bool _isLoaded;
 
     public bool IsLoaded => _isLoaded;
     public int QuestCount => _allQuests.Count;
+
+    /// <summary>
+    /// Every trader that at least one loaded quest gates on, in the game's display order.
+    /// <para>
+    /// The profile drawer builds one loyalty input per entry, so this is what decides which
+    /// traders the player can enter a level for. Derived from the requirement rows rather than
+    /// from the Traders table or a list in the app, which is what lets a data-only publish that
+    /// starts gating on a new trader grow the drawer with no app release, and what stops the
+    /// gate ever locking a quest behind a trader the drawer does not offer.
+    /// </para>
+    /// <para>
+    /// Empty when the database has no QuestTraderRequirements table, which is a legal input: a
+    /// database published before the 1.1 refresh simply gates nothing on loyalty.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<LoyaltyTrader> LoyaltyTraders => _loyaltyTraders;
 
     /// <summary>
     /// 데이터가 새로고침되었을 때 발생하는 이벤트.
@@ -115,6 +140,9 @@ public sealed class QuestDbService
             // 5. 대체 퀘스트 로드
             await LoadOptionalQuestsAsync(connection, questLookup);
 
+            // 5b. 트레이더 충성도 요구사항 로드
+            await LoadQuestTraderRequirementsAsync(connection, questLookup);
+
             // 6. LeadsTo 역참조 구축
             BuildLeadsToReferences(quests);
 
@@ -135,10 +163,16 @@ public sealed class QuestDbService
                 }
             }
 
+            // The roster is derived from the rows just loaded, inside the same swap, so a reader
+            // can never see the new quests beside the previous load's trader list.
+            var newLoyaltyTraders = BuildLoyaltyTraders(
+                quests, id => TraderDbService.Instance.GetTraderById(id)?.NormalizedName);
+
             // Atomic swap - 모든 데이터가 준비된 후 한 번에 교체
             _allQuests = quests;
             _questsById = newQuestsById;
             _questsByNormalizedName = newQuestsByNormalizedName;
+            _loyaltyTraders = newLoyaltyTraders;
             _isLoaded = true;
             _log.Info($"Loaded {quests.Count} quests from DB");
             return true;
@@ -150,7 +184,9 @@ public sealed class QuestDbService
         }
     }
 
-    private async Task<bool> TableExistsAsync(SqliteConnection connection, string tableName)
+    // Static because it reads nothing off the instance, which is what lets the loyalty loader
+    // below be static too and therefore drivable against an in-memory database.
+    private static async Task<bool> TableExistsAsync(SqliteConnection connection, string tableName)
     {
         var sql = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=@name";
         await using var cmd = new SqliteCommand(sql, connection);
@@ -557,6 +593,130 @@ public sealed class QuestDbService
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// 트레이더 충성도 요구사항 로드 (QuestTraderRequirements 테이블).
+    /// <para>
+    /// Behind a table-existence check like every other child loader: a database published before
+    /// the 1.1 refresh has no such table, and that is a legal input rather than a failure. No
+    /// rows then means no quest is loyalty-gated, which is exactly what those builds always did.
+    /// </para>
+    /// <para>
+    /// Static, unlike its siblings, so both of its branches can be driven against an in-memory
+    /// database by <c>QuestDbServiceLoyaltyReadTests</c>: the published database only ever holds
+    /// rows the pipeline accepted, so the skipped-row cases are unreachable from it.
+    /// </para>
+    /// </summary>
+    /// <param name="questLookup">Loaded quests by their primary id, as the other loaders take.</param>
+    /// <returns>False when the database has no such table, which is not an error.</returns>
+    internal static async Task<bool> LoadQuestTraderRequirementsAsync(
+        SqliteConnection connection, Dictionary<string, TarkovTask> questLookup)
+    {
+        if (!await TableExistsAsync(connection, "QuestTraderRequirements"))
+            return false;
+
+        await AttachQuestTraderRequirementsAsync(connection, questLookup);
+        return true;
+    }
+
+    /// <summary>
+    /// Reads QuestTraderRequirements and hangs each row on its quest, the table having been
+    /// found by the caller.
+    /// </summary>
+    /// <param name="questLookup">Loaded quests by their primary id, as the other loaders take.</param>
+    internal static async Task AttachQuestTraderRequirementsAsync(
+        SqliteConnection connection, Dictionary<string, TarkovTask> questLookup)
+    {
+        // Ordered so a quest's requirements read in a stable order whatever the table's physical
+        // order is; the badge and the detail pane re-sort by display rank on top of this.
+        var sql = @"
+            SELECT QuestId, TraderId, TraderName, RequiredLevel
+            FROM QuestTraderRequirements
+            ORDER BY QuestId, TraderName";
+
+        await using var cmd = new SqliteCommand(sql, connection);
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        while (await reader.ReadAsync())
+        {
+            var questId = reader.IsDBNull(0) ? "" : reader.GetString(0);
+            var traderId = reader.IsDBNull(1) ? "" : reader.GetString(1);
+            var traderName = reader.IsDBNull(2) ? "" : reader.GetString(2);
+            var level = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
+
+            // A row for a quest this load does not have. Debug, like the other child loaders:
+            // the publisher's own guards refuse it, and a stale row here is not the app's to
+            // report at every start.
+            if (!questLookup.TryGetValue(questId, out var quest))
+            {
+                _log.Debug($"Trader requirement for unknown quest '{questId}' skipped");
+                continue;
+            }
+
+            // Warning rather than debug, and dropped rather than kept: a row with no trader id
+            // could never be matched to an entered level, so keeping it would lock the quest
+            // permanently with nothing the player could do about it. A level below 1 is the same
+            // hazard from the other side, since every trader starts at 1.
+            if (string.IsNullOrEmpty(traderId) || string.IsNullOrEmpty(traderName) || level < 1)
+            {
+                _log.Warning(
+                    $"Trader requirement on quest '{questId}' is unusable " +
+                    $"(traderId='{traderId}', traderName='{traderName}', level={level}); skipped");
+                continue;
+            }
+
+            quest.TraderLoyaltyRequirements ??= new List<QuestTraderRequirement>();
+            quest.TraderLoyaltyRequirements.Add(new QuestTraderRequirement
+            {
+                TraderId = traderId,
+                TraderName = traderName,
+                Level = level
+            });
+        }
+    }
+
+    /// <summary>
+    /// The distinct traders named by the loaded requirement rows, in the game's display order
+    /// (<see cref="TraderDbService.DisplayRank"/>), with the unranked ones last and alphabetical
+    /// among themselves. Distinct by trader id, since that is what the entered level is keyed on.
+    /// </summary>
+    /// <param name="normalizedNameOf">
+    /// A trader's NormalizedName from the Traders table, or null when it has no row there. Taken
+    /// as a parameter rather than read off <see cref="TraderDbService"/> here so this stays a
+    /// pure function of the rows: it is the ordering these tests are about, and a singleton in
+    /// the middle of it would make the answer depend on whether that service had loaded yet.
+    /// </param>
+    internal static IReadOnlyList<LoyaltyTrader> BuildLoyaltyTraders(
+        List<TarkovTask> quests, Func<string, string?> normalizedNameOf)
+    {
+        var byId = new Dictionary<string, LoyaltyTrader>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var quest in quests)
+        {
+            if (quest.TraderLoyaltyRequirements == null) continue;
+
+            foreach (var requirement in quest.TraderLoyaltyRequirements)
+            {
+                if (byId.ContainsKey(requirement.TraderId)) continue;
+
+                // The normalized name comes from the Traders table when it has a row, because
+                // that is the name the display order is written in; the row's own nickname,
+                // lower-cased, is the fallback for a trader the table does not carry.
+                var published = normalizedNameOf(requirement.TraderId);
+                var normalizedName = string.IsNullOrEmpty(published)
+                    ? requirement.TraderName.ToLowerInvariant()
+                    : published!;
+
+                byId[requirement.TraderId] =
+                    new LoyaltyTrader(requirement.TraderId, requirement.TraderName, normalizedName);
+            }
+        }
+
+        return byId.Values
+            .OrderBy(t => TraderDbService.DisplayRank(t.NormalizedName))
+            .ThenBy(t => t.TraderName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     /// <summary>

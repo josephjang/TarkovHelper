@@ -78,6 +78,39 @@ public sealed class TraderDbService
     }
 
     /// <summary>
+    /// The game's own trader order, by NormalizedName. Display order only: nothing gates on it,
+    /// and a trader missing from it is shown, just after the ones that are here.
+    /// <para>
+    /// The Traders table carries no sort column, and alphabetical order puts Jaeger before
+    /// Prapor, which is not the order any player reads a trader list in. Hard-coded because it
+    /// is the game's fixed presentation order rather than data: a trader the game adds sorts
+    /// last until someone puts it in its place here, which is a cosmetic lag and never a wrong
+    /// answer. See docs/decisions/feature-quest-loyalty-gating.spec.md.
+    /// </para>
+    /// </summary>
+    private static readonly string[] TraderDisplayOrder =
+    {
+        "prapor", "therapist", "fence", "skier", "peacekeeper", "mechanic", "ragman", "jaeger",
+        "ref", "lightkeeper", "btr-driver",
+    };
+
+    /// <summary>
+    /// Where <paramref name="normalizedName"/> sits in <see cref="TraderDisplayOrder"/>, or
+    /// <see cref="int.MaxValue"/> for a trader the order does not name. Callers sort by this
+    /// rank and then by name, so the unranked newcomers come last, alphabetically among
+    /// themselves, instead of in whatever order the rows happened to arrive.
+    /// </summary>
+    public static int DisplayRank(string? normalizedName)
+    {
+        if (string.IsNullOrEmpty(normalizedName)) return int.MaxValue;
+
+        var index = Array.FindIndex(
+            TraderDisplayOrder,
+            name => string.Equals(name, normalizedName, StringComparison.OrdinalIgnoreCase));
+        return index < 0 ? int.MaxValue : index;
+    }
+
+    /// <summary>
     /// DB에서 모든 트레이더를 로드합니다.
     /// </summary>
     public async Task<bool> LoadTradersAsync()
