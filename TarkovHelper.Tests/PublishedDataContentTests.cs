@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using Microsoft.Data.Sqlite;
 using TarkovDBEditor.Services;
+using TarkovHelper.Services;
 
 namespace TarkovHelper.Tests;
 
@@ -185,6 +186,44 @@ public sealed class PublishedDataContentTests
         Assert.Equal(0, Count(
             @"SELECT COUNT(*) FROM QuestTraderRequirements r
               WHERE NOT EXISTS (SELECT 1 FROM Traders t WHERE t.Id = r.TraderId)"));
+    }
+
+    /// <summary>
+    /// The drawer builds one input group per trader a gate names, and its automation ids and its
+    /// display order both come from that trader's NormalizedName. A gate naming a trader whose
+    /// row has none would produce a group the e2e cannot address and a rank of "last" for a
+    /// trader the game lists first.
+    /// </summary>
+    [Fact]
+    public void Every_trader_a_gate_names_has_a_normalized_name_to_be_shown_under()
+    {
+        Assert.Equal(0, Count(
+            @"SELECT COUNT(*) FROM QuestTraderRequirements r
+              JOIN Traders t ON t.Id = r.TraderId
+              WHERE t.NormalizedName IS NULL OR t.NormalizedName = ''"));
+    }
+
+    /// <summary>
+    /// The one thing the app hard-codes about loyalty is that the levels run to four
+    /// (<see cref="SettingsService.MaxTraderLoyaltyLevel"/>), because every trader with loyalty
+    /// levels has had exactly four for as long as loyalty has existed. This is what keeps that
+    /// constant honest: a publish carrying a level 5 requirement fails here, on the publish PR,
+    /// rather than quietly locking a quest behind a level the drawer cannot enter.
+    /// <para>
+    /// The floor is 2 rather than 1 for a different reason: every trader starts at 1, so a
+    /// published requirement of 1 gates nothing and is a parse that lost its level.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Every_published_loyalty_level_is_one_the_drawer_can_be_set_to()
+    {
+        var levels = Query("SELECT DISTINCT RequiredLevel FROM QuestTraderRequirements")
+            .Select(r => int.Parse(r[0], CultureInfo.InvariantCulture))
+            .ToList();
+
+        Assert.NotEmpty(levels);
+        Assert.All(levels, level =>
+            Assert.InRange(level, 2, SettingsService.MaxTraderLoyaltyLevel));
     }
 
     #endregion
