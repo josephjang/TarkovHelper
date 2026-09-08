@@ -617,6 +617,11 @@ public sealed class ProfileResetHooksTests : IDisposable
         Assert.False(service.HasUnheardEdition);
         // The eighth value rides along with the seven that have events (it has none).
         Assert.True(service.ShowLevelLockedQuests);
+        // ...and so does the ninth: the seed carried an entry for this trader, the reset deleted
+        // its row, and the reloaded cache answers the default rather than the stale 3.
+        Assert.Equal(
+            SettingsService.DefaultTraderLoyaltyLevel,
+            service.GetTraderLoyalty(SeededTraderId));
 
         // The reload republished under the same profile, so a later reset of it still lands.
         Assert.Equal(_loadedProfileId, service.ProfileSettings.ProfileId);
@@ -659,7 +664,7 @@ public sealed class ProfileResetHooksTests : IDisposable
         Assert.Null(service.PlayerFaction);
         Assert.True(service.HasEodEdition);
         Assert.Equal(_loadedProfileId, service.ProfileSettings.ProfileId);
-        Assert.Equal(AllChangedEvents, events.Select(e => e.Name));
+        Assert.Equal(EventsFor(service.ProfileSettings), events.Select(e => e.Name));
 
         // The republished snapshot carries the seed's OWN revision forward, not the 7 the pending
         // transition claimed. Snapshot.Revision is provenance - which transition these values were
@@ -771,6 +776,44 @@ public sealed class ProfileResetHooksTests : IDisposable
             .ToList();
     }
 
+    /// <summary>
+    /// The one snapshot value that is not addressed by a single key: trader loyalty is a family
+    /// of <c>app.traderLoyalty.&lt;traderId&gt;</c> rows, so it has no entry in
+    /// <c>ProfileSpecificKeys</c> (which the one-time legacy migration walks key by key) and no
+    /// place in the bijection below. Named once, here, so the exemption is a stated fact rather
+    /// than a hole: the two coverage guards below seed a loyalty row alongside the eight keyed
+    /// ones, so the ninth value is still asserted to parse back and to be announced.
+    /// </summary>
+    private const string PrefixKeyedValue = nameof(ProfileSettingsSnapshot.TraderLoyalty);
+
+    /// <summary>The snapshot's single-key value properties: everything the key arrays can pair with.</summary>
+    private static IReadOnlyList<System.Reflection.PropertyInfo> KeyedSnapshotValueProperties()
+        => SnapshotValueProperties().Where(p => p.Name != PrefixKeyedValue).ToList();
+
+    /// <summary>The trader and level the loyalty row seeded below carries.</summary>
+    private const string SeededLoyaltyTraderId = "54cb50c76803fa8b248b4571";
+    private const int SeededLoyaltyLevel = 3;
+
+    /// <summary>
+    /// One row for EVERY profile-scoped value: the eight single keys, plus one loyalty row under
+    /// the prefix. The loyalty row is what keeps the two coverage guards below from going vacuous
+    /// on the ninth value, which never reads back as null and would otherwise pass whatever the
+    /// load did with it.
+    /// </summary>
+    private static async Task SeedEveryProfileValueAsync(UserDataDbService store, string profileId)
+    {
+        foreach (var key in SettingsService.ProfileSpecificKeys)
+        {
+            await store.SetProfileSettingAsync(
+                profileId, key, NonNullRowFor(SnapshotProperty(SnapshotPropertyNameOf(key))));
+        }
+
+        await store.SetProfileSettingAsync(
+            profileId,
+            SettingsService.TraderLoyaltyKey(SeededLoyaltyTraderId),
+            SeededLoyaltyLevel.ToString());
+    }
+
     private static System.Reflection.PropertyInfo SnapshotProperty(string name)
     {
         var property = typeof(ProfileSettingsSnapshot).GetProperty(name);
@@ -813,10 +856,17 @@ public sealed class ProfileResetHooksTests : IDisposable
     public void The_profile_specific_keys_and_the_snapshot_value_fields_are_one_to_one()
     {
         Assert.Equal(
-            SnapshotValueProperties().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal),
+            KeyedSnapshotValueProperties().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal),
             SettingsService.ProfileSpecificKeys
                 .Select(SnapshotPropertyNameOf)
                 .OrderBy(n => n, StringComparer.Ordinal));
+
+        // The exemption is exactly one value and it is the prefix-keyed one, so a NEW field added
+        // without its key still fails the comparison above instead of slipping in beside it.
+        Assert.Equal(
+            new[] { PrefixKeyedValue },
+            SnapshotValueProperties().Select(p => p.Name).Except(
+                KeyedSnapshotValueProperties().Select(p => p.Name)).ToArray());
     }
 
     /// <summary>
@@ -851,11 +901,7 @@ public sealed class ProfileResetHooksTests : IDisposable
     {
         var store = NewStore();
         var target = IdOf(AppProfile.PveZone);
-        foreach (var key in SettingsService.ProfileSpecificKeys)
-        {
-            await store.SetProfileSettingAsync(
-                target, key, NonNullRowFor(SnapshotProperty(SnapshotPropertyNameOf(key))));
-        }
+        await SeedEveryProfileValueAsync(store, target);
 
         var service = NewSettingsService(store);
         var fired = new List<string>();
@@ -950,11 +996,7 @@ public sealed class ProfileResetHooksTests : IDisposable
     {
         var store = NewStore();
         var target = IdOf(AppProfile.PveZone);
-        foreach (var key in SettingsService.ProfileSpecificKeys)
-        {
-            await store.SetProfileSettingAsync(
-                target, key, NonNullRowFor(SnapshotProperty(SnapshotPropertyNameOf(key))));
-        }
+        await SeedEveryProfileValueAsync(store, target);
 
         var service = NewSettingsService(store);
         service.ReloadForProfile(AppProfile.PveZone, revision: 1);
@@ -968,6 +1010,11 @@ public sealed class ProfileResetHooksTests : IDisposable
                 property.GetValue(snapshot) != null,
                 $"ProfileSettingsSnapshot.{property.Name} stayed null although its row was stored; " +
                 "the load parses no key into it"));
+
+        // "Not null" says nothing about the ninth value, which is Empty rather than null when the
+        // load parses none of the prefixed rows. This is the assertion that would actually fail.
+        Assert.Equal(SeededLoyaltyLevel, snapshot.TraderLoyalty.LevelOf(SeededLoyaltyTraderId));
+        Assert.Equal(1, snapshot.TraderLoyalty.Count);
     }
 
     #endregion

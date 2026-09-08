@@ -108,6 +108,52 @@ public sealed class ProfileResetStoreTests : IDisposable
     }
 
     /// <summary>
+    /// The loyalty rows are the first profile setting addressed by a key PREFIX rather than by a
+    /// key the survivor list could ever name, and the reset's delete is an allowlist: it removes
+    /// every row whose key is not on the list, so a prefixed family needs no change to it at all.
+    /// This is the case that proves that claim rather than assuming it
+    /// (feature-quest-loyalty-gating.md R5).
+    /// </summary>
+    [Fact]
+    public async Task A_reset_wipes_the_prefixed_trader_loyalty_rows_of_the_target_profile_only()
+    {
+        var store = NewStore();
+        var prapor = SettingsService.TraderLoyaltyKey("54cb50c76803fa8b248b4571");
+        var jaeger = SettingsService.TraderLoyaltyKey("5c0647fdd443bc2504c2d371");
+
+        await store.SetProfileSettingAsync(Season, prapor, "4");
+        await store.SetProfileSettingAsync(Season, jaeger, "2");
+        await store.SetProfileSettingAsync(Season, "app.hasEodEdition", "True");
+        await store.SetProfileSettingAsync(Pve, prapor, "3");
+
+        await store.ResetProfileAsync(
+            Season, new DateTime(2026, 8, 13, 12, 0, 0), SettingsService.ProfileKeysSurvivingReset);
+
+        // Every loyalty row of the target is gone, whichever trader it named...
+        Assert.Null(await store.GetProfileSettingAsync(Season, prapor));
+        Assert.Null(await store.GetProfileSettingAsync(Season, jaeger));
+        // ...the editions still survive beside them, so the wipe was the allowlist at work and
+        // not a delete that took the whole profile...
+        Assert.Equal("True", await store.GetProfileSettingAsync(Season, "app.hasEodEdition"));
+        // ...and the other profile's entry is untouched: loyalty is per profile (PRD R5).
+        Assert.Equal("3", await store.GetProfileSettingAsync(Pve, prapor));
+    }
+
+    /// <summary>
+    /// The allowlist can never name a loyalty row by accident. A survivor key carrying the prefix
+    /// would keep one trader's level across a reset while the others went, which reads as data
+    /// corruption rather than as a preserved fact.
+    /// </summary>
+    [Fact]
+    public void No_key_surviving_a_reset_belongs_to_the_trader_loyalty_family()
+    {
+        Assert.All(SettingsService.ProfileKeysSurvivingReset, key =>
+            Assert.False(
+                key.StartsWith(SettingsService.TraderLoyaltyKeyPrefix, StringComparison.Ordinal),
+                $"'{key}' survives a reset although it is a trader loyalty row"));
+    }
+
+    /// <summary>
     /// The empty-survivor case takes the other branch of the settings delete, the one without a
     /// NOT IN clause, and it is the branch that could sweep the watermark it just wrote. Every
     /// other test here passes the non-empty <c>ProfileKeysSurvivingReset</c>, so nothing else

@@ -10,15 +10,15 @@ using static TarkovHelper.Tests.SettingsServiceTestSupport;
 namespace TarkovHelper.Tests;
 
 /// <summary>
-/// The contract each of the eight profile-scoped settings keeps with the store: the setter writes
+/// The contract each of the nine profile-scoped settings keeps with the store: the setter writes
 /// its OWN key, changes its OWN snapshot field and announces its OWN event, and the read path
 /// refuses a row no setter could have produced.
 /// <para>
-/// The eight setters are near-identical five-line bodies differing only in a key, a field and an
+/// The setters are near-identical five-line bodies differing only in a key, a field and an
 /// event, which is the classic surface for a copy-paste swap that no test notices: before this
-/// file, only four of the eight were ever driven to a store write anywhere in the suite. The table
-/// below drives all eight and asserts all three pairings at once, so swapping any one of them
-/// fails here rather than in a player's user_data.db.
+/// file, only four of the eight then present were ever driven to a store write anywhere in the
+/// suite. The table below drives every one of them and asserts all three pairings at once, so
+/// swapping any one of them fails here rather than in a player's user_data.db.
 /// </para>
 /// <para>
 /// Built on uninitialized services (see <see cref="TestReflection"/>) with a real SQLite store, the
@@ -35,7 +35,7 @@ public sealed class SettingsSetterContractTests : IDisposable
 
     private UserDataDbService NewStore() => _stores.NewStore();
 
-    #region The eight setters
+    #region The setters
 
     /// <summary>
     /// One setter's whole contract. The keys are spelled as literals rather than through
@@ -47,7 +47,7 @@ public sealed class SettingsSetterContractTests : IDisposable
     /// <param name="Stored">The serialized value that row must carry.</param>
     /// <param name="Expected">
     /// The snapshot the seed must become. Records compare by value, so this pins the changed
-    /// field AND that the other seven were left alone.
+    /// field AND that the others were left alone.
     /// </param>
     /// <param name="Event">
     /// The changed event the setter announces, or null for the one setting that has none.
@@ -86,6 +86,14 @@ public sealed class SettingsSetterContractTests : IDisposable
             seed => seed with { HasUnheardEdition = false }, "HasUnheardEdition"),
         new("PrestigeLevel", s => s.PrestigeLevel = 2, "app.prestigeLevel", "2",
             seed => seed with { PrestigeLevel = 2 }, "PrestigeLevel"),
+        // The ninth value, and the only one addressed by trader rather than by a bare key: its
+        // row lands under the prefix plus the trader id, and its snapshot field is the map with
+        // that one entry replaced. Driven to a level the seed does not hold, so the reference
+        // guard in the setter has to actually decide something.
+        new("TraderLoyalty", s => s.SetTraderLoyalty(SeededTraderId, 2),
+            "app.traderLoyalty." + SeededTraderId, "2",
+            seed => seed with { TraderLoyalty = seed.TraderLoyalty.With(SeededTraderId, 2) },
+            "TraderLoyalty"),
     };
 
     public static IEnumerable<object[]> SetterNames()
@@ -125,8 +133,8 @@ public sealed class SettingsSetterContractTests : IDisposable
     }
 
     // The negative half of the table above: re-setting the value the snapshot already holds is a
-    // no-op, for the seven settings that guard on "value differs". Without this, a setter whose
-    // guard read the wrong field would still pass the case above.
+    // no-op, for the settings that guard on "value differs" (all but one). Without this, a
+    // setter whose guard read the wrong field would still pass the case above.
     [Theory]
     [MemberData(nameof(SetterNames))]
     public async Task Each_setter_re_set_to_the_value_it_already_holds_writes_nothing(string name)
@@ -141,8 +149,8 @@ public sealed class SettingsSetterContractTests : IDisposable
 
         setter.Apply(service);
 
-        // Nothing is announced either way: the seven skip the edit outright, and the eighth has
-        // no changed event to raise.
+        // Nothing is announced either way: the guarded settings skip the edit outright, and the
+        // one without a guard has no changed event to raise.
         Assert.Empty(events);
 
         foreach (var key in AllSetters.Select(c => c.Key))
@@ -158,8 +166,8 @@ public sealed class SettingsSetterContractTests : IDisposable
                 Assert.Null(stored);
         }
 
-        // The seven that skip leave the very snapshot they were handed in place, so no page is
-        // asked to redraw for a value that did not move. The eighth republishes an equal one.
+        // The ones that skip leave the very snapshot they were handed in place, so no page is
+        // asked to redraw for a value that did not move. The unguarded one republishes an equal one.
         if (setter.RewritesUnchangedValue)
             Assert.Equal(seed, service.ProfileSettings);
         else
@@ -226,6 +234,94 @@ public sealed class SettingsSetterContractTests : IDisposable
         Assert.Equal(37, snapshot.PlayerLevel);
         Assert.Equal(2, snapshot.DspDecodeCount);
         Assert.Equal(3, snapshot.PrestigeLevel);
+    }
+
+    /// <summary>
+    /// The prefixed loyalty rows go through the same clamp as the keyed values, one row at a
+    /// time. Kept out of <see cref="OutOfRangeRows"/> because the field is a map rather than an
+    /// int, and worth its own case for what an unclamped row would do: a hand-written 9 would
+    /// answer every published requirement and silently unlock all 94 gated quests, and a 0 would
+    /// lock a requirement of 1 that the game has already met.
+    /// </summary>
+    [Theory]
+    [InlineData("9", SettingsService.MaxTraderLoyaltyLevel)]
+    [InlineData("0", SettingsService.MinTraderLoyaltyLevel)]
+    [InlineData("-4", SettingsService.MinTraderLoyaltyLevel)]
+    [InlineData("3", 3)]
+    public async Task An_out_of_range_trader_loyalty_row_is_clamped_on_the_way_in(
+        string stored, int expected)
+    {
+        var store = NewStore();
+        var target = ProfileService.GetProfileId(AppProfile.PveZone);
+        await store.SetProfileSettingAsync(
+            target, SettingsService.TraderLoyaltyKey(SeededTraderId), stored);
+        var service = NewService(Seeded(NewProfileId("other")), store: store);
+
+        service.ReloadForProfile(AppProfile.PveZone, revision: 1);
+
+        Assert.Equal(expected, service.ProfileSettings.TraderLoyalty.LevelOf(SeededTraderId));
+    }
+
+    /// <summary>
+    /// A row the read cannot make sense of leaves no entry at all, so the trader answers the
+    /// default rather than a level invented from a broken value. The unparsable case is the one
+    /// that matters: an entry of 0 from a failed parse would lock every level 1 requirement.
+    /// </summary>
+    [Theory]
+    [InlineData("not-a-level")]
+    [InlineData("")]
+    [InlineData("2.5")]
+    public async Task An_unparsable_trader_loyalty_row_leaves_no_entry(string stored)
+    {
+        var store = NewStore();
+        var target = ProfileService.GetProfileId(AppProfile.PveZone);
+        await store.SetProfileSettingAsync(
+            target, SettingsService.TraderLoyaltyKey(SeededTraderId), stored);
+        var service = NewService(Seeded(NewProfileId("other")), store: store);
+
+        service.ReloadForProfile(AppProfile.PveZone, revision: 1);
+
+        Assert.Equal(0, service.ProfileSettings.TraderLoyalty.Count);
+        Assert.Equal(
+            SettingsService.DefaultTraderLoyaltyLevel,
+            service.ProfileSettings.TraderLoyalty.LevelOf(SeededTraderId));
+    }
+
+    /// <summary>
+    /// A row keyed on the bare prefix names no trader. It is dropped rather than kept under an
+    /// empty id, where it could never be matched to a requirement and would sit in the map
+    /// forever answering nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_loyalty_row_with_no_trader_id_is_dropped()
+    {
+        var store = NewStore();
+        var target = ProfileService.GetProfileId(AppProfile.PveZone);
+        await store.SetProfileSettingAsync(target, SettingsService.TraderLoyaltyKeyPrefix, "3");
+        var service = NewService(Seeded(NewProfileId("other")), store: store);
+
+        service.ReloadForProfile(AppProfile.PveZone, revision: 1);
+
+        Assert.Equal(0, service.ProfileSettings.TraderLoyalty.Count);
+    }
+
+    /// <summary>
+    /// A row for a trader the loaded data gates nothing on is KEPT. It costs nothing (no gate
+    /// reads it) and it is the mechanism the drawer's data-driven roster depends on: the publish
+    /// that starts gating on that trader finds the player's entry already there.
+    /// </summary>
+    [Fact]
+    public async Task A_loyalty_row_for_an_unknown_trader_is_kept()
+    {
+        var store = NewStore();
+        var target = ProfileService.GetProfileId(AppProfile.PveZone);
+        await store.SetProfileSettingAsync(
+            target, SettingsService.TraderLoyaltyKey("not-a-trader-the-data-knows"), "4");
+        var service = NewService(Seeded(NewProfileId("other")), store: store);
+
+        service.ReloadForProfile(AppProfile.PveZone, revision: 1);
+
+        Assert.Equal(4, service.ProfileSettings.TraderLoyalty.LevelOf("not-a-trader-the-data-knows"));
     }
 
     // The legacy importer is the one writer that can introduce an out-of-range row, so it clamps
@@ -317,7 +413,7 @@ public sealed class SettingsSetterContractTests : IDisposable
 
         RaiseProfileSettingsChanged(service, service.ProfileSettings);
 
-        Assert.Equal(AllChangedEvents, events.Select(e => e.Name));
+        Assert.Equal(EventsFor(service.ProfileSettings), events.Select(e => e.Name));
     }
 
     // ...and one the cache has moved past announces nothing. Left unguarded, a reload on the log
@@ -396,7 +492,7 @@ public sealed class SettingsSetterContractTests : IDisposable
         // ...and the hook still announced. Its caller (ProfileResetService.RunRefreshHooks) runs
         // it as a plain Action whose contract is that the cache is current and announced when it
         // returns, so giving up quietly would leave the settings panel showing wiped values.
-        Assert.Equal(AllChangedEvents, events.Select(e => e.Name));
+        Assert.Equal(EventsFor(service.ProfileSettings), events.Select(e => e.Name));
         // Announced from the LIVE snapshot, which is the one every getter answers from.
         Assert.Equal(42, events.Single(e => e.Name == "PlayerLevel").Value);
     }
@@ -415,7 +511,7 @@ public sealed class SettingsSetterContractTests : IDisposable
         service.HandleProfileReset(onScreen);
 
         Assert.Equal(7, service.PlayerLevel);
-        Assert.Equal(AllChangedEvents, events.Select(e => e.Name));
+        Assert.Equal(EventsFor(service.ProfileSettings), events.Select(e => e.Name));
         Assert.Equal(7, events.Single(e => e.Name == "PlayerLevel").Value);
     }
 
