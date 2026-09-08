@@ -37,12 +37,20 @@ internal static class E2EQuestData
               AND ({alias}.RequiredDecodeCount IS NULL OR {alias}.RequiredDecodeCount = 0)";
 
     /// <summary>
-    /// The quest is reachable at the app's default player level (a fresh profile's
-    /// level) and has no scav-karma gate.
+    /// The quest clears all three of the gates that answer LevelLocked on a fresh profile: it is
+    /// reachable at the app's default player level, has no scav-karma gate, and is gated on no
+    /// trader's loyalty.
+    /// <para>
+    /// The loyalty clause joined the other two when the gate shipped. A fresh profile reads every
+    /// trader at level 1, so a quest carrying any published requirement (they run 2 to 4) is
+    /// LevelLocked, not Active - which is what these fixtures are picked for.
+    /// </para>
     /// </summary>
     private static string ReachableAtDefaultLevel(string alias) => $@"
               ({alias}.MinLevel IS NULL OR {alias}.MinLevel <= {SettingsService.DefaultPlayerLevel})
-              AND {alias}.MinScavKarma IS NULL";
+              AND {alias}.MinScavKarma IS NULL
+              AND NOT EXISTS (SELECT 1 FROM QuestTraderRequirements tr
+                              WHERE tr.QuestId = {alias}.Id)";
 
     /// <summary>
     /// The quest appears in no OptionalQuests row (as the quest or the alternative),

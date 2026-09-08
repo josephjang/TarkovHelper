@@ -1,5 +1,6 @@
 using TarkovHelper.Models;
 using TarkovHelper.Services;
+using TarkovHelper.Services.Settings;
 
 namespace TarkovHelper.Tests;
 
@@ -43,6 +44,29 @@ public sealed class E2EQuestDataTests
                 plan.AlternativesToFail.Select(p => p.Quest.Name!).ToList());
     }
 
+    /// <summary>
+    /// The status the app itself reports for the named quest on a fresh profile: default player
+    /// level, no recorded progress, no trader loyalty entered.
+    /// <para>
+    /// The cascade checks above prove what completing a fixture does; this proves the fixture is
+    /// in the STATE its e2e assumes before anything is clicked. The two are different questions,
+    /// and only this one notices a new availability gate quietly moving a fixture out of the
+    /// state its suite was written around, which is exactly what the trader loyalty gate did to
+    /// twenty-seven candidates.
+    /// </para>
+    /// </summary>
+    private static async Task<QuestStatus> FreshProfileStatus(string questName)
+    {
+        Assert.True(await QuestDbService.Instance.LoadQuestsAsync(), "asset db did not load");
+        var tasks = QuestDbService.Instance.AllQuests.ToArray();
+        var task = tasks.Single(q => q.Name == questName);
+
+        var service = ProgressServiceHarness.Create(
+            new ProgressStoreFake(), AppProfile.PvpSeason, tasks);
+        return service.GetStatus(
+            task, service.Snapshot, ProfileSettingsSnapshot.Defaults("fresh", 0));
+    }
+
     [Fact]
     public async Task Locked_quest_with_active_prereq_exists()
     {
@@ -50,6 +74,10 @@ public sealed class E2EQuestDataTests
         Assert.False(string.IsNullOrWhiteSpace(questName));
         Assert.False(string.IsNullOrWhiteSpace(prereqName));
         Assert.NotEqual(questName, prereqName);
+
+        // The states the two suites that use this pair are written around.
+        Assert.Equal(QuestStatus.Locked, await FreshProfileStatus(questName));
+        Assert.Equal(QuestStatus.Active, await FreshProfileStatus(prereqName));
 
         // The app's own traversal agrees with the SQL: completing the quest cascades
         // exactly the prerequisite and fails nothing (QuestCascadeConfirmE2ETests).
@@ -69,6 +97,9 @@ public sealed class E2EQuestDataTests
     {
         var questName = E2EQuestData.FindStandaloneActiveQuest();
         Assert.False(string.IsNullOrWhiteSpace(questName));
+
+        // Active before anything is clicked: the one-click flow starts from the Complete button.
+        Assert.Equal(QuestStatus.Active, await FreshProfileStatus(questName));
 
         // Completing it must cascade nothing (no dialog in the one-click e2e flow).
         var c = await Cascade(questName);

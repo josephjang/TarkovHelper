@@ -388,6 +388,16 @@ namespace TarkovHelper.Services
                 if (!IsScavKarmaRequirementMet(task, settings))
                     return QuestStatus.LevelLocked;  // Use LevelLocked status for karma-locked quests too
 
+                // Check trader loyalty requirements. Last of the three, and LevelLocked like the
+                // other two: loyalty levels themselves need player levels (Prapor 3 needs level
+                // 21 in the game), so a quest short of both is usually waiting on level first,
+                // and running this earlier would change the badge on quests that have nothing to
+                // do with loyalty. The status stays LevelLocked rather than gaining a member of
+                // its own, so the chip vocabulary, its counts and its persistence are untouched;
+                // the badge is what tells the player which of the three gates is holding.
+                if (!IsTraderLoyaltyRequirementMet(task, settings))
+                    return QuestStatus.LevelLocked;
+
                 return QuestStatus.Active;
             }
             finally
@@ -442,6 +452,82 @@ namespace TarkovHelper.Services
                 return playerScavRep >= requiredKarma;
             }
         }
+
+        /// <summary>
+        /// Check if every trader loyalty level this quest requires has been entered for the
+        /// profile. True when the quest names no trader.
+        /// </summary>
+        public bool IsTraderLoyaltyRequirementMet(TarkovTask task)
+            => IsTraderLoyaltyRequirementMet(task, SettingsService.Instance.ProfileSettings);
+
+        internal static bool IsTraderLoyaltyRequirementMet(
+            TarkovTask task, ProfileSettingsSnapshot settings)
+        {
+            if (!task.HasTraderLoyaltyRequirements) return true;
+
+            // Every row, not any: a quest naming three traders is taken only once all three
+            // stand where it asks (Thirsty - Hounds needs Jaeger, Therapist and Skier at 2).
+            // A trader with no entry reads as level 1, which is where the game starts every
+            // trader, so an untouched profile fails a level 2 row and meets a level 1 one.
+            foreach (var requirement in task.TraderLoyaltyRequirements!)
+            {
+                if (settings.TraderLoyalty.LevelOf(requirement.TraderId) < requirement.Level)
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// The loyalty requirement the row's badge should name, or null when the quest has none
+        /// unmet.
+        /// <para>
+        /// The quest's own trader first, when it is one of the unmet ones: the row already shows
+        /// that trader's initial, so <c>LL2</c> on it is complete on its own and stays as narrow
+        /// as <c>Lv.15</c>. Otherwise the earliest unmet trader in the game's own order, so the
+        /// badge names the same trader every time rather than whichever row the database returned
+        /// first. One rule, used by the list row, the detail badge and the tests.
+        /// </para>
+        /// </summary>
+        internal static QuestTraderRequirement? FirstUnmetTraderLoyalty(
+            TarkovTask task, ProfileSettingsSnapshot settings)
+        {
+            if (!task.HasTraderLoyaltyRequirements) return null;
+
+            QuestTraderRequirement? best = null;
+            var bestRank = int.MaxValue;
+
+            foreach (var requirement in task.TraderLoyaltyRequirements!)
+            {
+                if (settings.TraderLoyalty.LevelOf(requirement.TraderId) >= requirement.Level)
+                    continue;
+
+                if (IsGivenBy(task, requirement)) return requirement;
+
+                // Ranked off the lower-cased nickname, which is the normalized name for every
+                // trader the published data names and the same fallback QuestDbService uses when
+                // the Traders table has no row. An unrecognised name ranks last rather than
+                // wrong, and this decides display only.
+                var rank = TraderDbService.DisplayRank(requirement.TraderName?.ToLowerInvariant());
+                if (best == null || rank < bestRank)
+                {
+                    best = requirement;
+                    bestRank = rank;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="requirement"/> names the trader who gives
+        /// <paramref name="task"/>. Compared by nickname because that is what both sides carry:
+        /// the quest's Trader column is a nickname and the requirement row's TraderName is the
+        /// byte-equal same string in the published data.
+        /// </summary>
+        internal static bool IsGivenBy(TarkovTask task, QuestTraderRequirement requirement)
+            => !string.IsNullOrEmpty(task.Trader)
+               && string.Equals(task.Trader, requirement.TraderName, StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// Check if edition requirements are met for the quest
