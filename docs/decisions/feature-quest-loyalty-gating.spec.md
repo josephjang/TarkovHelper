@@ -465,6 +465,15 @@ Considered instead: announcing loyalty for the union of the outgoing and
 incoming snapshots' traders, which needs the previous snapshot threaded into
 the fan-out for a result the reader can read off the snapshot anyway.
 
+**Two files the "Files touched" list did not name** (appended during
+implementation). `TarkovHelper/Pages/QuestListViewModels.cs` gains
+`LoyaltyRequirementViewModel`, the item type of the `LoyaltyRequirementsList`
+`ItemsControl` the design does call for; it sits with the other detail-pane
+view models rather than in the page. `TarkovHelper.Tests/SettingsReloadRaceTests.cs`
+follows the fan-out change above: its three "every event was raised"
+assertions now derive the expected list from the snapshot that was published
+instead of a fixed seven, since a snapshot with loyalty entries raises more.
+
 ## Open Questions
 
 - Whether and when the upstream API adds the eighteen KORD BREACH quests with
