@@ -223,6 +223,21 @@ namespace TarkovHelper.Models
         [JsonPropertyName("traderName")]
         public string TraderName { get; set; } = string.Empty;
 
+        /// <summary>
+        /// The trader's NormalizedName as the Traders table publishes it ("btr-driver"), stamped
+        /// by the quest loader. Never derived from <see cref="TraderName"/> by a reader: lower
+        /// casing a nickname answers "btr driver" for every multi-word trader, which matches
+        /// nothing the display order is written in. Falls back to the lower-cased nickname, and
+        /// then to the id, only for a trader the Traders table has no row for.
+        /// <para>
+        /// Display only, like <see cref="TraderName"/>: it decides where the trader sorts
+        /// (<see cref="Services.TraderDbService.DisplayRank"/>) and nothing else. The gate
+        /// compares <see cref="TraderId"/>.
+        /// </para>
+        /// </summary>
+        [JsonPropertyName("normalizedName")]
+        public string NormalizedName { get; set; } = string.Empty;
+
         /// <summary>Loyalty level required, 2 to 4 in the published data.</summary>
         [JsonPropertyName("level")]
         public int Level { get; set; }

@@ -204,6 +204,31 @@ public sealed class PublishedDataContentTests
     }
 
     /// <summary>
+    /// One gate per (quest, trader). Nothing in the schema enforces it: QuestTraderRequirements
+    /// is keyed on its own Id alone, so a parser that read a trader's line twice would publish
+    /// two rows for one trader on one quest. The app reads them as written, one detail line per
+    /// row, so the player would be shown two contradicting levels for the same trader and the
+    /// quest's badge would name whichever of them the tiebreak happened to land on.
+    /// <para>
+    /// Vacuous only if the table were empty, which
+    /// <see cref="Trader_loyalty_gates_are_published_for_the_quests_that_have_them"/> rules out.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void No_quest_states_two_loyalty_levels_for_the_same_trader()
+    {
+        var duplicates = Query(
+            @"SELECT q.Name, r.TraderName, COUNT(*)
+              FROM QuestTraderRequirements r JOIN Quests q ON q.Id = r.QuestId
+              GROUP BY r.QuestId, r.TraderId
+              HAVING COUNT(*) > 1");
+
+        Assert.True(duplicates.Count == 0,
+            "a quest states a loyalty level more than once for the same trader: " +
+            string.Join(", ", duplicates.Select(d => $"{d[0]} / {d[1]} x{d[2]}")));
+    }
+
+    /// <summary>
     /// The one thing the app hard-codes about loyalty is that the levels run to four
     /// (<see cref="SettingsService.MaxTraderLoyaltyLevel"/>), because every trader with loyalty
     /// levels has had exactly four for as long as loyalty has existed. This is what keeps that

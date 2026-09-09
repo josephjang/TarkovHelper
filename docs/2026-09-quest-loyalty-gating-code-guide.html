@@ -767,7 +767,7 @@
     .lab-head .sub code, .stat .v { overflow-wrap: anywhere; }
 
     /* The drawer, rebuilt. One row per trader, each a label and four levels,
-       laid out the way MainWindow.BuildLoyaltyGroup lays them out. */
+       laid out the way TraderLoyaltyPanel.Rebuild lays them out. */
     .drawer {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(214px, 1fr));
@@ -1092,15 +1092,30 @@
 
         <div class="code">
           <div class="code-head"><span>TarkovHelper/Services/QuestProgressService.cs</span><span>GetStatus</span></div>
-          <pre>                <span class="cmt">// ... editions, prestige, faction, DSP and prerequisites above ...</span>
+          <pre>        internal QuestStatus GetStatus(
+            TarkovTask task, ProgressSnapshot snapshot, ProfileSettingsSnapshot settings,
+<span class="add">+           out QuestGate gate)</span>
+        {
+<span class="add">+           gate = QuestGate.None;</span>
+
+            <span class="cmt">// ... a recorded Done or Failed, the visited set, then inside the try: ...</span>
+
+                <span class="cmt">// ... editions, prestige, faction, DSP and prerequisites above, each</span>
+                <span class="cmt">// naming its own gate the same way ...</span>
 
                 <span class="cmt">// Check level requirement</span>
                 if (!IsLevelRequirementMet(task, settings))
+                {
+<span class="add">+                   gate = QuestGate.PlayerLevel;</span>
                     return QuestStatus.LevelLocked;
+                }
 
                 <span class="cmt">// Check Scav Karma requirement</span>
                 if (!IsScavKarmaRequirementMet(task, settings))
+                {
+<span class="add">+                   gate = QuestGate.ScavKarma;</span>
                     return QuestStatus.LevelLocked;
+                }
 
 <span class="add">+               // Check trader loyalty requirements. Last of the three, and LevelLocked like</span>
 <span class="add">+               // the other two: loyalty levels themselves need player levels (Prapor 3 needs</span>
@@ -1108,7 +1123,10 @@
 <span class="add">+               // first, and running this earlier would change the badge on quests that have</span>
 <span class="add">+               // nothing to do with loyalty.</span>
 <span class="add">+               if (!IsTraderLoyaltyRequirementMet(task, settings))</span>
+<span class="add">+               {</span>
+<span class="add">+                   gate = QuestGate.TraderLoyalty;</span>
 <span class="add">+                   return QuestStatus.LevelLocked;</span>
+<span class="add">+               }</span>
 
                 return QuestStatus.Active;</pre>
         </div>
@@ -1120,10 +1138,17 @@
           level 1 row.
         </p>
         <p>
-          The badge is a separate rule, because one status now covers three different
-          requirements. <code>QuestRequirementBadge.For</code> gives the level first, then the
-          karma, then the loyalty. That is the order of the walk, so the badge always names the
-          gate the walk stopped at.
+          The badge needs a rule of its own, because one status now covers three different
+          requirements. The obvious rule is to ask the same three questions again, in the same
+          order, and name the first one that fails. That is a second copy of the walk's order,
+          with nothing holding the two together. Reorder the walk and every test still passes
+          while the badge sends the player to the wrong requirement.
+        </p>
+        <p>
+          So the walk says which gate stopped it. <code>GetStatus</code> takes an
+          <code>out QuestGate</code>, sets it at the step that returns, and
+          <code>QuestRequirementBadge.For</code> is a switch over the answer. The precedence
+          exists once, in the engine. The badge only knows how to spell a gate.
         </p>
         <p>
           For loyalty it names the trader only when the trader is not the giver. 89 of the 94
@@ -1135,34 +1160,52 @@
         <div class="code">
           <div class="code-head"><span>TarkovHelper/Pages/QuestRequirementBadge.cs</span><span>For</span></div>
           <pre>internal static string? For(
+    QuestGate gate,
     TarkovTask task,
     ProfileSettingsSnapshot settings,
     Func&lt;QuestTraderRequirement, string&gt; traderDisplayName)
 {
-    if (task.RequiredLevel.HasValue
-        &amp;&amp; !QuestProgressService.IsLevelRequirementMet(task, settings))
+    switch (gate)
     {
-        return $"Lv.{task.RequiredLevel}";
-    }
+        case QuestGate.PlayerLevel:
+            return $"Lv.{task.RequiredLevel}";
 
-    if (task.RequiredScavKarma.HasValue
-        &amp;&amp; !QuestProgressService.IsScavKarmaRequirementMet(task, settings))
-    {
-        return $"Rep {task.RequiredScavKarma:0.#}";
-    }
+        case QuestGate.ScavKarma:
+            return $"Rep {task.RequiredScavKarma:0.#}";
 
-    var loyalty = QuestProgressService.FirstUnmetTraderLoyalty(task, settings);
-    if (loyalty != null)
-    {
-        <span class="cmt">// The trader's name only when it is NOT the quest's own.</span>
-        return QuestProgressService.IsGivenBy(task, loyalty)
-            ? $"LL{loyalty.Level}"
-            : $"{traderDisplayName(loyalty)} LL{loyalty.Level}";
-    }
+        case QuestGate.TraderLoyalty:
+        {
+            var loyalty = QuestProgressService.FirstUnmetTraderLoyalty(task, settings);
+            if (loyalty == null) return null;
 
-    return null;
+            <span class="cmt">// The trader's name only when it is NOT the quest's own.</span>
+            return QuestProgressService.IsGivenBy(task, loyalty)
+                ? $"LL{loyalty.Level}"
+                : $"{traderDisplayName(loyalty)} LL{loyalty.Level}";
+        }
+
+        <span class="cmt">// ... and the Unavailable gates, spelled the same way: RequiredEdition as</span>
+        <span class="cmt">// "EOD" or "Unheard", ExcludedEdition as "Edition", PrestigeLevel as</span>
+        <span class="cmt">// "P.{n}", Faction as "BEAR" or "USEC" ...</span>
+
+        default:
+            return null;
+    }
 }</pre>
         </div>
+
+        <p>
+          A null is not a blank badge. <code>StatusText</code> wraps this and falls back to the
+          status word. So <code>Active</code>, <code>Done</code>, <code>Failed</code> and
+          <code>Locked</code> read as themselves. A gate with no value to show still says
+          <code>Level</code> or <code>N/A</code>.
+        </p>
+        <p>
+          Every pane passes the gate the same <code>GetStatus</code> call reported. The list row,
+          the detail pane, the prerequisite rows and the alternative-quest rows therefore cannot
+          disagree. Before this, four of seven call sites passed no task and read the literal
+          <code>Level</code>.
+        </p>
       </section>
 
       <!-- ===================== LAB A ===================== -->
@@ -1171,8 +1214,9 @@
           <span class="lab-tag">Lab A</span>
           <h3>The status walk, with loyalty</h3>
           <p class="sub">
-            The shipped rules are <code>QuestProgressService.GetStatus</code> and
-            <code>QuestRequirementBadge.For</code>, pinned by
+            The shipped rules are <code>QuestProgressService.GetStatus</code>, which reports the
+            gate it stopped at, and <code>QuestRequirementBadge.For</code>, which spells it.
+            They are pinned by
             <code>QuestStatusLoyaltyTests</code> and <code>QuestRequirementBadgeTests</code>.
             The four quests are real rows of the published 1.1.0 database. The drawer below is
             the drawer, with the same seven traders in the same order. Every trader starts at 1,
@@ -1499,6 +1543,11 @@
             database fails when a requirement asks for more than four. That is on the publish
             PR, and long before a player sees it.
           </p>
+          <p>
+            The quest loader keeps such a row rather than dropping it. Dropping it would open a
+            quest the game still gates. It logs a warning instead, saying the app's ceiling has
+            fallen behind the game's.
+          </p>
         </div>
       </section>
 
@@ -1516,11 +1565,13 @@
 
         <p>
           A profile switch reloads the settings and announces them.
-          <code>RaiseProfileSettingsChanged</code> sends one event for each value, and the
-          drawer repaints one control on each event. That works because each of the eight events
-          is sent on every publish, whether the profile has a row for that value or not. A
-          profile with no stored level still sends <code>PlayerLevelChanged</code>, carrying the
-          default.
+          <code>RaiseProfileSettingsChanged</code> sends one event for each of the seven
+          single-key values the drawer renders, and the drawer repaints one control on each
+          event. That works because each of those seven is sent on every publish, whether the
+          profile has a row for that value or not. A profile with no stored level still sends
+          <code>PlayerLevelChanged</code>, carrying the default. There is an eighth single-key
+          value, <code>ShowLevelLockedQuests</code>. It announces nothing and is wired to no
+          control, so the drawer never had to hear about it.
         </p>
         <p>
           Loyalty cannot do that. It is a family of rows, so the fan-out sends one event for each
@@ -1584,6 +1635,14 @@
         }</pre>
         </div>
 
+        <p>
+          The drawer hears both signals, and repaints once for the pair. A seven trader profile
+          switch sends seven <code>TraderLoyaltyChanged</code> events, and then
+          <code>ProfileSettingsReloaded</code>. Every one of the eight repaints the whole drawer
+          from the same snapshot. So both handlers book one shared
+          <code>RefreshCoalescer</code> instead, the same collapse the quest list uses. The burst
+          arrives in full, and the drawer is painted from the snapshot once.
+        </p>
         <p>
           The quest list needs none of this. It subscribes to the per trader event for the single
           edit, and <code>PlayerLevelChanged</code> already books its collected refresh on every
@@ -1752,7 +1811,7 @@
           Sources. The product decision is
           <code>docs/decisions/feature-quest-loyalty-gating.md</code>. The technical design is
           <code>docs/decisions/feature-quest-loyalty-gating.spec.md</code>, which this PR extends
-          with two appended decisions. The phase belongs to
+          with the decisions taken while it was built. The phase belongs to
           <code>docs/decisions/feature-eft-1-1-roadmap.md</code>. The data this change reads was
           published by the refresh in <code>docs/2026-08-quest-data-1-1-refresh-code-guide.html</code>.
         </p>
@@ -1760,7 +1819,8 @@
           The labs obey the same decision logic as the code, and they use the rows and the numbers
           of the published 1.1.0 database. But they are examples, and they are not the released
           code. The released behaviour is pinned by <code>QuestStatusLoyaltyTests</code>,
-          <code>QuestRequirementBadgeTests</code>, <code>TraderLoyaltyLevelsTests</code>,
+          <code>QuestRequirementBadgeTests</code>, <code>QuestRequirementLinesTests</code>,
+          <code>TraderLoyaltyLevelsTests</code>, <code>TraderLoyaltyPanelTests</code>,
           <code>QuestDbServiceLoyaltyReadTests</code>, <code>ProfileBoundsCoverDataTests</code>,
           <code>SettingsSetterContractTests</code>, <code>ProfileResetStoreTests</code>,
           <code>PublishedDataContentTests</code> and, end to end,
@@ -1876,8 +1936,10 @@
       return true;
     }
 
-    /* QuestProgressService.FirstUnmetTraderLoyalty: the giver's row first, else
-       the earliest unmet row by display rank, then by name. */
+    /* QuestProgressService.FirstUnmetTraderLoyalty is only "the first unmet row",
+       because the rows already arrive in that order: QuestDbService.SortIntoBadgeOrder
+       sorts each quest's rows once at load, the giver's first, then by display rank,
+       then by name. This lab has no loader, so it applies the same order here. */
     function firstUnmet(quest, levels) {
       var best = null;
       var bestRank = Number.MAX_SAFE_INTEGER;
@@ -1897,8 +1959,8 @@
     }
 
     /* ============================================================
-       LAB A. GetStatus and QuestRequirementBadge.For, over four
-       real quests of the published 1.1.0 database.
+       LAB A. GetStatus, the gate it reports, and QuestRequirementBadge.For
+       spelling that gate, over four real quests of the published 1.1.0 database.
        ============================================================ */
 
     var LAB_A_QUESTS = {
@@ -1970,7 +2032,8 @@
     var labAUnmet = document.getElementById("labAUnmet");
     var labAVerdict = document.getElementById("labAVerdict");
 
-    /* The drawer, built the way MainWindow.BuildLoyaltyGroup builds it. */
+    /* The drawer, built the way TraderLoyaltyPanel.Rebuild builds it: the roster is
+       data, so every control is made in code rather than declared in XAML. */
     TRADERS.forEach(function (t) {
       var row = el("div", "trader");
       row.setAttribute("data-trader", t.id);
@@ -2056,7 +2119,10 @@
         "Level " + quest.minLevel + " (Current: " + labA.level + ")";
       labAReqLevel.setAttribute("data-met", labA.level >= quest.minLevel ? "yes" : "no");
 
-      /* The detail pane orders the lines the way the badge picks its trader. */
+      /* The detail pane reads the same order, because it reads the same rows. It is
+         one RequirementsList over RequirementLineViewModel.BuildFor, which builds the
+         level line, the karma line and the loyalty lines together. Sorted here for the
+         reason given above firstUnmet. */
       var lines = quest.loyalty.slice().sort(function (a, b) {
         var ga = isGivenBy(quest, a) ? 0 : 1;
         var gb = isGivenBy(quest, b) ? 0 : 1;
