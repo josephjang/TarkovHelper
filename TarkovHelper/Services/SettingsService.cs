@@ -302,9 +302,9 @@ public class SettingsService
     /// <summary>
     /// The in-memory consequence of someone else writing <paramref name="profileId"/>'s rows: when
     /// that profile is the one whose values are cached, the cached level, scav rep, faction,
-    /// prestige, DSP count and editions no longer describe the store, so reload them and re-raise
-    /// the changed events exactly as a profile switch would. A write to any other profile touches
-    /// no cached value here, so nothing needs reloading.
+    /// prestige, DSP count, editions and trader loyalty levels no longer describe the store, so
+    /// reload them and re-raise the changed events exactly as a profile switch would. A write to
+    /// any other profile touches no cached value here, so nothing needs reloading.
     /// <para>
     /// Two writers ask this question, and both get the same answer. <see cref="ProfileResetService"/>
     /// asks through <see cref="HandleProfileReset"/>, strictly AFTER the reset transaction commits,
@@ -542,10 +542,13 @@ public class SettingsService
     /// reset contract pins (<c>ProfileResetHooksTests</c>), for as long as that snapshot is the
     /// one the cache holds.
     /// <para>
-    /// All seven fire on every published reload, whether or not the value differs. Raising only
-    /// actual changes would make pages refresh less often, which is a UI-timing change and not
-    /// this one's business. The snapshot is a parameter rather than re-read per event so a
-    /// publish landing mid-fan-out cannot make one event carry a value from another profile.
+    /// The fan-out is three parts, in this order: the seven single-value events, then one
+    /// <see cref="TraderLoyaltyChanged"/> per STORED loyalty entry (none at all for a snapshot
+    /// that has none), then <see cref="ProfileSettingsReloaded"/> last. All seven of the first
+    /// part fire on every published reload, whether or not the value differs. Raising only actual
+    /// changes would make pages refresh less often, which is a UI-timing change and not this
+    /// one's business. The snapshot is a parameter rather than re-read per event so a publish
+    /// landing mid-fan-out cannot make one event carry a value from another profile.
     /// </para>
     /// <para>
     /// A fan-out that has been superseded stops instead of finishing. It cannot be raised under
@@ -563,10 +566,14 @@ public class SettingsService
     /// Re-asked before EVERY event, not once up front, because each handler can block this thread
     /// for as long as the dispatcher takes to run it: a switch that lands while event k is being
     /// delivered still stops events k+1 onwards. A partial fan-out is safe by construction, since
-    /// whatever superseded this snapshot publishes and announces all seven of its own values. The
-    /// residual window (a publish between the last check and the handler actually running) is not
-    /// closable from this side. Closing it for good means the pages reading the snapshot rather
-    /// than trusting whichever event reached them last.
+    /// whatever superseded this snapshot runs a whole fan-out of its own: its seven values, its
+    /// own loyalty entries, and its <see cref="ProfileSettingsReloaded"/> last. That last signal
+    /// is what makes the guarantee cover loyalty as well, because a superseding snapshot with no
+    /// stored entries announces no loyalty event at all and a reader that repaints from the
+    /// snapshot would otherwise have nothing to repaint on. The residual window (a publish between
+    /// the last check and the handler actually running) is not closable from this side. Closing it
+    /// for good means the pages reading the snapshot rather than trusting whichever event reached
+    /// them last.
     /// </para>
     /// </summary>
     private void RaiseProfileSettingsChanged(ProfileSettingsSnapshot snapshot)
@@ -983,12 +990,17 @@ public class SettingsService
     /// Ignored when empty: there is no trader to key a row under, and a row keyed on the bare
     /// prefix would be read back as an entry with no id (the read drops it) forever after.
     /// </param>
-    /// <param name="level">Clamped to [<see cref="MinTraderLoyaltyLevel"/>, <see cref="MaxTraderLoyaltyLevel"/>].</param>
+    /// <param name="level">
+    /// Clamped to [<see cref="MinTraderLoyaltyLevel"/>, <see cref="MaxTraderLoyaltyLevel"/>] by
+    /// <see cref="TraderLoyaltyLevels.Clamp"/>, which is where that range is enforced for every
+    /// door into the value. Called here rather than left to <c>With</c> alone because the row
+    /// written and the event raised below carry the number too, and they must carry the same one.
+    /// </param>
     public void SetTraderLoyalty(string traderId, int level)
     {
         if (string.IsNullOrEmpty(traderId)) return;
 
-        var clampedValue = Math.Clamp(level, MinTraderLoyaltyLevel, MaxTraderLoyaltyLevel);
+        var clampedValue = TraderLoyaltyLevels.Clamp(level);
         ApplyProfileEdit(
             s =>
             {

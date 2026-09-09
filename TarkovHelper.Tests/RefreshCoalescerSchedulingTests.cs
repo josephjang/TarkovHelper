@@ -242,6 +242,7 @@ public sealed class RefreshCoalescerSchedulingTests
         "private void UpdateDspDecodeUI()",
         "private void UpdateEditionUI()",
         "private void UpdatePrestigeLevelUI()",
+        "private void UpdateLoyaltyUI()",
     };
 
     [Theory]
@@ -306,6 +307,12 @@ public sealed class RefreshCoalescerSchedulingTests
     /// one, outside the page's coalescer: seven full passes over every quest per profile switch,
     /// reset and self-heal, off-tab included. The window updates its own controls; the list
     /// refreshes itself, once.
+    /// <para>
+    /// The loyalty pair is held to the same rule. TraderLoyaltyChanged is announced once per
+    /// stored entry, and ProfileSettingsReloaded once per publish on top of that, so a
+    /// RefreshDisplay in either would put the whole burst back outside the coalescer that the
+    /// rest of the drawer was moved into.
+    /// </para>
     /// </summary>
     [Theory]
     [InlineData("private void OnPlayerLevelChanged(object? sender, int newLevel)")]
@@ -313,6 +320,8 @@ public sealed class RefreshCoalescerSchedulingTests
     [InlineData("private void OnDspDecodeCountChanged(object? sender, int newCount)")]
     [InlineData("private void OnEditionChanged(object? sender, bool value)")]
     [InlineData("private void OnPrestigeLevelChanged(object? sender, int newLevel)")]
+    [InlineData("private void OnTraderLoyaltyChanged(object? sender, TraderLoyaltyChange change)")]
+    [InlineData("private void OnProfileSettingsReloaded(object? sender, EventArgs e)")]
     public void MainWindow_settings_handlers_do_not_push_a_quest_list_refresh(string signature)
     {
         var body = MemberBody(MainWindowSource, signature);

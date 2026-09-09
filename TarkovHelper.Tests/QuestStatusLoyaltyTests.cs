@@ -1,6 +1,7 @@
 using TarkovHelper.Models;
 using TarkovHelper.Services;
 using TarkovHelper.Services.Settings;
+using static TarkovHelper.Tests.LoyaltyFixtures;
 
 namespace TarkovHelper.Tests;
 
@@ -17,68 +18,23 @@ namespace TarkovHelper.Tests;
 /// </summary>
 public sealed class QuestStatusLoyaltyTests
 {
-    private const string Prapor = "54cb50c76803fa8b248b4571";
-    private const string Jaeger = "5c0647fdd443bc2504c2d371";
-    private const string Skier = "58330581ace78e27b8b10cee";
-    private const string Therapist = "54cb57776803fa99248b456e";
+    private static QuestStatus StatusOf(
+        TarkovTask task, ProfileSettingsSnapshot settings, params TarkovTask[] alsoLoaded)
+        => WalkOf(task, settings, alsoLoaded).Status;
 
     /// <summary>
-    /// A quest given by <paramref name="giver"/> with the loyalty rows it names. No other gate,
-    /// so a status other than Active can only be the loyalty check.
+    /// The status AND the gate the walk stopped at. Several gates share one status, so the status
+    /// alone cannot say which requirement was decisive - and which one that is is what the row's
+    /// badge shows. Asserted here, at the engine, because the engine is where the order lives.
     /// </summary>
-    private static TarkovTask Quest(
-        string id, string giver, params (string TraderId, string TraderName, int Level)[] loyalty)
-    {
-        var task = new TarkovTask
-        {
-            Ids = new List<string> { id },
-            Name = id,
-            NormalizedName = id,
-            Trader = giver,
-        };
-
-        if (loyalty.Length > 0)
-        {
-            task.TraderLoyaltyRequirements = loyalty
-                .Select(l => new QuestTraderRequirement
-                {
-                    TraderId = l.TraderId,
-                    TraderName = l.TraderName,
-                    Level = l.Level,
-                })
-                .ToList();
-        }
-
-        return task;
-    }
-
-    /// <summary>Settings holding nothing but the entered loyalty levels (and a player level).</summary>
-    private static ProfileSettingsSnapshot Settings(
-        int playerLevel = 15, params (string TraderId, int Level)[] loyalty)
-    {
-        var levels = TraderLoyaltyLevels.Empty;
-        foreach (var (traderId, level) in loyalty) levels = levels.With(traderId, level);
-
-        return new ProfileSettingsSnapshot(
-            "profile", 0,
-            PlayerLevel: playerLevel,
-            ScavRep: null,
-            ShowLevelLockedQuests: null,
-            DspDecodeCount: null,
-            PlayerFaction: null,
-            HasEodEdition: null,
-            HasUnheardEdition: null,
-            PrestigeLevel: null,
-            TraderLoyalty: levels);
-    }
-
-    private static QuestStatus StatusOf(
+    private static (QuestStatus Status, QuestGate Gate) WalkOf(
         TarkovTask task, ProfileSettingsSnapshot settings, params TarkovTask[] alsoLoaded)
     {
         var service = ProgressServiceHarness.Create(
             new ProgressStoreFake(), AppProfile.PvpSeason,
             alsoLoaded.Length == 0 ? new[] { task } : alsoLoaded);
-        return service.GetStatus(task, service.Snapshot, settings);
+        var status = service.GetStatus(task, service.Snapshot, settings, out var gate);
+        return (status, gate);
     }
 
     [Fact]
@@ -199,13 +155,21 @@ public sealed class QuestStatusLoyaltyTests
         var task = Quest("q", "Prapor", (Prapor, "Prapor", 3));
         task.RequiredLevel = 40;
 
-        Assert.Equal(QuestStatus.LevelLocked, StatusOf(task, Settings(playerLevel: 15)));
+        // Short of both: the status is LevelLocked and the gate reported is the LEVEL, which is
+        // the requirement the badge then names. The status alone cannot say that.
         Assert.Equal(
-            QuestStatus.LevelLocked,
-            StatusOf(task, Settings(playerLevel: 15, loyalty: (Prapor, 4))));
+            (QuestStatus.LevelLocked, QuestGate.PlayerLevel),
+            WalkOf(task, Settings(playerLevel: 15)));
         Assert.Equal(
-            QuestStatus.Active,
-            StatusOf(task, Settings(playerLevel: 40, loyalty: (Prapor, 3))));
+            (QuestStatus.LevelLocked, QuestGate.PlayerLevel),
+            WalkOf(task, Settings(playerLevel: 15, loyalty: (Prapor, 4))));
+        // Level cleared, loyalty short: same status, and now loyalty is the gate.
+        Assert.Equal(
+            (QuestStatus.LevelLocked, QuestGate.TraderLoyalty),
+            WalkOf(task, Settings(playerLevel: 40)));
+        Assert.Equal(
+            (QuestStatus.Active, QuestGate.None),
+            WalkOf(task, Settings(playerLevel: 40, loyalty: (Prapor, 3))));
     }
 
     [Fact]
@@ -216,7 +180,8 @@ public sealed class QuestStatusLoyaltyTests
         var task = Quest("q", "Prapor", (Prapor, "Prapor", 4));
         task.RequiredEdition = "eod";
 
-        Assert.Equal(QuestStatus.Unavailable, StatusOf(task, Settings()));
+        Assert.Equal(
+            (QuestStatus.Unavailable, QuestGate.RequiredEdition), WalkOf(task, Settings()));
     }
 
     #region The row the badge names

@@ -8,10 +8,17 @@ using TarkovHelper.Services.Logging;
 namespace TarkovHelper.Services;
 
 /// <summary>
-/// One trader the loaded quest data gates at least one quest on, as the profile drawer needs it:
-/// the id an entered level is stored under, the English nickname to fall back to, and the
-/// normalized name used both for the display order and for the automation ids of the trader's
-/// input group.
+/// One trader the loaded quest data gates at least one quest on: the id an entered level is stored
+/// under, the English nickname to fall back to, and the normalized name used both for the display
+/// order and for the automation ids of the trader's input group. Those three values are what the
+/// profile drawer builds a trader's row from.
+/// <para>
+/// No level is carried here. The range a player can enter is an app constant
+/// (<c>SettingsService.MinTraderLoyaltyLevel</c> to <c>SettingsService.MaxTraderLoyaltyLevel</c>,
+/// which <c>SettingsService.SetTraderLoyalty</c> clamps to), and a published row above that
+/// ceiling is caught on the publish PR by <c>PublishedDataContentTests</c> and warned about at
+/// load by <see cref="QuestDbService.AttachQuestTraderRequirementsAsync"/>.
+/// </para>
 /// </summary>
 public sealed record LoyaltyTrader(string TraderId, string TraderName, string NormalizedName);
 
@@ -41,8 +48,9 @@ public sealed class QuestDbService
     /// The profile drawer builds one loyalty input per entry, so this is what decides which
     /// traders the player can enter a level for. Derived from the requirement rows rather than
     /// from the Traders table or a list in the app, which is what lets a data-only publish that
-    /// starts gating on a new trader grow the drawer with no app release, and what stops the
-    /// gate ever locking a quest behind a trader the drawer does not offer.
+    /// starts gating on a new trader add that trader's row to the drawer with no app release, and
+    /// what stops the gate ever locking a quest behind a trader the drawer does not offer. Only
+    /// the roster is data-driven: the levels each row offers are the app's own constants.
     /// </para>
     /// <para>
     /// Empty when the database has no QuestTraderRequirements table, which is a legal input: a
@@ -140,8 +148,22 @@ public sealed class QuestDbService
             // 5. 대체 퀘스트 로드
             await LoadOptionalQuestsAsync(connection, questLookup);
 
+            // 5a. 트레이더 데이터 로드 (충성도 요구사항이 참조함)
+            // The Traders table before the requirement rows, because each row is stamped with
+            // the trader's published NormalizedName as it is read, and the drawer and the
+            // detail pane take their localized trader names from the same rows. Loaded here
+            // rather than left to whoever needs it first: nothing else loads it on a normal
+            // launch. The only other caller is InProgressQuestInputDialog, and
+            // DatabaseUpdateService raises DatabaseUpdated only after an actual download, so
+            // without this every trader name would read as the English nickname for the whole
+            // session and then change under the player the first time an update landed.
+            await TraderDbService.Instance.LoadTradersAsync();
+
             // 5b. 트레이더 충성도 요구사항 로드
-            await LoadQuestTraderRequirementsAsync(connection, questLookup);
+            await LoadQuestTraderRequirementsAsync(
+                connection,
+                questLookup,
+                id => TraderDbService.Instance.GetTraderById(id)?.NormalizedName);
 
             // 6. LeadsTo 역참조 구축
             BuildLeadsToReferences(quests);
@@ -165,8 +187,7 @@ public sealed class QuestDbService
 
             // The roster is derived from the rows just loaded, inside the same swap, so a reader
             // can never see the new quests beside the previous load's trader list.
-            var newLoyaltyTraders = BuildLoyaltyTraders(
-                quests, id => TraderDbService.Instance.GetTraderById(id)?.NormalizedName);
+            var newLoyaltyTraders = BuildLoyaltyTraders(quests);
 
             // Atomic swap - 모든 데이터가 준비된 후 한 번에 교체
             _allQuests = quests;
@@ -186,6 +207,10 @@ public sealed class QuestDbService
 
     // Static because it reads nothing off the instance, which is what lets the loyalty loader
     // below be static too and therefore drivable against an in-memory database.
+    //
+    // This body is copied into six DB services (Quest, Trader, Hideout, Item, MapMarker,
+    // QuestObjective), and ColumnExistsAsync below into three of them. Collapsing them into one
+    // shared helper is tracked by https://github.com/josephjang/TarkovHelper/issues/56.
     private static async Task<bool> TableExistsAsync(SqliteConnection connection, string tableName)
     {
         var sql = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=@name";
@@ -609,34 +634,52 @@ public sealed class QuestDbService
     /// </para>
     /// </summary>
     /// <param name="questLookup">Loaded quests by their primary id, as the other loaders take.</param>
+    /// <param name="normalizedNameOf">
+    /// A trader's NormalizedName from the Traders table, or null when it has no row there.
+    /// </param>
     /// <returns>False when the database has no such table, which is not an error.</returns>
     internal static async Task<bool> LoadQuestTraderRequirementsAsync(
-        SqliteConnection connection, Dictionary<string, TarkovTask> questLookup)
+        SqliteConnection connection,
+        Dictionary<string, TarkovTask> questLookup,
+        Func<string, string?> normalizedNameOf)
     {
         if (!await TableExistsAsync(connection, "QuestTraderRequirements"))
             return false;
 
-        await AttachQuestTraderRequirementsAsync(connection, questLookup);
+        await AttachQuestTraderRequirementsAsync(connection, questLookup, normalizedNameOf);
         return true;
     }
 
     /// <summary>
-    /// Reads QuestTraderRequirements and hangs each row on its quest, the table having been
-    /// found by the caller.
+    /// Reads QuestTraderRequirements, hangs each row on its quest and leaves each quest's list in
+    /// badge order, the table having been found by the caller.
     /// </summary>
     /// <param name="questLookup">Loaded quests by their primary id, as the other loaders take.</param>
+    /// <param name="normalizedNameOf">
+    /// A trader's NormalizedName from the Traders table, or null when it has no row there. Taken
+    /// as a parameter rather than read off <see cref="TraderDbService"/> here so this stays a
+    /// pure function of its inputs: the ordering is what the tests are about, and a singleton in
+    /// the middle of it would make the answer depend on whether that service had loaded yet.
+    /// </param>
     internal static async Task AttachQuestTraderRequirementsAsync(
-        SqliteConnection connection, Dictionary<string, TarkovTask> questLookup)
+        SqliteConnection connection,
+        Dictionary<string, TarkovTask> questLookup,
+        Func<string, string?> normalizedNameOf)
     {
-        // Ordered so a quest's requirements read in a stable order whatever the table's physical
-        // order is; the badge and the detail pane re-sort by display rank on top of this.
+        // A deterministic read order, so two loads of the same table attach the same rows in the
+        // same sequence whatever its physical order is. Deliberately NOT the badge order: that
+        // rule is applied once below, by SortIntoBadgeOrder, and writing it here as well is how
+        // the two would drift apart.
         var sql = @"
             SELECT QuestId, TraderId, TraderName, RequiredLevel
             FROM QuestTraderRequirements
-            ORDER BY QuestId, TraderName";
+            ORDER BY QuestId, TraderId, RequiredLevel";
 
         await using var cmd = new SqliteCommand(sql, connection);
         await using var reader = await cmd.ExecuteReaderAsync();
+
+        // The quests that got at least one row, so only they are sorted afterwards.
+        var gated = new List<TarkovTask>();
 
         while (await reader.ReadAsync())
         {
@@ -658,7 +701,12 @@ public sealed class QuestDbService
             // could never be matched to an entered level, so keeping it would lock the quest
             // permanently with nothing the player could do about it. A level below 1 is the same
             // hazard from the other side, since every trader starts at 1.
-            if (string.IsNullOrEmpty(traderId) || string.IsNullOrEmpty(traderName) || level < 1)
+            //
+            // A blank TraderName is NOT in this guard, deliberately. The column is TEXT NOT NULL
+            // but permits '', the gate compares TraderId alone, and dropping the row would fail
+            // OPEN: a publish with an empty nickname would silently un-gate the quest and hide
+            // the trader from the drawer. It is a display value, so it falls back instead.
+            if (string.IsNullOrWhiteSpace(traderId) || level < 1)
             {
                 _log.Warning(
                     $"Trader requirement on quest '{questId}' is unusable " +
@@ -666,31 +714,103 @@ public sealed class QuestDbService
                 continue;
             }
 
-            quest.TraderLoyaltyRequirements ??= new List<QuestTraderRequirement>();
+            if (string.IsNullOrEmpty(traderName))
+            {
+                _log.Warning(
+                    $"Trader requirement on quest '{questId}' names trader '{traderId}' with no " +
+                    "nickname; kept, and its name is resolved from the Traders table");
+            }
+
+            // Kept, like the blank nickname above and unlike the two dropped cases: dropping it
+            // would fail OPEN, un-gating a quest the game still gates. But it is worth a warning
+            // of its own, because it is the one kept row the player may be unable to clear. Every
+            // entered level is clamped to SettingsService.MaxTraderLoyaltyLevel on the way in
+            // (TraderLoyaltyLevels.Clamp), so a published requirement above that ceiling can be
+            // met by no entry the profile is able to hold and the quest reads as loyalty-locked
+            // for good. A publish producing this line is the signal that the app's ceiling has
+            // fallen behind the game's.
+            if (level > SettingsService.MaxTraderLoyaltyLevel)
+            {
+                _log.Warning(
+                    $"Trader requirement on quest '{questId}' asks trader '{traderId}' " +
+                    $"({traderName}) for level {level}, above the highest level a profile can " +
+                    $"hold ({SettingsService.MaxTraderLoyaltyLevel}); kept, so the quest stays " +
+                    "gated");
+            }
+
+            if (quest.TraderLoyaltyRequirements == null)
+            {
+                quest.TraderLoyaltyRequirements = new List<QuestTraderRequirement>();
+                gated.Add(quest);
+            }
+
             quest.TraderLoyaltyRequirements.Add(new QuestTraderRequirement
             {
                 TraderId = traderId,
                 TraderName = traderName,
+                NormalizedName = NormalizedNameFor(traderId, traderName, normalizedNameOf),
                 Level = level
             });
         }
+
+        foreach (var quest in gated) SortIntoBadgeOrder(quest);
+    }
+
+    /// <summary>
+    /// The normalized name to stamp on a requirement row: the Traders table's own when it has a
+    /// row, because that is the name the display order is written in; the nickname lower-cased
+    /// for a trader the table does not carry; and the id when the row carries no nickname either,
+    /// so the value is never blank (blank ranks last AND sorts first among the unranked, and it
+    /// would make the drawer's automation ids collide).
+    /// </summary>
+    private static string NormalizedNameFor(
+        string traderId, string traderName, Func<string, string?> normalizedNameOf)
+    {
+        var published = normalizedNameOf(traderId);
+        if (!string.IsNullOrEmpty(published)) return published!;
+        return string.IsNullOrEmpty(traderName) ? traderId : traderName.ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Sorts one quest's loyalty requirements into the order the badge and the detail pane read
+    /// them in: the quest's own trader first, then the game's trader order
+    /// (<see cref="TraderDbService.DisplayRank"/>), then by nickname so the unranked newcomers
+    /// are alphabetical among themselves rather than in whatever order the rows arrived.
+    /// <para>
+    /// The rule lives here, once, applied at load. That is what lets
+    /// <see cref="QuestProgressService.FirstUnmetTraderLoyalty"/> be "the first unmet entry" and
+    /// the detail pane a plain projection: three copies of one ordering rule is three places for
+    /// the badge and the list under it to disagree about which trader to name.
+    /// </para>
+    /// </summary>
+    internal static void SortIntoBadgeOrder(TarkovTask quest)
+    {
+        if (quest.TraderLoyaltyRequirements is not { Count: > 1 }) return;
+
+        quest.TraderLoyaltyRequirements = quest.TraderLoyaltyRequirements
+            .OrderByDescending(r => QuestProgressService.IsGivenBy(quest, r))
+            .ThenBy(r => TraderDbService.DisplayRank(r.NormalizedName))
+            .ThenBy(r => r.TraderName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     /// <summary>
     /// The distinct traders named by the loaded requirement rows, in the game's display order
     /// (<see cref="TraderDbService.DisplayRank"/>), with the unranked ones last and alphabetical
     /// among themselves. Distinct by trader id, since that is what the entered level is keyed on.
+    /// <para>
+    /// A pure function of the rows: the normalized name each entry carries was stamped on the row
+    /// at load, so the roster does not depend on whether <see cref="TraderDbService"/> has loaded
+    /// by the time it is built.
+    /// </para>
     /// </summary>
-    /// <param name="normalizedNameOf">
-    /// A trader's NormalizedName from the Traders table, or null when it has no row there. Taken
-    /// as a parameter rather than read off <see cref="TraderDbService"/> here so this stays a
-    /// pure function of the rows: it is the ordering these tests are about, and a singleton in
-    /// the middle of it would make the answer depend on whether that service had loaded yet.
-    /// </param>
-    internal static IReadOnlyList<LoyaltyTrader> BuildLoyaltyTraders(
-        List<TarkovTask> quests, Func<string, string?> normalizedNameOf)
+    internal static IReadOnlyList<LoyaltyTrader> BuildLoyaltyTraders(List<TarkovTask> quests)
     {
-        var byId = new Dictionary<string, LoyaltyTrader>(StringComparer.OrdinalIgnoreCase);
+        // Ordinal, to agree with TraderLoyaltyLevels: the entered levels are keyed by trader id
+        // in a ProfileSettings table with no COLLATE NOCASE, so two published ids differing only
+        // in case are two entries there. Folding them together here would build one drawer button
+        // whose level the gate then failed to read back for the other id.
+        var byId = new Dictionary<string, LoyaltyTrader>(StringComparer.Ordinal);
 
         foreach (var quest in quests)
         {
@@ -698,24 +818,32 @@ public sealed class QuestDbService
 
             foreach (var requirement in quest.TraderLoyaltyRequirements)
             {
+                // Already rostered. A further row naming the same trader adds nothing the roster
+                // carries: the level it asks for stays on the requirement, which is where the
+                // gate reads it, and the drawer's own range is an app constant.
                 if (byId.ContainsKey(requirement.TraderId)) continue;
 
-                // The normalized name comes from the Traders table when it has a row, because
-                // that is the name the display order is written in; the row's own nickname,
-                // lower-cased, is the fallback for a trader the table does not carry.
-                var published = normalizedNameOf(requirement.TraderId);
-                var normalizedName = string.IsNullOrEmpty(published)
-                    ? requirement.TraderName.ToLowerInvariant()
-                    : published!;
+                // The nickname is a display value the published column permits to be blank, and a
+                // blank drawer label names nothing; the id at least identifies the trader, and
+                // the localized name resolves off the id anyway when the Traders table has a row.
+                var displayName = string.IsNullOrEmpty(requirement.TraderName)
+                    ? requirement.TraderId
+                    : requirement.TraderName;
 
-                byId[requirement.TraderId] =
-                    new LoyaltyTrader(requirement.TraderId, requirement.TraderName, normalizedName);
+                byId[requirement.TraderId] = new LoyaltyTrader(
+                    requirement.TraderId,
+                    displayName,
+                    requirement.NormalizedName);
             }
         }
 
         return byId.Values
             .OrderBy(t => TraderDbService.DisplayRank(t.NormalizedName))
             .ThenBy(t => t.TraderName, StringComparer.OrdinalIgnoreCase)
+            // The id last, so two traders the first two clauses cannot separate (the same
+            // nickname under ids differing only in case) still come out in the same order on
+            // every load rather than in whatever order the dictionary enumerated them.
+            .ThenBy(t => t.TraderId, StringComparer.Ordinal)
             .ToList();
     }
 

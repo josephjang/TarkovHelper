@@ -88,7 +88,8 @@ internal static class SettingsServiceTestSupport
     /// <see cref="Subscribe"/> without a place in this order fails them all at once.
     /// <para>
     /// Not the whole fan-out: trader loyalty announces once per STORED entry rather than always
-    /// once, so what a given publish raises depends on the snapshot it published. Use
+    /// once, so what a given publish raises depends on the snapshot it published, and the
+    /// <c>ProfileSettingsReloaded</c> signal closes the fan-out after it. Use
     /// <see cref="EventsFor"/> and hand it that snapshot.
     /// </para>
     /// </summary>
@@ -100,16 +101,20 @@ internal static class SettingsServiceTestSupport
 
     /// <summary>
     /// Every event name a fan-out over <paramref name="published"/> raises, in order: the seven
-    /// above, then one "TraderLoyalty" per stored loyalty entry.
+    /// above, then one "TraderLoyalty" per stored loyalty entry, then the "ProfileSettingsReloaded"
+    /// signal that closes every fan-out whatever the snapshot holds.
     /// <para>
     /// Derived from the snapshot rather than tabulated, so a case that publishes DEFAULTS (no
     /// loyalty rows, hence no loyalty event) and a case that publishes the seeded snapshot (one
-    /// entry, hence one) both stay exact without either of them restating the rule.
+    /// entry, hence one) both stay exact without either of them restating the rule. The closing
+    /// signal is unconditional, which is exactly why it belongs here rather than in each case:
+    /// a case that omitted it would be asserting a fan-out the service never raises.
     /// </para>
     /// </summary>
     internal static string[] EventsFor(ProfileSettingsSnapshot published)
         => AllChangedEvents
             .Concat(Enumerable.Repeat("TraderLoyalty", published.TraderLoyalty.Count))
+            .Append("ProfileSettingsReloaded")
             .ToArray();
 
     /// <summary>
@@ -127,6 +132,10 @@ internal static class SettingsServiceTestSupport
         service.HasUnheardEditionChanged += (_, v) => record("HasUnheardEdition", v);
         service.PrestigeLevelChanged += (_, v) => record("PrestigeLevel", v);
         service.TraderLoyaltyChanged += (_, v) => record("TraderLoyalty", v);
+        // The reload signal closes every published fan-out. Recorded here, alongside the value
+        // events, so no suite can assert an order that leaves it out: it carries no value of its
+        // own, so the recorded value is null.
+        service.ProfileSettingsReloaded += (_, _) => record("ProfileSettingsReloaded", null);
     }
 
     /// <summary>

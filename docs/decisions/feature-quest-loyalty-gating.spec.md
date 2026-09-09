@@ -190,8 +190,11 @@ on 2026-09-07.
 ### 1. Reading the requirement rows (`QuestDbService`, `TarkovTask`)
 
 - New model `QuestTraderRequirement` in `Models/TarkovTask.cs`:
-  `TraderId`, `TraderName`, `Level` (JSON names `traderId`, `traderName`,
-  `level`, matching `HideoutTraderRequirement`). `TarkovTask` gains
+  `TraderId`, `TraderName`, `NormalizedName`, `Level` (JSON names `traderId`,
+  `traderName`, `normalizedName`, `level`, matching
+  `HideoutTraderRequirement`). `NormalizedName` is stamped on the row by the
+  loader from the `Traders` table rather than derived by a reader, and it is
+  display order only; the gate compares `TraderId`. `TarkovTask` gains
   `List<QuestTraderRequirement>? TraderLoyaltyRequirements` (`[JsonPropertyName
   ("traderLoyaltyRequirements")]`) and `bool HasTraderLoyaltyRequirements =>
   TraderLoyaltyRequirements is { Count: > 0 }`, the `HasAlternatives` pattern.
@@ -208,9 +211,11 @@ on 2026-09-07.
   and the lookup, so it is unit-testable against an in-memory database.
 - `QuestDbService` exposes the roster the drawer needs, computed inside the
   same atomic swap: `IReadOnlyList<LoyaltyTrader> LoyaltyTraders`, where
-  `LoyaltyTrader` is `(string TraderId, string TraderName)`, the distinct
-  traders named by any loaded row, in the order given by
-  `TraderDbService.DisplayRank` (section 4). Empty when the table is absent.
+  `LoyaltyTrader` is `(string TraderId, string TraderName, string
+  NormalizedName)`, the distinct traders named by any loaded row, in the order
+  given by `TraderDbService.DisplayRank` (section 4), ties broken by nickname
+  and then by id so one database always builds one order. Empty when the table
+  is absent.
 
 ### 2. Storing the entered levels (`SettingsService`, `ProfileSettingsSnapshot`)
 
@@ -262,24 +267,44 @@ on 2026-09-07.
   have): true when the task has no rows, else true only when every row's
   `settings.TraderLoyalty.LevelOf(row.TraderId) >= row.Level`. `GetStatus`
   calls it after `IsScavKarmaRequirementMet` and returns `LevelLocked` on
-  failure. Nothing else in the walk changes; the prerequisite recursion
-  carries the same snapshot and so evaluates a loyalty-locked prerequisite as
-  not done, which is right.
-- `GetStatus` also gains `FirstUnmetTraderLoyalty(task, settings)`
+  failure. The walk's order is otherwise untouched, and the prerequisite
+  recursion carries the same snapshot and so evaluates a loyalty-locked
+  prerequisite as not done, which is right.
+- `QuestProgressService` also gains `FirstUnmetTraderLoyalty(task, settings)`
   (`internal static`), returning the row the badge should name or null: the
-  giver's row if it is unmet (giver means `row.TraderName` equals
-  `task.Trader` case-insensitively), else the first unmet row in
-  `TraderDbService.DisplayRank` order. One rule, used by the row badge, the
-  detail badge and the tests.
+  first unmet entry, because the rows already arrive in badge order. That
+  order is applied once, at load, by `QuestDbService.SortIntoBadgeOrder` - the
+  giver's row first (giver means `row.TraderName` equals `task.Trader`
+  case-insensitively), then `TraderDbService.DisplayRank`, then the nickname
+  so unranked newcomers are alphabetical among themselves. One ordering rule,
+  in one place, read by the row badge, the detail badge, the Requirements
+  lines and the tests.
+- The walk reports WHICH gate stopped it, so nothing downstream has to
+  re-derive the precedence. `QuestProgressService` gains an internal
+  `QuestGate` enum (`None`, `RequiredEdition`, `ExcludedEdition`,
+  `PrestigeLevel`, `Faction`, `DecodeCount`, `Prerequisite`, `PlayerLevel`,
+  `ScavKarma`, `TraderLoyalty`) and a `GetStatus(task, snapshot, settings, out
+  QuestGate gate)` overload. The existing three-argument overload delegates to
+  it with `out _`, so its call sites are untouched. `IsEditionRequirementMet`
+  keeps its signature and its answer; the walk reads a private
+  `UnmetEditionGate` beside it, which says which of the two edition rules
+  failed.
 - New pure helper `QuestRequirementBadge` (`Pages/QuestRequirementBadge.cs`,
-  static): `string? For(TarkovTask task, ProfileSettingsSnapshot settings,
-  Func<QuestTraderRequirement, string> traderDisplayName)` returns `Lv.{n}`,
-  else `Rep {n:0.#}`, else `LL{n}` or `{name} LL{n}` (name only when the row
-  is not the giver's), else null, in that precedence, each computed with the
-  static gate checks. `QuestListPage.GetStatusText(status, task)` delegates
-  to it for `LevelLocked` and otherwise keeps its current mapping; the detail
-  badge (`TxtDetailStatus`) starts passing the task too, so it names the gate
-  the way the row does instead of the literal `Level`.
+  static): `string? For(QuestGate gate, TarkovTask task,
+  ProfileSettingsSnapshot settings, Func<QuestTraderRequirement, string>
+  traderDisplayName)` is a switch over the reported gate, answering `Lv.{n}`,
+  `Rep {n:0.#}`, `LL{n}` or `{name} LL{n}` (the name only when the row is not
+  the giver's), `EOD`/`Unheard`, `Edition`, `P.{n}`, `BEAR`/`USEC`, and null
+  for a gate that names no value the player can read off a badge.
+  `StatusText(status, gate, task, settings, traderDisplayName)` wraps it and
+  falls back to the status word when `For` answers null, so the badge never
+  goes blank.
+- `QuestListPage.GetStatusText(status, gate, task, pass)` is a thin adapter
+  over `StatusText`. The gate comes from the same `StatusIn` call as the
+  status, never from a second walk, and both it and the task are required, so
+  the detail badge (`TxtDetailStatus`), the prerequisite rows and the
+  alternative-quest rows name the gate the way the row does instead of reading
+  the literal `Level` or `N/A`.
 - Trader display names for the badge and the detail pane come from
   `LocalizationService.GetTraderDisplayName(string traderId, string
   fallback)`: `TraderDbService.GetTraderById`, then `NameKo`/`NameJa` by
@@ -288,26 +313,46 @@ on 2026-09-07.
 
 ### 4. Drawer, detail pane, strings (`MainWindow`, `QuestListPage`, `LocalizationService`)
 
-- `ProfileDrawer`'s content becomes a vertical `StackPanel` of two rows: the
-  existing horizontal group row unchanged, and below it a `WrapPanel`
-  (`LoyaltyGroup`, collapsed when the roster is empty) holding one bordered
+- `ProfileDrawer`'s content becomes a vertical `StackPanel` of two rows, both
+  of them wrapping. The existing group row (level, Scav Rep, DSP, edition,
+  prestige) turns from a horizontal `StackPanel` into a `WrapPanel` as well:
+  adding the loyalty row made it worth checking, and at the 600 pixel minimum
+  window those five groups are already wider than the drawer, so the
+  horizontal `StackPanel` centred them and clipped both ends, taking the level
+  stepper off screen. Below it a `LoyaltySection` `StackPanel` (collapsed when
+  the roster is empty, so the heading and the groups it names hide together)
+  holds a second `WrapPanel` (`LoyaltyGroup`) with one bordered
   group per roster trader in the DSP control's shape: a label
   (`AutomationId` `Loyalty_{normalizedName}`) with the localized trader name,
   then four buttons `1` to `4` (`AutomationId` `Loyalty_{normalizedName}_{n}`,
-  `Tag` = trader id and level) sharing `BtnLoyalty_Click`, which calls
+  `Tag` = trader id and level) sharing one `LevelButton_Click`, which calls
   `SetTraderLoyalty`. The group label `TxtLoyaltyLabel` reads
   `ProfileLoyaltyLabel`. `normalizedName` is `Traders.NormalizedName`
   (falling back to the lower-cased `TraderName` when the trader row is
-  missing). The panel wraps, so seven groups fit the 600 pixel minimum window
-  on two or three lines; the drawer's existing top margin logic is untouched.
-- `BuildLoyaltyGroup()` runs after the initial data load and again from the
-  same handler that reloads pages on `DatabaseUpdated`, rebuilding the
-  controls from `QuestDbService.LoyaltyTraders`. `UpdateLoyaltyUI()` repaints
-  the highlight under `SuppressSettingsEcho` from `GetTraderLoyalty` per
-  trader, sets `AutomationProperties.ItemStatus` to `Selected` on the level
-  button that holds the value and `Unselected` on the rest (the chip
-  convention, for the e2e), and runs on `TraderLoyaltyChanged` and on every
-  profile-settings fan-out like the other `Update*UI` methods.
+  missing). Both panels wrap, so the five upper groups and the seven loyalty
+  groups each fit the 600 pixel minimum window over as many lines as they
+  need; the drawer's existing top margin logic is untouched.
+- Those controls belong to `Pages/Components/TraderLoyaltyPanel.cs`, which is
+  passive the way `QuestRecommendationsPanel` is: it subscribes to nothing and
+  owns no lifecycle, and the window's echo guard reaches it as an
+  `IsInputSuppressed` callback instead of the panel reaching back into the
+  window. `Rebuild(traders)` builds one group per roster trader and collapses
+  `LoyaltySection` when the roster is empty; `Repaint()` paints the highlight
+  from `GetTraderLoyalty` per trader, sets `AutomationProperties.ItemStatus`
+  to `Selected` on the level button that holds the value and `Unselected` on
+  the rest (the chip convention, for the e2e), and composes each button's
+  tooltip. A plain class rather than a `UserControl`, because the roster is
+  data and there is no markup to declare beyond the section and its
+  `WrapPanel`; those stay in `MainWindow.xaml`, where `ProfileDrawerFitTests`
+  measures the real drawer at the minimum window.
+- `MainWindow` keeps the three subscriptions that drive the panel and calls it
+  from its own handlers. `BuildLoyaltyGroup()` runs after the initial data
+  load and again on `QuestDbService.DataRefreshed`, handing the panel
+  `QuestDbService.LoyaltyTraders`; `UpdateLoyaltyUI()` repaints under
+  `SuppressSettingsEcho`. The two handlers that repaint,
+  `TraderLoyaltyChanged` and `ProfileSettingsReloaded`, book one shared
+  `RefreshCoalescer` rather than repainting inline, so a published fan-out
+  repaints the drawer once instead of once per stored entry.
 - `TraderDbService.DisplayRank(string normalizedName)` returns the position of
   the name in the game's trader order (prapor, therapist, fence, skier,
   peacekeeper, mechanic, ragman, jaeger, ref, lightkeeper, btr-driver) and
@@ -317,12 +362,16 @@ on 2026-09-07.
 - `QuestListPage` subscribes to `TraderLoyaltyChanged` with the same
   `_settingsRefresh.Request()` the seven other events use; the comment
   counting "seven events" moves to "eight". The detail pane's Requirements
-  section gains an `ItemsControl` (`LoyaltyRequirementsList`) under the two
-  existing lines, one line per row of `task.TraderLoyaltyRequirements` in
-  badge order (giver first, then display rank), formatted with
-  `RequirementLoyaltyFormat` and coloured with `LevelLockedBrush` when unmet;
-  `RequirementsSectionWrapper` shows when any of the three kinds exists.
-  While the section is touched, its two English literals move to
+  section becomes ONE `ItemsControl` (`RequirementsList`) over a list of
+  `RequirementLineViewModel`: the named `TxtRequiredLevel` and
+  `TxtRequiredScavKarma` `TextBlock`s go, and the level line, the karma line
+  and one line per row of `task.TraderLoyaltyRequirements` are built together
+  by `RequirementLineViewModel.BuildFor` in badge order (the loyalty rows in
+  the order they were sorted into at load), each coloured with
+  `LevelLockedBrush` while unmet. Every "met" answer comes from
+  `QuestProgressService` rather than a comparison written in the page, and
+  `RequirementsSectionWrapper` shows on the line count instead of on a term
+  per kind. While the section is rebuilt, its two English literals move to
   `LocalizationService.Quest` (`RequirementLevelFormat`,
   `RequirementScavKarmaFormat`) beside the new `RequirementLoyaltyFormat`, so
   the three lines read in one language.
@@ -358,10 +407,12 @@ on 2026-09-07.
   setter, event, fan-out, prestige and Scav Rep bounds),
   `TarkovHelper/Services/QuestProgressService.cs` (gate, first-unmet rule),
   `TarkovHelper/Pages/QuestRequirementBadge.cs` (new),
-  `TarkovHelper/Pages/QuestListPage.xaml(.cs)` (badge delegation, detail
-  badge with task, loyalty lines, eighth subscription),
-  `TarkovHelper/MainWindow.xaml(.cs)` (drawer rows, loyalty group build and
-  repaint, subscription), `TarkovHelper/Services/LocalizationService.Header.cs`
+  `TarkovHelper/Pages/QuestListPage.xaml(.cs)` (badge delegation, the badge
+  and its gate in every pane, the unified Requirements list, eighth
+  subscription),
+  `TarkovHelper/MainWindow.xaml(.cs)` (drawer rows, the loyalty section's
+  markup, the three subscriptions and the coalesced repaint),
+  `TarkovHelper/Services/LocalizationService.Header.cs`
   and `LocalizationService.Quest.cs` (strings, `GetTraderDisplayName`).
 - `TarkovHelper.Tests/`: `QuestStatusLoyaltyTests` (new),
   `QuestRequirementBadgeTests` (new), `TraderLoyaltyLevelsTests` (new),
@@ -427,10 +478,15 @@ the publish PR, which is earlier than any player would notice.
 the chip vocabulary is pinned by a literal oracle and a new member would break
 chips, counts and persistence for a distinction the badge already makes.
 
-**The detail badge starts naming the gate.** `TxtDetailStatus` reads the
-literal `Level` today for every level-locked quest because the call omits the
-task. Passing the task makes the detail badge agree with the row and gives the
-e2e a single element to read; no other consumer of `GetStatusText` changes.
+**Every pane starts naming the gate.** `TxtDetailStatus` reads the literal
+`Level` today for every level-locked quest because the call omits the task, and
+so do the prerequisite rows and the alternative-quest rows. The task becomes a
+required parameter, so all four panes agree with the list row and the e2e has a
+single element to read. It reaches the `Unavailable` vocabulary as well: those
+panes said `N/A` while the task was missing and now say the gate the row already
+named (`EOD`, `Unheard`, `Edition`, `P.{n}`, `BEAR`, `USEC`). That is the point
+of the change rather than a side effect of it - a pane naming the gate is worth
+more than one saying `N/A` beside a row that names it.
 
 **The Requirements lines are localized while the section is rebuilt.** The two
 existing lines are English literals from before the localization pass; adding
@@ -465,14 +521,55 @@ Considered instead: announcing loyalty for the union of the outgoing and
 incoming snapshots' traders, which needs the previous snapshot threaded into
 the fan-out for a result the reader can read off the snapshot anyway.
 
-**Two files the "Files touched" list did not name** (appended during
+**Three files the "Files touched" list did not name** (appended during
 implementation). `TarkovHelper/Pages/QuestListViewModels.cs` gains
-`LoyaltyRequirementViewModel`, the item type of the `LoyaltyRequirementsList`
+`RequirementLineViewModel`, the item type of the `RequirementsList`
 `ItemsControl` the design does call for; it sits with the other detail-pane
-view models rather than in the page. `TarkovHelper.Tests/SettingsReloadRaceTests.cs`
+view models rather than in the page.
+`TarkovHelper/Pages/Components/TraderLoyaltyPanel.cs` holds the drawer's
+loyalty controls, for the reason recorded below.
+`TarkovHelper.Tests/SettingsReloadRaceTests.cs`
 follows the fan-out change above: its three "every event was raised"
 assertions now derive the expected list from the snapshot that was published
 instead of a fixed seven, since a snapshot with loyalty entries raises more.
+
+**The badge names the gate the walk reports** (appended during
+implementation). The design above has `QuestRequirementBadge.For` run the
+level, karma and loyalty predicates itself, in the walk's order. That is a
+second copy of the precedence with nothing tying the two orders together:
+reordering `GetStatus` would have left every test green while the badge named
+a requirement the player did not have to clear next. The copy also had to grow
+by four more branches once `Unavailable` started naming its cause, since the
+badge would have had to re-run the edition, prestige and faction checks too.
+So the walk reports its stopping gate instead (`QuestGate`, an `out` parameter
+on a new `GetStatus` overload) and the badge is a switch over it. The
+precedence is stated once, in the engine, and no badge string changes.
+Rejected alternative: a test asserting the two orders agree, which pins
+today's copies without removing tomorrow's.
+
+**The Requirements section is one list, not three mechanisms** (appended
+during implementation). The design has the loyalty lines join two named
+`TextBlock`s, each with its own inline formatting, its own visibility flag and
+its own copy of the "met" comparison. That is what made loyalty a third
+mechanism and grew the section wrapper's condition a term per kind, and the
+level line's private copy of the rule is exactly what renders a line in the
+met colour beside a locked badge once the two drift. One `ItemsControl` over
+`RequirementLineViewModel.BuildFor` replaces all three, the wrapper shows on
+the line count, and every "met" answer comes from `QuestProgressService`.
+The lines the player reads are unchanged.
+
+**The drawer's loyalty controls are a passive panel** (appended during
+implementation). Build and repaint sat in `MainWindow.xaml.cs`, already the
+largest file in the app, and they are the only drawer controls built from data
+rather than declared in markup. `Pages/Components/TraderLoyaltyPanel.cs` takes
+them, passive the way `QuestRecommendationsPanel` is: the panel subscribes to
+nothing, so the window keeps all three subscriptions with their matching
+detaches, together, where `MainWindowTeardownTests` reads them. While those
+handlers were being moved, the two that repaint were given one shared
+`RefreshCoalescer`, the collapse `QuestListPage` already uses: a seven-trader
+profile switch announced seven `TraderLoyaltyChanged` events and then
+`ProfileSettingsReloaded`, and the drawer repainted itself from the same
+snapshot on each of the eight. It now repaints once.
 
 ## Open Questions
 
@@ -500,8 +597,13 @@ instead of a fixed seven, since a snapshot with loyalty entries raises more.
   today), per the roadmap's test strategy.
 - **Unit, badge** (`QuestRequirementBadgeTests`): `Lv.` beats `Rep` beats
   `LL`; `LL2` for a giver row; `Jaeger LL2` for a non-giver row, through the
-  display-name function; null when everything is met; the detail-badge path
-  returns the same string as the row path for the same task.
+  display-name function; null when everything is met. Over the whole badge:
+  the four single-cause statuses read their own word whatever the task says;
+  `Unavailable` names the edition, the prestige level or the faction barring
+  it, in the status walk's order, and falls back to `N/A` when the quest
+  carries none of them. That the row and the detail pane show the SAME string
+  is not a unit case - both call this one function, so a unit test could only
+  restate it; it is driven through the app in `QuestLoyaltyE2ETests`.
 - **Unit, settings** (`TraderLoyaltyLevelsTests`; the existing suites): value
   equality and hash of two instances with the same entries; `With` returns the
   same instance for an unchanged level; `LevelOf` answers the default for an
@@ -547,13 +649,46 @@ instead of a fixed seven, since a snapshot with loyalty entries raises more.
   `Selected`; `TxtDetailStatus` reads `Active`, Active count up by one and
   Locked down by one; relaunch, the quest is still Active and the button still
   `Selected`; switch to the PvE profile through the profile menu, the same
-  quest reads `LL{n}` again. `ProfileResetE2ETests` seeds
+  quest reads `LL{n}` again. A second flow, over a quest gated on its own trader
+  plus exactly one other, reads the row's badge (`TxtRowStatus`, an
+  AutomationId per row) beside `TxtDetailStatus`: the two are the same string
+  while the giver holds the quest (`LL{n}`), the same string once the giver is
+  entered and the badge names the other trader (`Jaeger LL2`), and the same
+  string again after the language is switched to KO through `CmbLanguage`
+  (`예거 LL2`) - the row caches its badge, so that last step is what catches a
+  language change that refreshes only the quest names. The Requirements lines
+  are read in the same pass to show they stay in badge order, the giver first,
+  with the badge naming the first line that is not met.
+  `ProfileResetE2ETests` seeds
   `app.traderLoyalty.<id>` on the season profile and asserts the row is gone
   after the reset and the drawer shows level 1.
   `HeaderE2ETests.Profile_drawer_holds_the_level_stepper` gains the loyalty
-  group's visibility toggling with the drawer.
-- **Not automated**: the look of the wrapped drawer at the 600 pixel minimum
-  width and at the largest font size, checked by hand before the release.
+  group's visibility toggling with the drawer, and is renamed
+  `Profile_drawer_holds_the_level_stepper_and_the_loyalty_inputs` for it.
+- **Unit, the seams the restructures opened** (appended during
+  implementation). `QuestRequirementLinesTests` over
+  `RequirementLineViewModel.BuildFor`: a quest carrying none of the three
+  kinds produces no lines, a required level of zero is not a line, the lines
+  come in badge order, a met line is told from an unmet one by its colour
+  alone, and the level line's colour follows the status engine rather than a
+  rule of its own. `TraderLoyaltyPanelTests` over `TraderLoyaltyPanel`: the
+  automation ids the e2e addresses, an empty roster collapsing its section, a
+  rebuild replacing rather than appending, the highlight moving on every group
+  and not only the one that changed, a click while the parent suppresses input
+  recording nothing, the panel subscribing to nothing, and a published fan-out
+  repainting the drawer once instead of once per stored entry.
+  `MainWindowTeardownTests`: every subscription the constructor adds is
+  detached on close. `QuestRequirementBadgeTests` gains a case walking every
+  `QuestGate` the engine can report.
+- **Drawer layout** (`ProfileDrawerFitTests`, appended during implementation).
+  Written down below as a manual check and automated instead: the real drawer
+  markup is parsed out of `MainWindow.xaml`, dressed in `App.xaml`'s resources
+  and laid out at the 600 pixel minimum window, and every loyalty group must
+  be on screen or reachable by scrolling at each base font size, with the
+  largest font scrolling rather than clipping and the default font fitting
+  without a scrollbar.
+- **Not automated**: the colours and the spacing of the drawer's two wrapped
+  rows, checked by eye before the release.
 
 ## Verification
 

@@ -1,4 +1,6 @@
+using System.IO;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using TarkovHelper.Services;
 
 namespace TarkovHelper.Tests;
@@ -110,6 +112,36 @@ public class LocalizationHeaderStringsTests
 
         Assert.Contains(word, loc.HeaderProfileTooltip, StringComparison.Ordinal);
         Assert.Contains(word, loc.ProfileResetCategories, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The drawer's group headings. Translating a string is only half of shipping it: the
+    /// loyalty heading was defined and translated into all three languages while no control
+    /// ever rendered it, so the row of per-trader steppers shipped with no heading at all.
+    /// This pins each heading to a TextBlock that exists in the XAML and is written from the
+    /// localized property, which is what makes an unrendered string fail here.
+    /// </summary>
+    [Theory]
+    [InlineData("ProfileLevelLabel")]
+    [InlineData("ProfileScavRepLabel")]
+    [InlineData("ProfileDspLabel")]
+    [InlineData("ProfileEditionLabel")]
+    [InlineData("ProfilePrestigeLabel")]
+    [InlineData("ProfileLoyaltyLabel")]
+    public void Every_profile_drawer_heading_is_rendered_by_a_control(string key)
+    {
+        var codeBehind = File.ReadAllText(
+            Path.Combine(TestRepo.Root(), "TarkovHelper", "MainWindow.xaml.cs"));
+        var markup = File.ReadAllText(
+            Path.Combine(TestRepo.Root(), "TarkovHelper", "MainWindow.xaml"));
+
+        var assignment = Regex.Match(codeBehind, $@"(?<control>\w+)\.Text = _loc\.{key};");
+        Assert.True(assignment.Success,
+            $"MainWindow.xaml.cs never assigns _loc.{key} to a control, so the string is " +
+            "translated but never shown");
+
+        var control = assignment.Groups["control"].Value;
+        Assert.Contains($"x:Name=\"{control}\"", markup, StringComparison.Ordinal);
     }
 
     private static string GetString(LocalizationService loc, string key)

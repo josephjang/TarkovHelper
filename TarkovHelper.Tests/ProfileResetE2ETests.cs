@@ -1,12 +1,15 @@
+using System.Globalization;
 using System.Windows.Automation;
+using TarkovHelper.Pages;
 using TarkovHelper.Services;
 
 namespace TarkovHelper.Tests;
 
 /// <summary>
 /// End-to-end guard for feature-complete-profile-reset.md: the dialog resets the selected
-/// profile completely (quests gone, profile values gone, watermark up), spares every other
-/// profile and the edition facts, and declining changes nothing. Driven by AutomationId through
+/// profile completely (quests gone, profile values gone, watermark up, drawer repainted at the
+/// defaults), spares every other profile and the edition facts, and declining changes nothing.
+/// Driven by AutomationId through
 /// <see cref="AppDriver"/>; the dialog replaced the old native MessageBox precisely so this test
 /// can exist.
 /// </summary>
@@ -20,6 +23,18 @@ public sealed class ProfileResetE2ETests : E2ETestBase
     /// <summary>Prapor's loyalty row, keyed by the tarkov.dev trader id the app stores under.</summary>
     private static readonly string PraporLoyaltyKey =
         SettingsService.TraderLoyaltyKey("54cb50c76803fa8b248b4571");
+
+    /// <summary>
+    /// The level seeded on the profile under reset. Named rather than repeated so the seed and
+    /// the drawer assertion that reads it back cannot drift apart.
+    /// </summary>
+    private const int SeededPraporLevel = 4;
+
+    /// <summary>
+    /// A loyalty button in the profile drawer. The drawer builds its groups from the loaded
+    /// database, and Prapor is in the roster for every published database this build reads.
+    /// </summary>
+    private static string PraporLoyaltyButtonId(int level) => $"Loyalty_prapor_{level}";
 
     /// <summary>Seeds two profiles' worth of data and selects the season profile.</summary>
     private string SeedTwoProfiles()
@@ -38,7 +53,8 @@ public sealed class ProfileResetE2ETests : E2ETestBase
         // the survivor allowlist could ever name, so it is seeded on both profiles: the reset
         // must wipe the target's and leave the other's, with no change to the reset itself.
         E2EDb.SeedProfileSetting(
-            configDir, ProfileService.SeasonProfileId, PraporLoyaltyKey, "4");
+            configDir, ProfileService.SeasonProfileId, PraporLoyaltyKey,
+            SeededPraporLevel.ToString(CultureInfo.InvariantCulture));
         E2EDb.SeedProfileSetting(
             configDir, ProfileService.PveProfileId, PraporLoyaltyKey, "3");
 
@@ -75,6 +91,15 @@ public sealed class ProfileResetE2ETests : E2ETestBase
             WaitUntil(() => app.GetItemStatus("BtnPvpSeason") == "Selected",
                 "PvP Season to be the selected profile");
 
+            // The seeded level is on screen BEFORE the reset. Without this half, the level 1
+            // assertion after the reset would also pass on a drawer that never showed the
+            // seeded level at all.
+            app.InvokeElement("BtnProfile");
+            app.WaitForElementVisibility(PraporLoyaltyButtonId(SeededPraporLevel), visible: true);
+            Assert.Equal(QuestStatusTags.ChipSelected,
+                app.GetItemStatus(PraporLoyaltyButtonId(SeededPraporLevel)));
+
+            // Opening Settings force-closes the drawer, so it reopens repainted further down.
             app.InvokeElement("BtnSettings");
             app.WaitForElementVisibility("BtnResetProgress", visible: true);
             app.InvokeElement("BtnResetProgress");
@@ -110,6 +135,24 @@ public sealed class ProfileResetE2ETests : E2ETestBase
 
             AppDriver.Invoke(AppDriver.WaitForElementUnder(dialog, "BtnCloseReset"));
             app.WaitForAppWindowClosed(DialogTitle);
+
+            // The reset has to reach the DRAWER, not only the store. A reset deletes the
+            // trader's row, so no per-trader loyalty event is raised for the level that is now
+            // gone; the groups repaint only because the wiped snapshot is republished. Without
+            // that, the drawer would keep showing level 4 for a profile that has entered
+            // nothing, and the player would be told the quest is unlocked while it is locked.
+            app.InvokeElement("BtnCloseSettings");
+            app.WaitForElementVisibility("BtnResetProgress", visible: false);
+            app.InvokeElement("BtnProfile");
+            app.WaitForElementVisibility(
+                PraporLoyaltyButtonId(SettingsService.DefaultTraderLoyaltyLevel), visible: true);
+            WaitUntil(
+                () => app.TryGetItemStatus(
+                          PraporLoyaltyButtonId(SettingsService.DefaultTraderLoyaltyLevel))
+                      == QuestStatusTags.ChipSelected,
+                "the drawer to fall back to loyalty level 1 after the reset");
+            Assert.Equal(QuestStatusTags.ChipUnselected,
+                app.GetItemStatus(PraporLoyaltyButtonId(SeededPraporLevel)));
 
             app.CloseAndWaitForExit();
         }
