@@ -502,6 +502,34 @@ public sealed class SettingsSetterContractTests : IDisposable
         Assert.Equal(1, reloads);
     }
 
+    /// <summary>
+    /// ...and it is raised LAST, which is the half the three counters above cannot see. A reader
+    /// that rebuilds from the snapshot on this signal has to be told after every value the same
+    /// fan-out is going to announce, or it rebuilds and is then handed values it has already
+    /// drawn - and, on a fan-out the cache moves past mid-way, rebuilds from a snapshot the
+    /// remaining events would have corrected.
+    /// </summary>
+    [Fact]
+    public void The_reload_signal_is_raised_after_every_value_event_of_the_same_fan_out()
+    {
+        // The seed carries one loyalty entry, so the expected order runs seven values, then that
+        // entry's loyalty event, then the reload signal.
+        var service = NewService(Seeded(NewProfileId("live")));
+        // The shared recorder subscribes the reload signal alongside the value events and into
+        // the same list, so the assertion is about POSITION rather than about a count kept on
+        // the side.
+        var events = RecordEvents(service);
+
+        RaiseProfileSettingsChanged(service, service.ProfileSettings);
+
+        Assert.Equal(EventsFor(service.ProfileSettings), events.Select(e => e.Name));
+        // Pinned a second time WITHOUT going through EventsFor, because that list is the shared
+        // expectation every other case compares against: an edit that moved the signal within it
+        // would keep them all passing and quietly drop the "last" half of this contract.
+        Assert.Equal("ProfileSettingsReloaded", events[^1].Name);
+        Assert.Single(events.Where(e => e.Name == "ProfileSettingsReloaded"));
+    }
+
     // ...and it is a fan-out signal, not an edit signal: a single setter announces its own value
     // and nothing else, so a reader that rebuilds everything on a reload is not made to do it on
     // every click in the drawer.

@@ -627,7 +627,10 @@ public sealed class ProfileResetHooksTests : IDisposable
         Assert.Equal(_loadedProfileId, service.ProfileSettings.ProfileId);
 
         // Every profile-scoped changed event is re-raised once, carrying the reloaded value:
-        // the UI redraws from these, exactly as it does on a profile switch.
+        // the UI redraws from these, exactly as it does on a profile switch. The reset deleted
+        // the seed's only loyalty row, so this fan-out raises no loyalty event at all and the
+        // closing reload signal is the drawer's only cue to repaint the levels the reset wiped -
+        // which is why it is asserted here, in position, rather than counted on the side.
         Assert.Equal(new (string, object?)[]
         {
             ("PlayerLevel", SettingsService.DefaultPlayerLevel),
@@ -637,6 +640,7 @@ public sealed class ProfileResetHooksTests : IDisposable
             ("HasEodEdition", true),
             ("HasUnheardEdition", false),
             ("PrestigeLevel", SettingsService.DefaultPrestigeLevel),
+            ("ProfileSettingsReloaded", null),
         }, events);
     }
 
@@ -707,8 +711,10 @@ public sealed class ProfileResetHooksTests : IDisposable
 
         Assert.Equal(IdOf(AppProfile.PveZone), service.ProfileSettings.ProfileId);
         Assert.Equal(7, service.PlayerLevel);
-        // Seven events, from the transition alone: the hook added none.
-        Assert.Equal(7, events.Count);
+        // Exactly one fan-out, the transition's: the hook added none. Compared against the
+        // arrived profile's own fan-out rather than a count, so a hook event slipping in would
+        // fail on the name and the position too.
+        Assert.Equal(EventsFor(service.ProfileSettings), events.Select(e => e.Name));
     }
 
     [Fact]

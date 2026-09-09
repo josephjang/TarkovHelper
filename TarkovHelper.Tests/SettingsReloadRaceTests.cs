@@ -15,8 +15,9 @@ namespace TarkovHelper.Tests;
 /// <see cref="SettingsService"/> was the last <c>ActiveProfileChanged</c> subscriber without one:
 /// it refilled eight nullable fields through eight separate ambient-selection reads, so a switch
 /// landing mid-reload tore the cache across two profiles, and two switches in flight could leave
-/// the older one's values published last. The eight values are now one immutable
-/// <see cref="ProfileSettingsSnapshot"/> carrying its profile and its transition revision.
+/// the older one's values published last. Those values, nine of them today, are now one
+/// immutable <see cref="ProfileSettingsSnapshot"/> carrying its profile and its transition
+/// revision.
 /// <para>
 /// Most cases here are built on an uninitialized service (see
 /// <see cref="SettingsServiceTestSupport.NewService"/>) so no singleton constructor runs and no
@@ -151,8 +152,11 @@ public sealed class SettingsReloadRaceTests : IDisposable
 
         await load;
 
-        // The older load asked again under the gate and dropped its rows. The seven events are
-        // the newer transition's single fan-out: the older one raised none.
+        // The older load asked again under the gate and dropped its rows. Every recorded event
+        // belongs to the newer transition's single fan-out: the older one raised none. That
+        // fan-out is eight names here, the seven value events plus the closing
+        // ProfileSettingsReloaded signal, because the defaults it published carry no loyalty
+        // entry - which is why the expectation comes from EventsFor rather than a literal.
         Assert.Equal(IdOf(AppProfile.PvpZone), service.ProfileSettings.ProfileId);
         Assert.Equal(EventsFor(service.ProfileSettings), events);
     }
@@ -201,7 +205,7 @@ public sealed class SettingsReloadRaceTests : IDisposable
 
     // The tear the eight per-key reads allowed: a switch between read k and read k+1 left keys
     // 1..k holding one profile's values and the rest holding another's, with nothing able to
-    // detect it. One published reload now replaces all eight values AND the profile id as a
+    // detect it. One published reload now replaces all nine values AND the profile id as a
     // single reference, so no mixture is observable.
     [Fact]
     public async Task A_published_reload_replaces_every_value_and_the_profile_id_together()
@@ -239,6 +243,11 @@ public sealed class SettingsReloadRaceTests : IDisposable
         Assert.False(service.HasEodEdition);
         Assert.False(service.HasUnheardEdition);
         Assert.Equal(SettingsService.DefaultPrestigeLevel, service.PrestigeLevel);
+
+        // ...and neither did the ninth value: the seed carried a Prapor loyalty entry and this
+        // profile owns no app.traderLoyalty. row, so the map came back empty rather than carried
+        // over with the rest of the season profile.
+        Assert.Equal(TraderLoyaltyLevels.Empty, snapshot.TraderLoyalty);
     }
 
     // A row the store cannot parse is not a reason to fall back to another profile's value: it
@@ -501,7 +510,7 @@ public sealed class SettingsReloadRaceTests : IDisposable
         }
     }
 
-    // Scav rep is the one double among the eight profile-scoped values, and it used to be
+    // Scav rep is the one double among the nine profile-scoped values, and it used to be
     // written and read in whatever culture the machine ran in. A machine whose decimal
     // separator is a comma reads "5.5" back as 55.0 with the default NumberStyles, which is
     // nine times MaxScavRep and reaches Fence karma quest filtering unchallenged.
@@ -688,7 +697,9 @@ public sealed class SettingsReloadRaceTests : IDisposable
     // publish an all-null snapshot, so the only thing telling them apart is the failure flag -
     // and it decides whether a later re-confirmation reloads. A profile the player has never
     // configured is the common case of the first, and mistaking it for a failure would make
-    // every provenance flip re-read it and re-raise seven events for rows that are not there.
+    // every provenance flip re-read it and re-raise the whole fan-out for rows that are not
+    // there: eight names, the seven value events plus the closing ProfileSettingsReloaded
+    // signal, since a snapshot with no loyalty entry still raises that signal.
     [Fact]
     public async Task An_empty_but_successful_load_is_not_a_failed_load()
     {

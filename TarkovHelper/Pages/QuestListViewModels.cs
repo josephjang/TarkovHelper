@@ -3,6 +3,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using TarkovHelper.Models;
 using TarkovHelper.Services;
+using TarkovHelper.Services.Settings;
 
 namespace TarkovHelper.Pages
 {
@@ -48,13 +49,100 @@ namespace TarkovHelper.Pages
     }
 
     /// <summary>
-    /// One trader loyalty line in the detail pane's Requirements section: the trader, the level
-    /// required and the level entered, coloured the way the Level line above it is when unmet.
+    /// One line in the detail pane's Requirements section: what the quest asks for against what
+    /// the profile carries, in the unmet colour while it is not satisfied.
+    /// <para>
+    /// One shape for every requirement kind - player level, Scav karma and each trader loyalty
+    /// row - so the section is one list bound to one ItemsControl. The level and karma lines used
+    /// to be named TextBlocks with their own inline if/else, their own visibility bool and their
+    /// own copy of the "met" rule, which is what made adding loyalty a third mechanism and grew
+    /// the section wrapper's visibility a term at a time.
+    /// </para>
     /// </summary>
-    public class LoyaltyRequirementViewModel
+    public class RequirementLineViewModel
     {
         public string DisplayText { get; set; } = string.Empty;
         public Brush Foreground { get; set; } = Brushes.White;
+
+        /// <summary>
+        /// The lines one quest shows under Requirements, against the values
+        /// <paramref name="settings"/> carries: the player level, the Scav karma, then one per
+        /// trader the quest names. Empty when it carries none of them, which is what collapses
+        /// the section.
+        /// <para>
+        /// The order is the badge's own precedence order, so the first unmet line here is the
+        /// requirement <c>QuestRequirementBadge</c> names and the top of the list and the badge
+        /// tell one story. The loyalty rows keep the order the quest carries them in, established
+        /// once by <see cref="QuestDbService.SortIntoBadgeOrder"/> at load: the quest's own trader
+        /// first, then the game's trader order. That order does not depend on what the player has
+        /// entered, so the list never reshuffles itself as levels are typed in; the met/unmet
+        /// colouring is what tells a satisfied line from the one still holding the quest.
+        /// </para>
+        /// <para>
+        /// Every "met" answer comes from <see cref="QuestProgressService"/>, never from a
+        /// comparison written here. A line rendered in the met colour beside a locked badge is
+        /// exactly what a second copy of the rule produces once the two drift, and the level line
+        /// carried such a copy.
+        /// </para>
+        /// </summary>
+        /// <param name="traderDisplayName">
+        /// The trader's name in the app's language, given the requirement row. Injected for the
+        /// reason the badge injects it: this stays a pure function of its arguments.
+        /// </param>
+        internal static List<RequirementLineViewModel> BuildFor(
+            TarkovTask task,
+            ProfileSettingsSnapshot settings,
+            LocalizationService loc,
+            Func<QuestTraderRequirement, string> traderDisplayName,
+            Brush metBrush,
+            Brush unmetBrush)
+        {
+            var lines = new List<RequirementLineViewModel>();
+
+            void Add(string text, bool isMet) => lines.Add(new RequirementLineViewModel
+            {
+                DisplayText = text,
+                Foreground = isMet ? metBrush : unmetBrush,
+            });
+
+            if (task.RequiredLevel.HasValue && task.RequiredLevel.Value > 0)
+            {
+                Add(
+                    string.Format(
+                        loc.RequirementLevelFormat,
+                        task.RequiredLevel.Value, settings.PlayerLevelOrDefault),
+                    QuestProgressService.IsLevelRequirementMet(task, settings));
+            }
+
+            if (task.RequiredScavKarma.HasValue)
+            {
+                var requiredKarma = task.RequiredScavKarma.Value;
+                // A negative requirement is an upper bound (a "bad karma" quest), so the line
+                // shows which way the comparison runs.
+                var comparison = requiredKarma < 0 ? "≤" : "≥";
+                Add(
+                    string.Format(
+                        loc.RequirementScavKarmaFormat,
+                        comparison, requiredKarma.ToString("0.#"),
+                        settings.ScavRepOrDefault.ToString("0.#")),
+                    QuestProgressService.IsScavKarmaRequirementMet(task, settings));
+            }
+
+            if (task.HasTraderLoyaltyRequirements)
+            {
+                foreach (var requirement in task.TraderLoyaltyRequirements!)
+                {
+                    Add(
+                        string.Format(
+                            loc.RequirementLoyaltyFormat,
+                            traderDisplayName(requirement), requirement.Level,
+                            settings.TraderLoyalty.LevelOf(requirement.TraderId)),
+                        QuestProgressService.IsTraderLoyaltyMet(requirement, settings));
+                }
+            }
+
+            return lines;
+        }
     }
 
     /// <summary>

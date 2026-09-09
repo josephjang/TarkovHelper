@@ -1,4 +1,5 @@
 using TarkovHelper.Pages;
+using TarkovHelper.Services;
 
 namespace TarkovHelper.Tests;
 
@@ -92,9 +93,17 @@ public sealed class HeaderE2ETests : E2ETestBase
         Assert.Equal(QuestStatusTags.ChipSelected, app.GetItemStatus("Loyalty_prapor_1"));
         Assert.Equal(QuestStatusTags.ChipUnselected, app.GetItemStatus("Loyalty_prapor_4"));
 
+        // The row carries a heading, like the five labelled groups above it. Without it the
+        // player reads seven bordered "Prapor 1 2 3 4" pills with nothing saying what the
+        // numbers are.
+        app.WaitForElementVisibility("TxtLoyaltyLabel", visible: true);
+        Assert.Equal("Loyalty", app.GetElementText("TxtLoyaltyLabel"));
+
         app.InvokeElement("BtnProfile");
         app.WaitForElementVisibility("TxtPlayerLevel", visible: false);
         app.WaitForElementVisibility("Loyalty_prapor_1", visible: false);
+        // The heading hides with the groups it names, never on its own.
+        app.WaitForElementVisibility("TxtLoyaltyLabel", visible: false);
 
         // Opening Settings force-closes an open drawer (it would otherwise keep
         // floating beneath the overlay scrim with a stale up-chevron). The sync
@@ -104,6 +113,28 @@ public sealed class HeaderE2ETests : E2ETestBase
         app.InvokeElement("ChipSyncStatus");
         app.WaitForElementVisibility("BtnResetProgress", visible: true);
         app.WaitForElementVisibility("TxtPlayerLevel", visible: false);
+    }
+
+    /// <summary>
+    /// The loyalty heading is a localized string, not the English literal the XAML carries as a
+    /// design-time placeholder: a KO launch must read it from ProfileLoyaltyLabel like the five
+    /// group labels beside it.
+    /// </summary>
+    [E2EFact]
+    public void Profile_drawer_loyalty_heading_reads_the_apps_language()
+    {
+        var configDir = NewConfigDir();
+        E2EDb.CreateUserDataDb(configDir);
+        E2EDb.SeedSetting(configDir, "app.language", nameof(AppLanguage.KO));
+        using var app = AppDriver.Launch(configDir);
+
+        app.WaitForElement("BtnProfile");
+        app.InvokeElement("BtnProfile");
+        app.WaitForElementVisibility("TxtLoyaltyLabel", visible: true);
+
+        var heading = app.GetElementText("TxtLoyaltyLabel");
+        Assert.Equal(TestLocalization.WithLanguage(AppLanguage.KO).ProfileLoyaltyLabel, heading);
+        Assert.NotEqual("Loyalty", heading);
     }
 
     [E2EFact]

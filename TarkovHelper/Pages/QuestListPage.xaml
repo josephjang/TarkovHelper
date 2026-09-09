@@ -121,11 +121,14 @@
                                    Foreground="White" FontWeight="Bold"/>
                     </Border>
 
-                    <!-- Status Badge -->
+                    <!-- Status Badge. The AutomationId is per row (every row publishes the same
+                         one), which is what lets an e2e read THIS row's badge and compare it with
+                         the detail pane's for the same quest. -->
                     <Border Grid.Column="3" Padding="8,3" CornerRadius="3"
                             Background="{Binding StatusBackground}"
                             VerticalAlignment="Center" Margin="0,0,8,0">
                         <TextBlock Text="{Binding StatusText}" FontSize="{DynamicResource FontSizeTiny}"
+                                   AutomationProperties.AutomationId="TxtRowStatus"
                                    Foreground="White" FontWeight="SemiBold"/>
                     </Border>
 
@@ -620,27 +623,20 @@
                                                Margin="0,0,0,8"/>
                                     <Border Background="{StaticResource BackgroundDarkBrush}"
                                             CornerRadius="4" Padding="12" Margin="0,0,0,16">
-                                        <StackPanel x:Name="RequirementsPanel">
-                                            <TextBlock x:Name="TxtRequiredLevel" FontSize="{DynamicResource FontSizeXSmall}"
-                                                       Foreground="{StaticResource TextPrimaryBrush}"
-                                                       Margin="0,0,0,4"/>
-                                            <TextBlock x:Name="TxtRequiredScavKarma" FontSize="{DynamicResource FontSizeXSmall}"
-                                                       Foreground="{StaticResource TextPrimaryBrush}"
-                                                       Margin="0,0,0,4"/>
-                                            <!-- One line per trader loyalty requirement, in the
-                                                 same order the badge names them (giver first,
-                                                 then the game's trader order). -->
-                                            <ItemsControl x:Name="LoyaltyRequirementsList">
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <TextBlock Text="{Binding DisplayText}"
-                                                                   Foreground="{Binding Foreground}"
-                                                                   FontSize="{DynamicResource FontSizeXSmall}"
-                                                                   Margin="0,0,0,4"/>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
-                                        </StackPanel>
+                                        <!-- One line per requirement the quest carries: the player
+                                             level, the Scav karma, then one per trader loyalty
+                                             row. In the badge's own precedence order, so the
+                                             first unmet line is the one the badge names. -->
+                                        <ItemsControl x:Name="RequirementsList">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding DisplayText}"
+                                                               Foreground="{Binding Foreground}"
+                                                               FontSize="{DynamicResource FontSizeXSmall}"
+                                                               Margin="0,0,0,4"/>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
                                     </Border>
                                 </StackPanel>
 

@@ -152,8 +152,10 @@ internal sealed record ProfileSettingsSnapshot(
     /// The <c>app.traderLoyalty.&lt;traderId&gt;</c> rows of one profile, as one value.
     /// <para>
     /// The only value read by PREFIX rather than by an exact key, because it is one row per
-    /// trader rather than one row. Clamped like every bounded value beside it and for the same
-    /// reason: an entry of 9 hand-written into the table would otherwise reach the gate as 9 and
+    /// trader rather than one row. Read as stored, and bounded a step later: the range belongs to
+    /// <see cref="TraderLoyaltyLevels"/>, which clamps every level on the way in
+    /// (<see cref="TraderLoyaltyLevels.Clamp"/>), so no door into the value can leave one out of
+    /// range. An entry of 9 hand-written into the table would otherwise reach the gate as 9 and
     /// unlock quests the drawer cannot express, and an entry of 0 would lock a requirement of 1
     /// that the game has already met.
     /// </para>
@@ -177,15 +179,12 @@ internal sealed record ProfileSettingsSnapshot(
             if (traderId.Length == 0) continue;
             if (!int.TryParse(stored, out var level)) continue;
 
-            entries.Add(new KeyValuePair<string, int>(
-                traderId,
-                Math.Clamp(
-                    level,
-                    SettingsService.MinTraderLoyaltyLevel,
-                    SettingsService.MaxTraderLoyaltyLevel)));
+            entries.Add(new KeyValuePair<string, int>(traderId, level));
         }
 
-        return entries.Count == 0 ? TraderLoyaltyLevels.Empty : TraderLoyaltyLevels.From(entries);
+        // From answers the shared Empty instance for an empty sequence, so a profile with no
+        // loyalty rows reads as the same value Defaults carries.
+        return TraderLoyaltyLevels.From(entries);
     }
 
     // "No stored row means the property answers its default" has one home per value, below,

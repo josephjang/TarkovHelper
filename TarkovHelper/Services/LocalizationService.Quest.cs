@@ -490,8 +490,14 @@ public partial class LocalizationService
     /// translation, which is most of them in JA today.
     /// </para>
     /// </summary>
+    /// <param name="fallback">
+    /// The caller's own name for the trader. A blank one is replaced by the id: the published
+    /// nickname column is NOT NULL but permits '', and a blank label names nothing.
+    /// </param>
     public string GetTraderDisplayName(string traderId, string fallback)
     {
+        if (string.IsNullOrWhiteSpace(fallback)) fallback = traderId;
+
         var trader = TraderDbService.Instance.GetTraderById(traderId);
         if (trader == null) return fallback;
 

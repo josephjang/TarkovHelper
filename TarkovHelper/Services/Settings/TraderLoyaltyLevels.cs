@@ -41,11 +41,39 @@ internal sealed class TraderLoyaltyLevels : IEquatable<TraderLoyaltyLevels>
     internal static readonly TraderLoyaltyLevels Empty =
         new(new SortedDictionary<string, int>(IdComparer));
 
-    /// <summary>Every stored entry, ordered by trader id.</summary>
-    internal IReadOnlyCollection<KeyValuePair<string, int>> Entries => _levels;
+    /// <summary>
+    /// Every stored entry, ordered by trader id.
+    /// <para>
+    /// A copy, not the backing store. The store is a <see cref="SortedDictionary{TKey,TValue}"/>,
+    /// whose runtime type keeps implementing <see cref="IDictionary{TKey,TValue}"/> however narrow
+    /// the declared return type is, so handing it out would leave one cast in any caller able to
+    /// add, clear or retarget entries in place. On <see cref="Empty"/>, whose instance is shared
+    /// process-wide, that would corrupt every snapshot built from
+    /// <see cref="ProfileSettingsSnapshot.Defaults"/> for the life of the process. The copy is one
+    /// array of at most eleven pairs, built once per published fan-out.
+    /// </para>
+    /// </summary>
+    internal IReadOnlyCollection<KeyValuePair<string, int>> Entries => _levels.ToArray();
 
     /// <summary>How many traders have an entry. Zero for <see cref="Empty"/>.</summary>
     internal int Count => _levels.Count;
+
+    /// <summary>
+    /// <paramref name="level"/> brought inside
+    /// [<see cref="SettingsService.MinTraderLoyaltyLevel"/>,
+    /// <see cref="SettingsService.MaxTraderLoyaltyLevel"/>]. Every level this value holds has been
+    /// through here, because <see cref="With"/> and <see cref="From"/> are the only ways in and
+    /// both clamp: an entry of 9 hand-written into the table would otherwise reach the gate as 9
+    /// and unlock quests the drawer cannot express, and an entry of 0 would lock a requirement of
+    /// 1 that the game has already met.
+    /// <para>
+    /// Exposed because <see cref="SettingsService.SetTraderLoyalty"/> needs the same clamped
+    /// number for the row it writes and the event it raises, not only for the value it stores.
+    /// Naming the bounds a second time over there is how the two would drift apart.
+    /// </para>
+    /// </summary>
+    internal static int Clamp(int level) => Math.Clamp(
+        level, SettingsService.MinTraderLoyaltyLevel, SettingsService.MaxTraderLoyaltyLevel);
 
     /// <summary>
     /// The level entered for <paramref name="traderId"/>, or
@@ -69,18 +97,26 @@ internal sealed class TraderLoyaltyLevels : IEquatable<TraderLoyaltyLevels>
     /// Empty or null leaves the value untouched: there is no trader to key an entry under, and a
     /// blank key would be a row no reader could ever match to a requirement.
     /// </param>
+    /// <param name="level">
+    /// Clamped by <see cref="Clamp"/> before the "already holds that level" comparison, so that
+    /// question is asked about the level actually going in: setting an out-of-range value onto a
+    /// trader already at the bound is a no-op rather than a rewrite of the number already there.
+    /// </param>
     internal TraderLoyaltyLevels With(string? traderId, int level)
     {
         if (string.IsNullOrEmpty(traderId)) return this;
-        if (_levels.TryGetValue(traderId, out var current) && current == level) return this;
 
-        var next = new SortedDictionary<string, int>(_levels, IdComparer) { [traderId] = level };
+        var clamped = Clamp(level);
+        if (_levels.TryGetValue(traderId, out var current) && current == clamped) return this;
+
+        var next = new SortedDictionary<string, int>(_levels, IdComparer) { [traderId] = clamped };
         return new TraderLoyaltyLevels(next);
     }
 
     /// <summary>
-    /// The entries in <paramref name="levels"/> as one value. Later duplicates win, which cannot
-    /// happen through the store (one row per key) and keeps the builder total anyway.
+    /// The entries in <paramref name="levels"/> as one value, each level clamped by
+    /// <see cref="Clamp"/>. Later duplicates win, which cannot happen through the store (one row
+    /// per key) and keeps the builder total anyway.
     /// </summary>
     internal static TraderLoyaltyLevels From(IEnumerable<KeyValuePair<string, int>> levels)
     {
@@ -88,7 +124,7 @@ internal sealed class TraderLoyaltyLevels : IEquatable<TraderLoyaltyLevels>
         foreach (var (traderId, level) in levels)
         {
             if (string.IsNullOrEmpty(traderId)) continue;
-            map[traderId] = level;
+            map[traderId] = Clamp(level);
         }
         return map.Count == 0 ? Empty : new TraderLoyaltyLevels(map);
     }

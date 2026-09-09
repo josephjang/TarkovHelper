@@ -45,9 +45,15 @@ namespace TarkovHelper.Pages
         private static readonly TimeSpan SearchDebounceInterval = TimeSpan.FromMilliseconds(250);
 
         /// <summary>
-        /// Collapses the profile-scoped settings burst into one refresh. SettingsService raises all
-        /// seven of its changed events on every published reload (profile switch, profile reset,
-        /// self-heal), all seven of which this page consumes, and each one used to run a full
+        /// Collapses the profile-scoped settings burst into one refresh. Every published reload
+        /// (profile switch, profile reset, self-heal) fans out seven single-value events, then one
+        /// <see cref="SettingsService.TraderLoyaltyChanged"/> per STORED loyalty entry, then
+        /// <see cref="SettingsService.ProfileSettingsReloaded"/> last. This page consumes eight of
+        /// them, the seven values and the loyalty event, and deliberately NOT
+        /// ProfileSettingsReloaded: every refresh here re-reads the snapshot itself
+        /// (<see cref="CapturePass"/>) rather than trusting a value an event handed it, and the
+        /// seven values are announced on every publish whatever the snapshot holds, so the pass is
+        /// already booked. Each consumed event used to run a full
         /// <see cref="RefreshAllForStateChange"/> pass over every task. Built by
         /// <see cref="RefreshCoalescer.OnDispatcher"/> in the constructor BODY, not here:
         /// <see cref="DispatcherObject.Dispatcher"/> is only set once the base constructor has run,
@@ -308,15 +314,24 @@ namespace TarkovHelper.Pages
             _itemLookup = itemDbService.GetItemLookup();
         }
 
+        /// <summary>
+        /// Re-derives every cached string a row carries, both halves of it: the names, and the
+        /// statuses. The status badge is language-dependent too since it names the trader of an
+        /// unmet cross-trader loyalty gate (<see cref="QuestRequirementBadge"/>), and the row
+        /// caches that string in <see cref="QuestViewModel.StatusText"/>. Refreshing only the
+        /// names would leave a row reading "Jaeger LL2" under a Korean UI until some unrelated
+        /// event happened to run a status pass, with the detail pane for the same quest - which
+        /// rebuilds from scratch here - showing the Korean name beside it.
+        /// </summary>
         private void OnLanguageChanged(object? sender, AppLanguage e)
         {
             RefreshQuestDisplayNames();
-            ApplyFilters();
-            UpdateDetailPanel();
+            RefreshAllForStateChange();
         }
 
         /// <summary>
-        /// The standard refresh sequence for a profile/progress state change, shared by
+        /// The standard refresh sequence for a change in anything the rows are derived from:
+        /// profile, progress, and the app's language, whose badges name a trader. Shared by
         /// every state-change handler — and by the public <see cref="RefreshDisplay"/>
         /// entry point MainWindow uses — so the sequence cannot drift between them.
         /// (OnDatabaseRefreshed is deliberately separate: it reloads data first.)
@@ -650,7 +665,10 @@ namespace TarkovHelper.Pages
         {
             var tasks = _progressService.AllTasks;
 
-            _allQuestViewModels = tasks.Select(t => CreateQuestViewModel(t)).ToList();
+            // One progress snapshot and one settings snapshot for the whole build, so every row
+            // is derived from the same profile: see RenderPass.
+            var pass = CapturePass();
+            _allQuestViewModels = tasks.Select(t => CreateQuestViewModel(t, pass)).ToList();
             _traders = tasks.Select(t => t.Trader).Where(t => !string.IsNullOrEmpty(t)).Distinct().OrderBy(t => t).ToList();
             _maps = tasks.Where(t => t.Maps != null).SelectMany(t => t.Maps!).Distinct().OrderBy(m => m).ToList();
             BuildUnlockRank();
@@ -680,9 +698,36 @@ namespace TarkovHelper.Pages
             _unlockRank = rank;
         }
 
-        private QuestViewModel CreateQuestViewModel(TarkovTask task)
+        /// <summary>
+        /// The two snapshots one render pass reads: the recorded progress and the profile-scoped
+        /// player settings. Captured ONCE at the top of a pass and threaded through it, so a
+        /// profile publish landing mid-pass cannot render a quest's status from one profile and
+        /// its badge, or the Requirements line under it, from another - the tearing
+        /// <see cref="ProfileSettingsSnapshot"/> exists to make unobservable.
+        /// <see cref="QuestProgressService.GetStatus(TarkovTask, ProgressSnapshot, ProfileSettingsSnapshot)"/>
+        /// takes the same pair for the same reason.
+        /// </summary>
+        private readonly record struct RenderPass(
+            ProgressSnapshot Progress, ProfileSettingsSnapshot Settings);
+
+        /// <summary>The snapshots for one pass. Call once per pass, never per quest.</summary>
+        private RenderPass CapturePass()
+            => new(_progressService.Snapshot, SettingsService.Instance.ProfileSettings);
+
+        /// <summary>
+        /// The status of one quest within a pass, against that pass's snapshots, together with
+        /// the gate the walk stopped at - the requirement the badge names. Both come from the one
+        /// call, so no pane can name a gate other than the one that produced the status it shows.
+        /// </summary>
+        private (QuestStatus Status, QuestGate Gate) StatusIn(RenderPass pass, TarkovTask task)
         {
-            var status = _progressService.GetStatus(task);
+            var status = _progressService.GetStatus(task, pass.Progress, pass.Settings, out var gate);
+            return (status, gate);
+        }
+
+        private QuestViewModel CreateQuestViewModel(TarkovTask task, RenderPass pass)
+        {
+            var (status, gate) = StatusIn(pass, task);
             var (displayName, subtitle, showSubtitle) = GetLocalizedNames(task);
 
             return new QuestViewModel
@@ -693,7 +738,7 @@ namespace TarkovHelper.Pages
                 SubtitleVisibility = showSubtitle ? Visibility.Visible : Visibility.Collapsed,
                 TraderInitial = GetTraderInitial(task.Trader),
                 Status = status,
-                StatusText = GetStatusText(status, task),
+                StatusText = GetStatusText(status, gate, task, pass),
                 StatusBackground = GetStatusBrush(status),
                 CompleteButtonVisibility = (status == QuestStatus.Active || status == QuestStatus.Locked || status == QuestStatus.LevelLocked)
                     && status != QuestStatus.Unavailable ? Visibility.Visible : Visibility.Collapsed,
@@ -718,93 +763,35 @@ namespace TarkovHelper.Pages
             => _loc.GetTraderDisplayName(requirement.TraderId, requirement.TraderName);
 
         /// <summary>
-        /// The detail pane's loyalty lines for one quest, empty when it names no trader.
+        /// The detail pane's Requirements lines for one quest within a pass. The rule itself is
+        /// <see cref="RequirementLineViewModel.BuildFor"/>, a pure function of the quest and the
+        /// pass's settings; all this adds is the two theme brushes and the page's own resolvers.
+        /// </summary>
+        private List<RequirementLineViewModel> BuildRequirementLines(
+            TarkovTask task, RenderPass pass)
+            => RequirementLineViewModel.BuildFor(
+                task, pass.Settings, _loc, TraderDisplayName,
+                metBrush: (Brush)FindResource("TextPrimaryBrush"),
+                unmetBrush: LevelLockedBrush);
+
+        /// <summary>
+        /// The badge text for one quest within a pass. A thin adapter over
+        /// <see cref="QuestRequirementBadge.StatusText"/>, which owns the rule so the row, the
+        /// detail pane, the prerequisite rows and the alternative-quest rows cannot drift apart.
         /// <para>
-        /// Ordered the way the badge picks its trader - the quest's own first, then the game's
-        /// trader order - so a player reading the badge finds the same trader at the top of this
-        /// list rather than having to look for it.
+        /// The task is REQUIRED, and deliberately so. It used to be optional, and four of the
+        /// seven call sites left it out: those panes read the literal "Level" or "N/A" beside a
+        /// row that named the actual gate. A caller can no longer make that mistake silently.
+        /// </para>
+        /// <para>
+        /// The gate comes from the same <see cref="StatusIn"/> call as the status, never from a
+        /// second walk here: which requirement is holding a quest is the status engine's answer.
         /// </para>
         /// </summary>
-        private List<LoyaltyRequirementViewModel> BuildLoyaltyRequirementLines(TarkovTask task)
-        {
-            if (!task.HasTraderLoyaltyRequirements) return new List<LoyaltyRequirementViewModel>();
-
-            var settings = SettingsService.Instance.ProfileSettings;
-            var metBrush = (Brush)FindResource("TextPrimaryBrush");
-
-            return task.TraderLoyaltyRequirements!
-                .OrderByDescending(r => QuestProgressService.IsGivenBy(task, r))
-                .ThenBy(r => TraderDbService.DisplayRank(r.TraderName?.ToLowerInvariant()))
-                .ThenBy(r => r.TraderName, StringComparer.OrdinalIgnoreCase)
-                .Select(requirement =>
-                {
-                    var entered = settings.TraderLoyalty.LevelOf(requirement.TraderId);
-                    return new LoyaltyRequirementViewModel
-                    {
-                        DisplayText = string.Format(
-                            _loc.RequirementLoyaltyFormat,
-                            TraderDisplayName(requirement), requirement.Level, entered),
-                        Foreground = entered >= requirement.Level ? metBrush : LevelLockedBrush,
-                    };
-                })
-                .ToList();
-        }
-
-        private string GetStatusText(QuestStatus status, TarkovTask? task = null)
-        {
-            if (status == QuestStatus.LevelLocked && task != null)
-            {
-                // Which of the three gates behind this one status is holding the quest. The rule
-                // lives in QuestRequirementBadge so the row and the detail pane cannot drift
-                // apart, which they had: the detail badge omitted the task and read the literal
-                // "Level" for every level-locked quest.
-                var badge = QuestRequirementBadge.For(
-                    task, SettingsService.Instance.ProfileSettings, TraderDisplayName);
-                if (badge != null) return badge;
-            }
-
-            if (status == QuestStatus.Unavailable && task != null)
-            {
-                // Show specific reason for unavailability
-                if (!_progressService.IsEditionRequirementMet(task))
-                {
-                    // Show which edition is required
-                    var requiredEdition = task.RequiredEdition?.ToLowerInvariant();
-                    if (requiredEdition == "eod" || requiredEdition == "edge_of_darkness")
-                        return "EOD";
-                    if (requiredEdition == "unheard" || requiredEdition == "the_unheard")
-                        return "Unheard";
-                    // Check for excluded edition
-                    var excludedEdition = task.ExcludedEdition?.ToLowerInvariant();
-                    if (!string.IsNullOrEmpty(excludedEdition))
-                        return "Edition";
-                }
-                if (!_progressService.IsPrestigeLevelRequirementMet(task))
-                {
-                    return $"P.{task.RequiredPrestigeLevel}";
-                }
-                // Show faction if quest is for different faction
-                if (!_progressService.IsFactionRequirementMet(task))
-                {
-                    var faction = task.Faction?.ToLowerInvariant();
-                    if (faction == "bear")
-                        return "BEAR";
-                    if (faction == "usec")
-                        return "USEC";
-                }
-            }
-
-            return status switch
-            {
-                QuestStatus.Locked => "Locked",
-                QuestStatus.Active => "Active",
-                QuestStatus.Done => "Done",
-                QuestStatus.Failed => "Failed",
-                QuestStatus.LevelLocked => "Level",
-                QuestStatus.Unavailable => "N/A",
-                _ => "Unknown"
-            };
-        }
+        private string GetStatusText(
+            QuestStatus status, QuestGate gate, TarkovTask task, RenderPass pass)
+            => QuestRequirementBadge.StatusText(
+                status, gate, task, pass.Settings, TraderDisplayName);
 
         private static Brush GetStatusBrush(QuestStatus status)
         {
@@ -833,11 +820,14 @@ namespace TarkovHelper.Pages
 
         private void RefreshQuestStatuses()
         {
+            // One pass, one profile: the status and the badge under it are read from the same
+            // snapshots for every row, not re-read per row and per string.
+            var pass = CapturePass();
             foreach (var vm in _allQuestViewModels)
             {
-                var status = _progressService.GetStatus(vm.Task);
+                var (status, gate) = StatusIn(pass, vm.Task);
                 vm.Status = status;
-                vm.StatusText = GetStatusText(status, vm.Task);
+                vm.StatusText = GetStatusText(status, gate, vm.Task, pass);
                 vm.StatusBackground = GetStatusBrush(status);
                 vm.CompleteButtonVisibility = (status == QuestStatus.Active || status == QuestStatus.Locked || status == QuestStatus.LevelLocked)
                     && status != QuestStatus.Unavailable ? Visibility.Visible : Visibility.Collapsed;
@@ -1370,7 +1360,13 @@ namespace TarkovHelper.Pages
 
             var task = selectedVm.Task;
             _currentDetailTask = task;
-            var status = _progressService.GetStatus(task);
+            // Everything below reads THIS pass's snapshots. The pane used to take an independent
+            // live reading per element - the status here, the badge inside GetStatusText, the
+            // Requirements lines, the level and the Scav Rep - so a profile publish landing in
+            // the middle of one pass could paint a locked badge above a Requirements line showing
+            // the same requirement met, in the met colour.
+            var pass = CapturePass();
+            var (status, gate) = StatusIn(pass, task);
 
             // Show on Map button - hidden (Map feature removed)
             BtnShowOnMap.Visibility = Visibility.Collapsed;
@@ -1386,7 +1382,7 @@ namespace TarkovHelper.Pages
             // The task is passed, so the detail badge names the gate the way the row does. It
             // used to omit it and read the literal "Level" for every level-locked quest, which
             // said nothing about which of the three requirements was actually holding it.
-            TxtDetailStatus.Text = GetStatusText(status, task);
+            TxtDetailStatus.Text = GetStatusText(status, gate, task, pass);
             DetailStatusBadge.Background = GetStatusBrush(status);
 
             // Maps
@@ -1405,52 +1401,13 @@ namespace TarkovHelper.Pages
             // Kappa Progress Section (for Collector quest)
             UpdateKappaProgressSection(task);
 
-            // Requirements - Level with current level comparison
-            bool hasLevelRequirement = task.RequiredLevel.HasValue && task.RequiredLevel.Value > 0;
-            bool hasScavKarmaRequirement = task.RequiredScavKarma.HasValue;
-
-            if (hasLevelRequirement)
-            {
-                var playerLevel = SettingsService.Instance.PlayerLevel;
-                var reqLevel = task.RequiredLevel!.Value;
-                TxtRequiredLevel.Text = string.Format(_loc.RequirementLevelFormat, reqLevel, playerLevel);
-                TxtRequiredLevel.Foreground = playerLevel >= reqLevel
-                    ? (Brush)FindResource("TextPrimaryBrush")
-                    : LevelLockedBrush;
-                TxtRequiredLevel.Visibility = Visibility.Visible;
-            }
-            else
-            {
-                TxtRequiredLevel.Visibility = Visibility.Collapsed;
-            }
-
-            // Requirements - Scav Karma (Fence reputation)
-            if (hasScavKarmaRequirement)
-            {
-                var playerScavRep = SettingsService.Instance.ScavRep;
-                var reqKarma = task.RequiredScavKarma!.Value;
-                var isMet = _progressService.IsScavKarmaRequirementMet(task);
-                var comparison = reqKarma < 0 ? "≤" : "≥";
-                TxtRequiredScavKarma.Text = string.Format(
-                    _loc.RequirementScavKarmaFormat,
-                    comparison, reqKarma.ToString("0.#"), playerScavRep.ToString("0.#"));
-                TxtRequiredScavKarma.Foreground = isMet ? (Brush)FindResource("TextPrimaryBrush") : LevelLockedBrush;
-                TxtRequiredScavKarma.Visibility = Visibility.Visible;
-            }
-            else
-            {
-                TxtRequiredScavKarma.Visibility = Visibility.Collapsed;
-            }
-
-            // Requirements - trader loyalty, one line per trader the quest names
-            var loyaltyLines = BuildLoyaltyRequirementLines(task);
-            LoyaltyRequirementsList.ItemsSource = loyaltyLines;
-
-            // Show requirements section if any requirement exists
+            // Requirements - one line per gate the quest carries (level, Scav karma, each trader
+            // loyalty row), in the badge's precedence order. One list, so the section appears
+            // exactly when it has something to say instead of on a term-per-kind condition.
+            var requirementLines = BuildRequirementLines(task, pass);
+            RequirementsList.ItemsSource = requirementLines;
             RequirementsSectionWrapper.Visibility =
-                (hasLevelRequirement || hasScavKarmaRequirement || loyaltyLines.Count > 0)
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
+                requirementLines.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
             // Prerequisites - show direct prerequisites with OR/AND grouping
             if (task.TaskRequirements != null && task.TaskRequirements.Count > 0)
@@ -1471,7 +1428,7 @@ namespace TarkovHelper.Pages
 
                     if (reqTask == null) continue;
 
-                    var pStatus = _progressService.GetStatus(reqTask);
+                    var (pStatus, pGate) = StatusIn(pass, reqTask);
                     var (pName, _, _) = GetLocalizedNames(reqTask);
 
                     prereqGroups.Add(new PrerequisiteGroupViewModel
@@ -1483,7 +1440,7 @@ namespace TarkovHelper.Pages
                             {
                                 Task = reqTask,
                                 DisplayName = pName,
-                                StatusText = GetStatusText(pStatus),
+                                StatusText = GetStatusText(pStatus, pGate, reqTask, pass),
                                 StatusBackground = GetStatusBrush(pStatus),
                                 IsOrItem = false
                             }
@@ -1504,7 +1461,7 @@ namespace TarkovHelper.Pages
 
                         if (reqTask != null)
                         {
-                            var pStatus = _progressService.GetStatus(reqTask);
+                            var (pStatus, pGate) = StatusIn(pass, reqTask);
                             var (pName, _, _) = GetLocalizedNames(reqTask);
 
                             prereqGroups.Add(new PrerequisiteGroupViewModel
@@ -1516,7 +1473,7 @@ namespace TarkovHelper.Pages
                                     {
                                         Task = reqTask,
                                         DisplayName = pName,
-                                        StatusText = GetStatusText(pStatus),
+                                        StatusText = GetStatusText(pStatus, pGate, reqTask, pass),
                                         StatusBackground = GetStatusBrush(pStatus),
                                         IsOrItem = false
                                     }
@@ -1540,14 +1497,14 @@ namespace TarkovHelper.Pages
 
                         if (reqTask == null) continue;
 
-                        var pStatus = _progressService.GetStatus(reqTask);
+                        var (pStatus, pGate) = StatusIn(pass, reqTask);
                         var (pName, _, _) = GetLocalizedNames(reqTask);
 
                         groupVm.Items.Add(new PrerequisiteItemViewModel
                         {
                             Task = reqTask,
                             DisplayName = pName,
-                            StatusText = GetStatusText(pStatus),
+                            StatusText = GetStatusText(pStatus, pGate, reqTask, pass),
                             StatusBackground = GetStatusBrush(pStatus),
                             IsOrItem = !isFirst  // Show "OR" separator for 2nd item onwards
                         });
@@ -1575,13 +1532,13 @@ namespace TarkovHelper.Pages
             {
                 var altVms = alternativeQuests.Select(alt =>
                 {
-                    var altStatus = _progressService.GetStatus(alt);
+                    var (altStatus, altGate) = StatusIn(pass, alt);
                     var (displayName, _, _) = GetLocalizedNames(alt);
                     return new
                     {
                         DisplayName = displayName,
                         TraderName = alt.Trader,
-                        StatusText = GetStatusText(altStatus, alt),
+                        StatusText = GetStatusText(altStatus, altGate, alt, pass),
                         StatusBackground = GetStatusBrush(altStatus)
                     };
                 }).ToList();

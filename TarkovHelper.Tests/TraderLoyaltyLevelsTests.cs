@@ -12,6 +12,13 @@ namespace TarkovHelper.Tests;
 /// reference identity <see cref="TraderLoyaltyLevels.With"/> returns for an unchanged level are
 /// therefore contract, not implementation detail, and they are pinned here.
 /// </para>
+/// <para>
+/// The two invariants the value owns are pinned here as well, because it is the only place they
+/// are enforced: every level it holds is inside
+/// [<see cref="SettingsService.MinTraderLoyaltyLevel"/>,
+/// <see cref="SettingsService.MaxTraderLoyaltyLevel"/>], and nothing it hands out reaches its
+/// backing store.
+/// </para>
 /// </summary>
 public sealed class TraderLoyaltyLevelsTests
 {
@@ -42,14 +49,13 @@ public sealed class TraderLoyaltyLevelsTests
     [Fact]
     public void Two_traders_with_their_levels_swapped_are_a_different_value()
     {
-        // The hash combines the id WITH its level rather than accumulating them separately, so
-        // this pair does not collide. Equality would catch the swap either way; the hash is what
-        // a dictionary of snapshots would rely on.
         var a = TraderLoyaltyLevels.Empty.With(Prapor, 2).With(Jaeger, 4);
         var b = TraderLoyaltyLevels.Empty.With(Prapor, 4).With(Jaeger, 2);
 
+        // Equality, not the hash: two different values are allowed to hash alike, and asserting
+        // that this pair does not would pin an implementation detail on a randomly seeded
+        // HashCode. Equal values hashing alike (the case above) is the half that is contract.
         Assert.NotEqual(a, b);
-        Assert.NotEqual(a.GetHashCode(), b.GetHashCode());
     }
 
     [Fact]
@@ -106,6 +112,70 @@ public sealed class TraderLoyaltyLevelsTests
         Assert.Equal(
             new[] { Prapor, Jaeger }.OrderBy(id => id, StringComparer.Ordinal).ToArray(),
             value.Entries.Select(e => e.Key).ToArray());
+    }
+
+    /// <summary>
+    /// The reason <see cref="TraderLoyaltyLevels.Empty"/> can be a shared static at all: nothing
+    /// handed out of the value reaches its backing store. The store is a SortedDictionary, whose
+    /// runtime type keeps implementing <see cref="IDictionary{TKey,TValue}"/> however narrow the
+    /// declared return type is, so returning it would leave one cast in one future caller able to
+    /// clear or retarget Empty's entries in place and corrupt every snapshot built from Defaults
+    /// for the life of the process.
+    /// </summary>
+    [Fact]
+    public void Entries_hands_out_a_copy_rather_than_the_live_backing_store()
+    {
+        var value = TraderLoyaltyLevels.Empty.With(Prapor, 2).With(Jaeger, 4);
+
+        Assert.IsNotAssignableFrom<IDictionary<string, int>>(value.Entries);
+        Assert.IsNotAssignableFrom<IDictionary<string, int>>(TraderLoyaltyLevels.Empty.Entries);
+
+        // A caller writing through the mutable interfaces the copy DOES expose writes into its
+        // own copy, and the value reads exactly as it was built afterwards.
+        var handedOut = value.Entries;
+        var writable = Assert.IsAssignableFrom<IList<KeyValuePair<string, int>>>(handedOut);
+        writable[0] = new KeyValuePair<string, int>(Jaeger, 1);
+
+        Assert.Equal(
+            new[] { Prapor, Jaeger }.OrderBy(id => id, StringComparer.Ordinal).ToArray(),
+            value.Entries.Select(e => e.Key).ToArray());
+        Assert.Equal(2, value.LevelOf(Prapor));
+        Assert.Equal(4, value.LevelOf(Jaeger));
+    }
+
+    /// <summary>
+    /// The bounds live on the value, not on its callers: a level out of range is clamped whichever
+    /// door it came in through. An unclamped 9 would answer every published requirement and
+    /// silently unlock all 94 gated quests; an unclamped 0 would lock a requirement of 1 the game
+    /// has already met.
+    /// </summary>
+    [Theory]
+    [InlineData(9, SettingsService.MaxTraderLoyaltyLevel)]
+    [InlineData(5, SettingsService.MaxTraderLoyaltyLevel)]
+    [InlineData(0, SettingsService.MinTraderLoyaltyLevel)]
+    [InlineData(-4, SettingsService.MinTraderLoyaltyLevel)]
+    [InlineData(3, 3)]
+    public void A_level_is_clamped_whichever_door_it_comes_in_through(int level, int expected)
+    {
+        Assert.Equal(expected, TraderLoyaltyLevels.Clamp(level));
+        Assert.Equal(expected, TraderLoyaltyLevels.Empty.With(Prapor, level).LevelOf(Prapor));
+        Assert.Equal(
+            expected,
+            TraderLoyaltyLevels.From(new[] { new KeyValuePair<string, int>(Prapor, level) })
+                .LevelOf(Prapor));
+    }
+
+    // The clamp runs BEFORE the "already holds that level" guard, so setting an out-of-range level
+    // onto a trader already at the bound is the no-op the setter's ReferenceEquals guard reads as
+    // "nothing to write", rather than a rewrite of the number already stored.
+    [Fact]
+    public void With_an_out_of_range_level_is_a_no_op_at_the_bound_it_clamps_to()
+    {
+        var atMax = TraderLoyaltyLevels.Empty.With(Prapor, SettingsService.MaxTraderLoyaltyLevel);
+        var atMin = TraderLoyaltyLevels.Empty.With(Prapor, SettingsService.MinTraderLoyaltyLevel);
+
+        Assert.Same(atMax, atMax.With(Prapor, 9));
+        Assert.Same(atMin, atMin.With(Prapor, -4));
     }
 
     [Fact]

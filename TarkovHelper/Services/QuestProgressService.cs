@@ -6,6 +6,54 @@ using TarkovHelper.Services.Settings;
 namespace TarkovHelper.Services
 {
     /// <summary>
+    /// The requirement a quest's status walk stopped at: the gate that is actually holding the
+    /// quest, for the statuses that stand for several gates at once.
+    /// <para>
+    /// <see cref="QuestStatus"/> collapses causes on purpose - level, Scav karma and trader
+    /// loyalty all answer <see cref="QuestStatus.LevelLocked"/>, and the three categorical gates
+    /// all answer <see cref="QuestStatus.Unavailable"/> - so the status alone cannot tell the
+    /// player which requirement to go and clear. The walk reports that here, and
+    /// <c>QuestRequirementBadge</c> is a pure formatter over it. The precedence therefore exists
+    /// exactly once, in
+    /// <see cref="QuestProgressService.GetStatus(TarkovTask, ProgressSnapshot, ProfileSettingsSnapshot, out QuestGate)"/>:
+    /// the badge used to re-walk the same predicates in a hand-copied order, so reordering the
+    /// engine would have left every test passing while the badge named the wrong requirement.
+    /// </para>
+    /// </summary>
+    internal enum QuestGate
+    {
+        /// <summary>No gate stopped the quest, or the status was recorded rather than derived.</summary>
+        None,
+
+        /// <summary>The account does not own the edition the quest requires (Unavailable).</summary>
+        RequiredEdition,
+
+        /// <summary>The account owns an edition the quest bars (Unavailable).</summary>
+        ExcludedEdition,
+
+        /// <summary>The profile's prestige level is below the quest's (Unavailable).</summary>
+        PrestigeLevel,
+
+        /// <summary>The quest belongs to the other faction (Unavailable).</summary>
+        Faction,
+
+        /// <summary>The profile's DSP decode count does not match the quest's (Locked).</summary>
+        DecodeCount,
+
+        /// <summary>A prerequisite quest is not done (Locked).</summary>
+        Prerequisite,
+
+        /// <summary>The profile's player level is below the quest's (LevelLocked).</summary>
+        PlayerLevel,
+
+        /// <summary>The profile's Scav karma does not satisfy the quest's (LevelLocked).</summary>
+        ScavKarma,
+
+        /// <summary>A trader's entered loyalty level is below the quest's (LevelLocked).</summary>
+        TraderLoyalty,
+    }
+
+    /// <summary>
     /// Service for managing quest progress state.
     /// <para>
     /// Progress lives in a single immutable <see cref="ProgressSnapshot"/> that carries the
@@ -316,20 +364,38 @@ namespace TarkovHelper.Services
 
         /// <summary>
         /// Status against two explicitly captured snapshots: the recorded progress and the
-        /// profile-scoped player settings the six requirement gates read. Every recursive step of
-        /// the prerequisite walk carries the same pair, so a profile switch landing mid-walk
+        /// profile-scoped player settings the seven requirement gates read. Every recursive step
+        /// of the prerequisite walk carries the same pair, so a profile switch landing mid-walk
         /// cannot produce a status derived half from one profile and half from another.
         /// <para>
-        /// The settings half matters as much as the progress half and used to be missing: the six
-        /// gates below each re-entered <c>SettingsService.Instance</c> for their own value, so a
-        /// publish between two of them mixed one profile's editions with another's level - the
-        /// tearing <see cref="ProfileSettingsSnapshot"/> exists to make unobservable, reappearing
-        /// in its largest consumer. See <c>QuestStatusSettingsSnapshotTests</c>.
+        /// The settings half matters as much as the progress half and used to be missing: the
+        /// seven gates below each re-entered <c>SettingsService.Instance</c> for their own value,
+        /// so a publish between two of them mixed one profile's editions with another's level -
+        /// the tearing <see cref="ProfileSettingsSnapshot"/> exists to make unobservable,
+        /// reappearing in its largest consumer. See <c>QuestStatusSettingsSnapshotTests</c>.
         /// </para>
         /// </summary>
         internal QuestStatus GetStatus(
             TarkovTask task, ProgressSnapshot snapshot, ProfileSettingsSnapshot settings)
+            => GetStatus(task, snapshot, settings, out _);
+
+        /// <summary>
+        /// The same walk, additionally reporting WHICH gate it stopped at, because several gates
+        /// share one status: <paramref name="gate"/> is the requirement the badge names.
+        /// <para>
+        /// The order below is the only statement of the precedence. Everything that has to name a
+        /// requirement reads this answer instead of re-deriving it, so reordering the walk moves
+        /// the badge with it rather than leaving the two silently disagreeing. The gate is
+        /// <see cref="QuestGate.None"/> when nothing stopped the quest and when the status came
+        /// from a recorded Done/Failed row, neither of which is a requirement at all.
+        /// </para>
+        /// </summary>
+        internal QuestStatus GetStatus(
+            TarkovTask task, ProgressSnapshot snapshot, ProfileSettingsSnapshot settings,
+            out QuestGate gate)
         {
+            gate = QuestGate.None;
+
             var taskId = task.Ids?.FirstOrDefault();
             var taskKey = taskId ?? task.NormalizedName;
 
@@ -360,33 +426,57 @@ namespace TarkovHelper.Services
 
             try
             {
-                // Check edition requirements first (Unavailable takes precedence)
-                if (!IsEditionRequirementMet(task, settings))
+                // Check edition requirements first (Unavailable takes precedence). Which of the
+                // two edition rules failed is reported, not just that one did: an owned edition
+                // the quest bars and a missing edition it demands read as different badges.
+                var editionGate = UnmetEditionGate(task, settings);
+                if (editionGate != null)
+                {
+                    gate = editionGate.Value;
                     return QuestStatus.Unavailable;
+                }
 
                 // Check prestige level requirement (also Unavailable)
                 if (!IsPrestigeLevelRequirementMet(task, settings))
+                {
+                    gate = QuestGate.PrestigeLevel;
                     return QuestStatus.Unavailable;
+                }
 
                 // Check faction requirement (Unavailable if player chose different faction)
                 if (!IsFactionRequirementMet(task, settings))
+                {
+                    gate = QuestGate.Faction;
                     return QuestStatus.Unavailable;
+                }
 
                 // Check DSP Decode Count requirement (Locked, not Unavailable)
                 if (!IsDspRequirementMet(task, settings))
+                {
+                    gate = QuestGate.DecodeCount;
                     return QuestStatus.Locked;
+                }
 
                 // Check prerequisites
                 if (!ArePrerequisitesMet(task, snapshot, settings))
+                {
+                    gate = QuestGate.Prerequisite;
                     return QuestStatus.Locked;
+                }
 
                 // Check level requirement
                 if (!IsLevelRequirementMet(task, settings))
+                {
+                    gate = QuestGate.PlayerLevel;
                     return QuestStatus.LevelLocked;
+                }
 
                 // Check Scav Karma requirement
                 if (!IsScavKarmaRequirementMet(task, settings))
+                {
+                    gate = QuestGate.ScavKarma;
                     return QuestStatus.LevelLocked;  // Use LevelLocked status for karma-locked quests too
+                }
 
                 // Check trader loyalty requirements. Last of the three, and LevelLocked like the
                 // other two: loyalty levels themselves need player levels (Prapor 3 needs level
@@ -396,7 +486,10 @@ namespace TarkovHelper.Services
                 // its own, so the chip vocabulary, its counts and its persistence are untouched;
                 // the badge is what tells the player which of the three gates is holding.
                 if (!IsTraderLoyaltyRequirementMet(task, settings))
+                {
+                    gate = QuestGate.TraderLoyalty;
                     return QuestStatus.LevelLocked;
+                }
 
                 return QuestStatus.Active;
             }
@@ -471,22 +564,38 @@ namespace TarkovHelper.Services
             // trader, so an untouched profile fails a level 2 row and meets a level 1 one.
             foreach (var requirement in task.TraderLoyaltyRequirements!)
             {
-                if (settings.TraderLoyalty.LevelOf(requirement.TraderId) < requirement.Level)
-                    return false;
+                if (!IsTraderLoyaltyMet(requirement, settings)) return false;
             }
 
             return true;
         }
 
         /// <summary>
-        /// The loyalty requirement the row's badge should name, or null when the quest has none
-        /// unmet.
+        /// Whether the profile's entered level for the trader <paramref name="requirement"/> names
+        /// reaches the level it asks for. The one comparison behind the gate, the badge's first
+        /// unmet row and the detail pane's per-trader line, so a line cannot render as met beside
+        /// a badge that says the same trader is holding the quest.
         /// <para>
-        /// The quest's own trader first, when it is one of the unmet ones: the row already shows
-        /// that trader's initial, so <c>LL2</c> on it is complete on its own and stays as narrow
-        /// as <c>Lv.15</c>. Otherwise the earliest unmet trader in the game's own order, so the
-        /// badge names the same trader every time rather than whichever row the database returned
-        /// first. One rule, used by the list row, the detail badge and the tests.
+        /// A trader with no entry reads as level 1, which is where the game starts every trader,
+        /// so an untouched profile fails a level 2 row and meets a level 1 one.
+        /// </para>
+        /// </summary>
+        internal static bool IsTraderLoyaltyMet(
+            QuestTraderRequirement requirement, ProfileSettingsSnapshot settings)
+            => settings.TraderLoyalty.LevelOf(requirement.TraderId) >= requirement.Level;
+
+        /// <summary>
+        /// The loyalty requirement the row's badge should name, or null when the quest has none
+        /// unmet: the first unmet entry in the order the quest carries them.
+        /// <para>
+        /// That order is badge order, established once by
+        /// <see cref="QuestDbService.SortIntoBadgeOrder"/> as the rows are loaded: the quest's own
+        /// trader first, then the game's trader order, then by nickname. So the giver is named
+        /// whenever it is one of the unmet ones - the row already shows that trader's initial, so
+        /// <c>LL2</c> on it is complete on its own and stays as narrow as <c>Lv.15</c> - and
+        /// otherwise the earliest unmet trader in the game's own order, never whichever row the
+        /// database happened to return first. One rule, in one place, used by the list row, the
+        /// detail badge, the detail pane's Requirements lines and the tests.
         /// </para>
         /// </summary>
         internal static QuestTraderRequirement? FirstUnmetTraderLoyalty(
@@ -494,39 +603,12 @@ namespace TarkovHelper.Services
         {
             if (!task.HasTraderLoyaltyRequirements) return null;
 
-            QuestTraderRequirement? best = null;
-            var bestRank = int.MaxValue;
-
             foreach (var requirement in task.TraderLoyaltyRequirements!)
             {
-                if (settings.TraderLoyalty.LevelOf(requirement.TraderId) >= requirement.Level)
-                    continue;
-
-                if (IsGivenBy(task, requirement)) return requirement;
-
-                // Ranked off the lower-cased nickname, which is the normalized name for every
-                // trader the published data names and the same fallback QuestDbService uses when
-                // the Traders table has no row. An unrecognised name ranks last rather than
-                // wrong, and this decides display only.
-                var rank = TraderDbService.DisplayRank(requirement.TraderName?.ToLowerInvariant());
-
-                // Alphabetical among equal ranks, which is only ever the unranked newcomers. Said
-                // explicitly rather than left to the order the rows arrive in: the loader happens
-                // to sort them by trader name today, and a badge that changed which trader it
-                // names because a query's ORDER BY moved would be a hard defect to see.
-                if (best == null
-                    || rank < bestRank
-                    || (rank == bestRank
-                        && string.Compare(
-                            requirement.TraderName, best.TraderName,
-                            StringComparison.OrdinalIgnoreCase) < 0))
-                {
-                    best = requirement;
-                    bestRank = rank;
-                }
+                if (!IsTraderLoyaltyMet(requirement, settings)) return requirement;
             }
 
-            return best;
+            return null;
         }
 
         /// <summary>
@@ -548,8 +630,18 @@ namespace TarkovHelper.Services
 
         internal static bool IsEditionRequirementMet(
             TarkovTask task, ProfileSettingsSnapshot settings)
-        {
+            => UnmetEditionGate(task, settings) == null;
 
+        /// <summary>
+        /// Which of the two edition rules bars <paramref name="task"/>, or null when neither
+        /// does. The met/unmet answer is exactly <see cref="IsEditionRequirementMet"/>'s; what
+        /// this adds is WHICH rule failed, because a quest can pass the edition it requires and
+        /// still be barred by the edition it excludes. Collapsed to one bool, the badge read the
+        /// required edition's name for a quest the player was barred from by the excluded one.
+        /// </summary>
+        private static QuestGate? UnmetEditionGate(
+            TarkovTask task, ProfileSettingsSnapshot settings)
+        {
             // Check required edition (EOD and Unheard are independent)
             if (!string.IsNullOrEmpty(task.RequiredEdition))
             {
@@ -559,13 +651,13 @@ namespace TarkovHelper.Services
                 if (requiredEdition == "eod" || requiredEdition == "edge_of_darkness")
                 {
                     if (!settings.HasEodEditionOrDefault)
-                        return false;
+                        return QuestGate.RequiredEdition;
                 }
                 // Unheard edition requirement - only Unheard checkbox matters
                 else if (requiredEdition == "unheard" || requiredEdition == "the_unheard")
                 {
                     if (!settings.HasUnheardEditionOrDefault)
-                        return false;
+                        return QuestGate.RequiredEdition;
                 }
             }
 
@@ -578,17 +670,17 @@ namespace TarkovHelper.Services
                 if (excludedEdition == "eod" || excludedEdition == "edge_of_darkness")
                 {
                     if (settings.HasEodEditionOrDefault)
-                        return false;
+                        return QuestGate.ExcludedEdition;
                 }
                 // Excluded from Unheard edition
                 else if (excludedEdition == "unheard" || excludedEdition == "the_unheard")
                 {
                     if (settings.HasUnheardEditionOrDefault)
-                        return false;
+                        return QuestGate.ExcludedEdition;
                 }
             }
 
-            return true;
+            return null;
         }
 
         /// <summary>
