@@ -1,0 +1,2488 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trader Loyalty Deep Review - Code Guide</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Ground and structure, inherited from the earlier guides so the
+         interactive docs read as one set. */
+      --page: #101010;
+      --surface: #181818;
+      --surface-2: #222222;
+      --surface-3: #2d2d2d;
+      --line: #3d3d3d;
+      --line-soft: #2a2a2a;
+      --text: #e0e0e0;
+      --muted: #9e9e9e;
+      --dim: #737373;
+
+      /* Accent: the app's own AccentBrush. */
+      --gold: #c5a84a;
+      --gold-hover: #d4b85a;
+      --gold-ink: #19170f;
+
+      /* Profile hues. These are a LAW, not decoration: the same profile is the same
+         colour in every table, lane and timeline on this page. Nothing on this page is
+         a profile, so it spends none of them. */
+      --pvp: #5ea9e8;
+      --pve: #4caf50;
+      --season: #ff9800;
+
+      /* Reserved for data in the wrong place. */
+      --wrong: #ef5350;
+      --right: #4caf50;
+
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+
+      --body: "Segoe UI", "Noto Sans", system-ui, sans-serif;
+      --mono: Consolas, "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 14% -12%, rgba(197, 168, 74, .12), transparent 36rem),
+        var(--page);
+      color: var(--text);
+      font-family: var(--body);
+      line-height: 1.55;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    }
+
+    button, input, select { font: inherit; }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* ---------- shell ---------- */
+
+    .shell {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      gap: 44px;
+      width: min(1320px, calc(100% - 44px));
+      margin: 0 auto;
+      padding: 56px 0 96px;
+      align-items: start;
+    }
+
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .rail { position: static; margin-bottom: 40px; }
+    }
+
+    .rail {
+      position: sticky;
+      top: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 18px 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: rgba(24, 24, 24, .84);
+      backdrop-filter: blur(10px);
+    }
+
+    .rail-title {
+      margin: 0 0 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .rail a {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 13.5px;
+      text-decoration: none;
+      transition: background .15s, color .15s;
+    }
+
+    .rail a:hover { background: var(--surface-2); color: var(--text); }
+    .rail a .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+    .rail a.is-lab { color: var(--gold); }
+    .rail a.is-lab .n { color: var(--gold); }
+
+    .rail-gate {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line-soft);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    .rail-gate strong { display: block; color: var(--text); font-size: 13px; }
+
+    .gate-meter {
+      height: 5px;
+      margin-top: 8px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .gate-meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--gold);
+      transition: width .3s ease;
+    }
+
+    /* ---------- type ---------- */
+
+    main { max-width: 100%; }
+
+    .eyebrow {
+      margin: 0;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    h1 {
+      max-width: 18ch;
+      margin: 12px 0 18px;
+      font-size: clamp(38px, 5.6vw, 70px);
+      font-weight: 800;
+      line-height: 1.0;
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+
+    .lede {
+      max-width: 62ch;
+      margin: 0 0 14px;
+      font-size: 19px;
+      color: #c2c2c2;
+    }
+
+    h2 {
+      margin: 0 0 6px;
+      font-size: clamp(24px, 3vw, 33px);
+      font-weight: 800;
+      letter-spacing: -.03em;
+      line-height: 1.12;
+      text-wrap: balance;
+    }
+
+    h3 {
+      margin: 30px 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    p, li { max-width: 68ch; }
+    p { margin: 0 0 14px; }
+    ul, ol { margin: 0 0 14px; padding-left: 22px; }
+    li { margin-bottom: 7px; }
+
+    strong { color: #f0f0f0; }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: #ddc98a;
+      font-family: var(--mono);
+      font-size: .88em;
+    }
+
+    a { color: var(--gold); }
+
+    section { margin-bottom: 68px; scroll-margin-top: 24px; }
+
+    .chapter-head {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 16px;
+      align-items: baseline;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .chapter-num {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      color: var(--gold);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kicker {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 62ch;
+    }
+
+    /* ---------- callouts ---------- */
+
+    .note {
+      margin: 22px 0;
+      padding: 16px 18px;
+      border-left: 3px solid var(--gold);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: linear-gradient(100deg, rgba(197, 168, 74, .1), rgba(197, 168, 74, .02));
+    }
+
+    .note p:last-child { margin-bottom: 0; }
+
+    .note-label {
+      margin: 0 0 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .note.is-wrong { border-left-color: var(--wrong); background: linear-gradient(100deg, rgba(239, 83, 80, .1), transparent); }
+    .note.is-wrong .note-label { color: var(--wrong); }
+
+    /* ---------- code and logs ---------- */
+
+    .code {
+      margin: 18px 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #141414;
+      overflow: hidden;
+    }
+
+    .code-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .code pre {
+      margin: 0;
+      padding: 14px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.62;
+      tab-size: 2;
+    }
+
+    .code .del { display: block; background: rgba(239, 83, 80, .12); color: #f0b3b1; }
+    .code .add { display: block; background: rgba(76, 175, 80, .12); color: #b3e0b5; }
+    .code .cmt { color: var(--dim); }
+
+    /* ---------- labs ---------- */
+
+    .lab {
+      margin: 34px 0 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .lab-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      align-items: baseline;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line-soft);
+      background: linear-gradient(180deg, rgba(197, 168, 74, .07), transparent);
+    }
+
+    .lab-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .lab-head h3 { margin: 0; font-size: 19px; }
+    .lab-head .sub { width: 100%; margin: 2px 0 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
+
+    .lab-body { padding: 20px; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    .ctl-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .seg {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      background: var(--surface-2);
+      gap: 3px;
+    }
+
+    .seg button {
+      padding: 6px 14px;
+      border: 0;
+      border-radius: 99px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+
+    .seg button:hover { color: var(--text); }
+    .seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); }
+    .seg button[aria-pressed="true"][data-tone="bad"] { background: rgba(239, 83, 80, .2); color: var(--wrong); }
+    .seg button[aria-pressed="true"][data-tone="good"] { background: rgba(76, 175, 80, .2); color: var(--right); }
+
+    .btn {
+      padding: 8px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+
+    .btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--gold); }
+    .btn:disabled { opacity: .42; cursor: not-allowed; }
+    .btn.is-primary { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+    .btn.is-primary:hover:not(:disabled) { background: var(--gold-hover); }
+
+    .slider-wrap { display: flex; align-items: center; gap: 10px; }
+    .slider-wrap input[type="range"] { width: 210px; accent-color: var(--gold); }
+    .slider-read { font-family: var(--mono); font-size: 13px; color: var(--text); min-width: 15ch; }
+
+    .verdict {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: var(--surface-2);
+      font-size: 14.5px;
+    }
+
+    .verdict[data-tone="bad"] { border-color: rgba(239, 83, 80, .5); background: rgba(239, 83, 80, .08); }
+    .verdict[data-tone="good"] { border-color: rgba(76, 175, 80, .45); background: rgba(76, 175, 80, .07); }
+    .verdict b { display: block; margin-bottom: 3px; }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-top: 6px;
+    }
+
+    .stat {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .stat .k {
+      margin: 0 0 4px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .stat .v {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .v[data-tone="bad"] { color: var(--wrong); }
+    .v[data-tone="good"] { color: var(--right); }
+    .v[data-tone="season"] { color: var(--season); }
+    .v[data-tone="pve"] { color: var(--pve); }
+    .v[data-tone="pvp"] { color: var(--pvp); }
+
+    /* ---------- step chips, shared by labs A, B and D ---------- */
+
+    .lanes { display: grid; gap: 12px; }
+
+    .lane {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .lane[data-profile="pvp"] { border-left: 3px solid var(--pvp); }
+    .lane[data-profile="pve"] { border-left: 3px solid var(--pve); }
+    .lane[data-profile="season"] { border-left: 3px solid var(--season); }
+
+    .lane-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 12px;
+      align-items: baseline;
+      margin-bottom: 8px;
+      font-size: 13.5px;
+      font-weight: 700;
+    }
+
+    .lane-head .rev { font-family: var(--mono); font-size: 12px; color: var(--dim); font-weight: 600; }
+
+    .steps { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .step {
+      padding: 4px 9px;
+      border: 1px solid var(--line-soft);
+      border-radius: 99px;
+      background: #141414;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--dim);
+    }
+
+    .step.is-done { color: var(--text); border-color: var(--line); }
+    .step.is-now { color: var(--gold-ink); background: var(--gold); border-color: var(--gold); font-weight: 700; }
+    .step.is-kill { color: var(--wrong); border-color: rgba(239, 83, 80, .55); }
+    .step.is-win { color: var(--right); border-color: rgba(76, 175, 80, .55); }
+
+    /* ---------- labs C and D: the document rows ---------- */
+
+    .reads { border: 1px solid var(--line-soft); border-radius: var(--radius-sm); overflow: hidden; }
+
+    .read-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) 92px minmax(0, 1.9fr);
+      gap: 10px;
+      align-items: center;
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      background: var(--surface-2);
+    }
+
+    .read-row:last-child { border-bottom: 0; }
+    .read-row .rk { color: var(--text); overflow-wrap: anywhere; }
+    .read-row .rv { font-weight: 700; text-align: right; overflow-wrap: anywhere; }
+    .read-row .ro { font-size: 11.5px; color: var(--muted); font-family: var(--body); }
+    .read-row.is-dropped { opacity: .45; }
+    .read-row.is-dropped .rv { text-decoration: line-through; }
+    .read-row.is-boundary { box-shadow: inset 0 -2px 0 var(--wrong); }
+    .read-row .rv[data-tone="bad"] { color: var(--wrong); }
+    .read-row .rv[data-tone="good"] { color: var(--right); }
+
+    @media (max-width: 760px) {
+      .read-row { grid-template-columns: minmax(0, 1fr) 78px; }
+      .read-row .ro { display: none; }
+    }
+
+    /* ---------- lab-specific: the hourly meter in lab A ---------- */
+
+    .meter {
+      margin-top: 14px;
+      height: 10px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--wrong);
+      transition: width .25s ease;
+    }
+
+    .meter.is-good i { background: var(--right); }
+
+    /* ---------- quiz ---------- */
+
+    .quiz-intro {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 26px;
+      padding: 18px 20px;
+      border: 1px solid rgba(197, 168, 74, .35);
+      border-radius: var(--radius);
+      background: linear-gradient(110deg, rgba(197, 168, 74, .12), rgba(197, 168, 74, .02));
+    }
+
+    .quiz-score {
+      display: grid;
+      place-items: center;
+      min-width: 62px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      color: var(--gold);
+    }
+
+    .q {
+      margin-bottom: 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .q[data-state="right"] { border-color: rgba(76, 175, 80, .55); }
+    .q[data-state="wrong"] { border-color: rgba(239, 83, 80, .5); }
+
+    .q-head { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 16px 18px 10px; }
+
+    .q-num {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--gold);
+      padding-top: 3px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .q-text { margin: 0; font-size: 15.5px; font-weight: 600; max-width: 72ch; }
+
+    .q-opts { display: grid; gap: 7px; padding: 4px 18px 16px 44px; }
+
+    .opt {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      cursor: pointer;
+      font-size: 14px;
+      transition: border-color .15s, background .15s;
+    }
+
+    .opt:hover { border-color: var(--line); background: var(--surface-3); }
+    .opt input { margin: 3px 0 0; accent-color: var(--gold); }
+    .opt.is-right { border-color: rgba(76, 175, 80, .6); background: rgba(76, 175, 80, .1); }
+    .opt.is-wrong { border-color: rgba(239, 83, 80, .55); background: rgba(239, 83, 80, .1); }
+
+    .q-why {
+      display: none;
+      margin: 0 18px 16px 44px;
+      padding: 12px 14px;
+      border-left: 3px solid var(--line);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: var(--surface-2);
+      font-size: 13.5px;
+      color: #c4c4c4;
+    }
+
+    .q-why p { margin: 0; max-width: 74ch; }
+    .q[data-state] .q-why { display: block; }
+    .q[data-state="right"] .q-why { border-left-color: var(--right); }
+    .q[data-state="wrong"] .q-why { border-left-color: var(--wrong); }
+
+    .q-why .verdict-word { font-weight: 700; }
+    .q[data-state="right"] .verdict-word { color: var(--right); }
+    .q[data-state="wrong"] .verdict-word { color: var(--wrong); }
+
+    /* gate */
+
+    .gate {
+      margin-top: 30px;
+      padding: 22px 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .gate.is-locked { border-style: dashed; color: var(--muted); }
+    .gate.is-open { border-color: rgba(76, 175, 80, .55); background: linear-gradient(150deg, rgba(76, 175, 80, .1), transparent); }
+
+    .gate h3 { margin: 0 0 8px; }
+    .gate ul { margin-top: 10px; }
+
+    .approval {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: #141414;
+      border: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: #b9d8bb;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    footer {
+      margin-top: 22px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--dim);
+      font-size: 13px;
+    }
+
+    footer a { color: var(--muted); }
+
+    /* ---------- this guide: the row tables the labs print ---------- */
+
+    .tbl {
+      margin: 14px 0 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      overflow-x: auto;
+    }
+
+    .tbl table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
+
+    .tbl th {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      text-align: left;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+      white-space: nowrap;
+    }
+
+    .tbl td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      vertical-align: top;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      overflow-wrap: anywhere;
+    }
+
+    .tbl tr:last-child td { border-bottom: 0; }
+    .tbl td[data-tone="bad"] { color: var(--wrong); font-weight: 700; }
+    .tbl td[data-tone="good"] { color: var(--right); font-weight: 700; }
+    .tbl td[data-tone="dim"] { color: var(--dim); }
+    .tbl tr[data-row="wrong"] { background: rgba(239, 83, 80, .08); }
+    .tbl tr[data-row="kept"] { background: rgba(76, 175, 80, .06); }
+
+    .lane-note { font-size: 11.5px; color: var(--muted); font-family: var(--body); }
+
+    /* A test name is longer than a phone is wide, and .lab hides its overflow, so
+       inline code in a lab sub and in a stat tile has to break rather than be cut.
+       Nothing moves at desktop width. */
+    .lab-head .sub code, .stat .v { overflow-wrap: anywhere; }
+
+    /* ---------- this guide: the measure columns lab A compares ---------- */
+
+    .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+
+    .col {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .col.is-active { border-color: var(--gold); background: rgba(197, 168, 74, .07); }
+    .col h4 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+    .col p { margin: 0; font-size: 12.5px; color: var(--muted); max-width: none; }
+    .col .num { font-family: var(--mono); font-size: 20px; font-weight: 800; margin: 6px 0 2px; }
+    .col .num[data-tone="bad"] { color: var(--wrong); }
+    .col .num[data-tone="good"] { color: var(--right); }
+
+    /* This guide names the run each slider position stands for, which makes its
+       readouts longer than the shared 15ch minimum. .lab hides its overflow, so
+       they have to wrap at phone width. Nothing moves at desktop width. */
+    .slider-wrap { flex-wrap: wrap; }
+    .slider-read { overflow-wrap: anywhere; }
+
+    /* The ceiling mark on lab A's meter, so the boundary is visible and not only stated. */
+    .meter { position: relative; }
+    .meter .ceiling {
+      position: absolute;
+      top: -3px;
+      bottom: -3px;
+      width: 2px;
+      background: var(--gold);
+    }
+
+    /* ---------- this guide's additions ---------- */
+
+    /* Identifiers in a lab sub or a stat value are long and unbreakable, and a
+       narrow column would otherwise push the page sideways. */
+    .lab-head .sub code, .stat .v { overflow-wrap: anywhere; }
+
+    /* The drawer, rebuilt. One row per trader, each a label and four levels,
+       laid out the way TraderLoyaltyPanel.Rebuild lays them out. */
+    .drawer {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(214px, 1fr));
+      gap: 10px;
+      margin-top: 6px;
+    }
+
+    .trader {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .trader-name {
+      flex: 1 1 auto;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    .trader[data-need="unmet"] { border-color: rgba(239, 83, 80, .45); }
+    .trader[data-need="unmet"] .trader-name { color: var(--text); }
+
+    .levels { display: inline-flex; gap: 3px; }
+
+    .levels button {
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--surface-3);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .levels button:hover { border-color: var(--gold); }
+    .levels button[aria-pressed="true"] { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+
+    /* One quest row, as the list draws it: trader initial, name, status badge. */
+    .questrow {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .initial {
+      width: 34px;
+      padding: 3px 0;
+      border-radius: 5px;
+      background: var(--surface-3);
+      color: var(--gold);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .qname { flex: 1 1 auto; font-size: 14px; }
+
+    .badge {
+      padding: 3px 9px;
+      border-radius: 5px;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .badge[data-kind="active"] { background: rgba(76, 175, 80, .22); color: var(--right); }
+    .badge[data-kind="levellocked"] { background: rgba(255, 152, 0, .2); color: var(--season); }
+    .badge[data-kind="locked"] { background: rgba(158, 158, 158, .18); color: var(--muted); }
+    .badge[data-kind="unavailable"] { background: rgba(158, 158, 158, .12); color: var(--dim); }
+
+    /* The detail pane's Requirements block. */
+    .reqs {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .reqs h5 {
+      margin: 0 0 8px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .reqline {
+      margin: 0 0 4px;
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    .reqline[data-met="no"] { color: var(--season); }
+    .reqline[data-met="yes"] { color: var(--text); }
+
+    /* The status walk, one gate per step. */
+    .walk { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+    .gatechip {
+      padding: 5px 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: 99px;
+      font-size: 12px;
+      color: var(--dim);
+    }
+
+    .gatechip[data-state="pass"] { border-color: rgba(76, 175, 80, .4); color: var(--right); }
+    .gatechip[data-state="stop"] { border-color: rgba(255, 152, 0, .5); color: var(--season); background: rgba(255, 152, 0, .1); }
+    .gatechip[data-state="skip"] { opacity: .45; }
+
+    /* Event fan-out, one line per announcement. */
+    .events { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+
+    .ev {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 11px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      font-family: var(--mono);
+      font-size: 12.5px;
+    }
+
+    .ev .evn { flex: 1 1 auto; }
+    .ev .evv { color: var(--muted); }
+    .ev[data-kind="loyalty"] { border-color: rgba(197, 168, 74, .4); }
+    .ev[data-kind="reload"] { border-color: rgba(94, 169, 232, .45); }
+    .ev[data-kind="none"] { color: var(--dim); font-style: italic; }
+
+    /* The profile a value belongs to, coloured by the page's law. */
+    .owner[data-profile="pvp"] { color: var(--pvp); }
+    .owner[data-profile="pve"] { color: var(--pve); }
+    .owner[data-profile="wrong"] { color: var(--wrong); font-weight: 700; }
+
+    /* ---------- this guide's additions ---------- */
+
+    /* The status walk, drawn as a column of gates so the stop point is visible. */
+    .gates { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+
+    .grow {
+      display: grid;
+      grid-template-columns: 26px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 7px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      font-size: 13px;
+    }
+
+    .grow .gn {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--dim);
+      text-align: right;
+    }
+
+    .grow .gv { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+    .grow[data-state="pass"] .gv { color: var(--right); }
+    .grow[data-state="stop"] {
+      border-color: rgba(255, 152, 0, .55);
+      background: rgba(255, 152, 0, .1);
+    }
+    .grow[data-state="stop"] .gv { color: var(--season); }
+    .grow[data-state="skip"] { opacity: .4; }
+
+    /* Two answers side by side, one of which is wrong. */
+    .answers {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .answer {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .answer h4 {
+      margin: 0 0 8px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .answer .big {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .answer[data-verdict="right"] { border-color: rgba(76, 175, 80, .45); }
+    .answer[data-verdict="right"] .big { color: var(--right); }
+    .answer[data-verdict="wrong"] { border-color: rgba(239, 83, 80, .5); }
+    .answer[data-verdict="wrong"] .big { color: var(--wrong); }
+
+    .answer .why { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
+
+    /* A published row and what the loader did with it. */
+    .rowcard {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 9px 13px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      margin-bottom: 6px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+    }
+
+    .rowcard[data-kept="dropped"] { border-color: rgba(239, 83, 80, .45); }
+    .rowcard[data-kept="kept"] { border-color: rgba(76, 175, 80, .35); }
+    .rowcard[data-kept="warned"] { border-color: rgba(197, 168, 74, .5); }
+
+    .rowcard .fate { font-size: 11.5px; font-weight: 700; }
+    .rowcard[data-kept="dropped"] .fate { color: var(--wrong); }
+    .rowcard[data-kept="kept"] .fate { color: var(--right); }
+    .rowcard[data-kept="warned"] .fate { color: var(--gold); }
+
+    /* Three consumers of one ordering rule. */
+    .consumers { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+
+    .consumer {
+      display: grid;
+      grid-template-columns: 190px 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 9px 13px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    @media (max-width: 620px) {
+      .consumer { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    }
+
+    .consumer .cname { font-size: 12.5px; color: var(--muted); }
+    .consumer .cval { font-family: var(--mono); font-size: 12.5px; }
+    .consumer[data-agrees="no"] { border-color: rgba(239, 83, 80, .5); }
+    .consumer[data-agrees="no"] .cval { color: var(--wrong); font-weight: 700; }
+    .consumer[data-agrees="yes"] .cval { color: var(--text); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="rail" aria-label="Guide contents">
+      <p class="rail-title">Curriculum</p>
+      <a href="#ch1"><span class="n">01</span><span>One rule, written twice</span></a>
+      <a href="#ch2"><span class="n">02</span><span>The badge that re-walked the order</span></a>
+      <a href="#lab-a" class="is-lab"><span class="n">LAB</span><span>Which requirement the badge names</span></a>
+      <a href="#ch3"><span class="n">03</span><span>One bool for two edition rules</span></a>
+      <a href="#ch4"><span class="n">04</span><span>The table nothing loaded</span></a>
+      <a href="#ch5"><span class="n">05</span><span>Dropping a row fails open</span></a>
+      <a href="#lab-b" class="is-lab"><span class="n">LAB</span><span>What the loader keeps</span></a>
+      <a href="#ch6"><span class="n">06</span><span>One order, in three places</span></a>
+      <a href="#lab-c" class="is-lab"><span class="n">LAB</span><span>Three consumers, one answer</span></a>
+      <a href="#ch7"><span class="n">07</span><span>The value that gave away its store</span></a>
+      <a href="#ch8"><span class="n">08</span><span>What stayed open, and why</span></a>
+      <a href="#quiz"><span class="n">09</span><span>Comprehension gate</span></a>
+      <div class="rail-gate">
+        <strong id="railGateLabel">Gate locked</strong>
+        <span id="railGateHint">0 of 8 correct</span>
+        <div class="gate-meter"><i id="railGateBar"></i></div>
+      </div>
+    </nav>
+
+    <main>
+      <p class="eyebrow">PR #57 &middot; Code guide</p>
+      <h1>Every copy of a rule is a place for it to disagree</h1>
+      <p class="lede">
+        Part 2 of the trader loyalty guides. Part 1
+        (<code>docs/2026-09-quest-loyalty-gating-code-guide.html</code>) is the design of the gate
+        in PR #55. This part is the deep review of that design. Forty findings were fixed, four
+        were refuted, and six were decided by the author.
+      </p>
+      <p class="lede">
+        The defects share one shape. A rule was written down in more than one place, and nothing
+        held the copies together. Every fix collapses the copies instead of correcting each one.
+        The decisions are recorded in
+        <code>docs/decisions/feature-quest-loyalty-gating.spec.md</code>, which this PR extends.
+      </p>
+
+      <div class="note">
+        <p class="note-label">The whole change</p>
+        <p>
+          A deep review of the trader loyalty gate. It found rules with more than one copy, and
+          gave each of them a single home.
+        </p>
+      </div>
+
+      <!-- ===================== 1 ===================== -->
+      <section id="ch1">
+        <div class="chapter-head">
+          <span class="chapter-num">01</span>
+          <div>
+            <h2>One rule, written twice</h2>
+            <p class="kicker">
+              What part 1 built, and the shape every defect in this review has.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Part 1 made trader loyalty a real gate. It reads the published requirement rows and
+          keeps the entered levels in the profile. It checks them in the status walk, and shows
+          the result as a badge and as lines in the detail pane.
+        </p>
+        <p>
+          That is five components for one idea. Each of them needs to know something about the
+          rule, so the rule got written down five times. Where two copies agree today, nothing
+          keeps them agreeing tomorrow.
+        </p>
+        <p>
+          None of these defects is a crash. Each produces a plausible answer. The badge names a
+          real requirement, and it is the wrong one. The loader drops a row for a good reason, and
+          the quest becomes available. A trader name reads correctly in English, and only in
+          English.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">The shape they share</p>
+          <p>
+            A test over one copy passes. A test over the other copy passes. Nothing tests that the
+            two say the same thing. In the source they are two unrelated pieces of code that
+            happen to encode one rule.
+          </p>
+        </div>
+
+        <p>
+          So the fixes are mostly deletions. The precedence moves into the walk that already has
+          it. The ordering moves into the load that already touches every row. The clamp moves
+          into the type that already owns the range. What is left is one place to read, and one
+          place to change.
+        </p>
+      </section>
+
+      <!-- ===================== 2 ===================== -->
+      <section id="ch2">
+        <div class="chapter-head">
+          <span class="chapter-num">02</span>
+          <div>
+            <h2>The badge that re-walked the order</h2>
+            <p class="kicker">
+              Two copies of the precedence, and nothing to make the second follow the first.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          <code>QuestStatus</code> collapses causes on purpose. Level, Scav karma and trader
+          loyalty all answer <code>LevelLocked</code>. The three categorical gates all answer
+          <code>Unavailable</code>. So the status alone cannot say which requirement to clear, and
+          the badge exists to say it.
+        </p>
+        <p>
+          Part 1 built the badge as a second walk. It asked the same predicates in the same order,
+          written out again by hand. The two orders agreed when they were written, and nothing
+          connected them.
+        </p>
+        <p>
+          Reorder the engine and every test still passes. The engine tests asserted statuses, and
+          the statuses do not move. The badge tests asserted badges under settings they chose, and
+          they chose settings where one gate was unmet. Neither suite asked the question the
+          defect lives in: does the badge name the gate the walk stopped at.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/QuestProgressService.cs</span><span>GetStatus</span></div>
+          <pre><span class="cmt">// The walk now reports WHICH gate stopped it, as well as the status.</span>
+internal QuestStatus GetStatus(
+    TarkovTask task, ProgressSnapshot snapshot, ProfileSettingsSnapshot settings,
+<span class="add">+   out QuestGate gate)</span>
+{
+<span class="add">+   gate = QuestGate.None;</span>
+    <span class="cmt">// ... recorded Done/Failed, and the circular-reference guard ...</span>
+
+    if (!IsPrestigeLevelRequirementMet(task, settings))
+<span class="add">+   {</span>
+<span class="add">+       gate = QuestGate.PrestigeLevel;</span>
+        return QuestStatus.Unavailable;
+<span class="add">+   }</span>
+
+    <span class="cmt">// ... faction, DSP, prerequisites, level, karma, each stamping its own gate ...</span>
+
+    if (!IsTraderLoyaltyRequirementMet(task, settings))
+<span class="add">+   {</span>
+<span class="add">+       gate = QuestGate.TraderLoyalty;</span>
+        return QuestStatus.LevelLocked;
+<span class="add">+   }</span>
+
+    return QuestStatus.Active;
+}</pre>
+        </div>
+
+        <p>
+          The badge is now a switch over that answer. It formats the value behind a gate it is
+          told about, and it decides nothing about which gate that is. The precedence exists once,
+          in the walk.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Pages/QuestRequirementBadge.cs</span><span>For</span></div>
+          <pre><span class="del">- if (task.RequiredLevel.HasValue</span>
+<span class="del">-     &amp;&amp; !QuestProgressService.IsLevelRequirementMet(task, settings))</span>
+<span class="del">- {</span>
+<span class="del">-     return $"Lv.{task.RequiredLevel}";</span>
+<span class="del">- }</span>
+<span class="del">- // ... and the same again for karma, and again for loyalty ...</span>
+
+<span class="add">+ switch (gate)</span>
+<span class="add">+ {</span>
+<span class="add">+     case QuestGate.PlayerLevel:</span>
+<span class="add">+         return $"Lv.{task.RequiredLevel}";</span>
+<span class="add">+</span>
+<span class="add">+     case QuestGate.ScavKarma:</span>
+<span class="add">+         return $"Rep {task.RequiredScavKarma:0.#}";</span>
+<span class="add">+     // ... one case per gate, no predicate re-read ...</span>
+<span class="add">+ }</span></pre>
+        </div>
+
+        <p>
+          The guard is a coupling test. It walks all ten gates, drives a quest into each one, and
+          asserts that the badge names the gate the walk reported. Reverting the badge to its old
+          hand-copied rule fails it.
+        </p>
+      </section>
+
+      <!-- ===================== LAB A ===================== -->
+      <div class="lab" id="lab-a">
+        <div class="lab-head">
+          <span class="lab-tag">Lab A</span>
+          <h3>Which requirement the badge names</h3>
+          <p class="sub">
+            The shipped rules are
+            <code>QuestProgressService.GetStatus</code> and
+            <code>QuestRequirementBadge.For</code>, pinned by
+            <code>The_badge_names_the_gate_the_engine_stopped_at_at_every_step_of_the_walk</code>
+            and <code>An_owned_required_edition_does_not_mask_the_excluded_one</code>.
+          </p>
+          <p class="sub">
+            The quest below fails more than one gate at once. Move the controls so a later gate
+            clears while an earlier one still holds, then compare the two badges. The old badge
+            asked its own questions in its own order; the new one asks the walk.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">Owns EOD</span>
+            <div class="seg" id="labAEod">
+              <button type="button" data-a-eod="no" aria-pressed="true">no</button>
+              <button type="button" data-a-eod="yes">yes</button>
+            </div>
+            <span class="ctl-label">Owns Unheard</span>
+            <div class="seg" id="labAUnheard">
+              <button type="button" data-a-unheard="no" aria-pressed="true">no</button>
+              <button type="button" data-a-unheard="yes">yes</button>
+            </div>
+            <span class="ctl-label">Quest bars an edition</span>
+            <div class="seg" id="labABars">
+              <button type="button" data-a-bars="none" aria-pressed="true">no</button>
+              <button type="button" data-a-bars="unheard">bars Unheard</button>
+            </div>
+            <span class="ctl-label">Player level</span>
+            <div class="slider-wrap">
+              <input type="range" id="labALevel" min="1" max="30" step="1" value="8" aria-label="Player level">
+              <span class="slider-read" id="labALevelRead">8</span>
+            </div>
+            <span class="ctl-label">Prapor loyalty</span>
+            <div class="seg" id="labALoyalty">
+              <button type="button" data-a-loyalty="1" aria-pressed="true">1</button>
+              <button type="button" data-a-loyalty="2">2</button>
+              <button type="button" data-a-loyalty="3">3</button>
+              <button type="button" data-a-loyalty="4">4</button>
+            </div>
+          </div>
+
+          <div class="gates" id="labAGates"></div>
+
+          <div class="answers">
+            <div class="answer" id="labAOldCard">
+              <h4>The badge before, walking its own copy</h4>
+              <p class="big" id="labAOld">-</p>
+              <p class="why" id="labAOldWhy">-</p>
+            </div>
+            <div class="answer" id="labANewCard">
+              <h4>The badge now, reading the reported gate</h4>
+              <p class="big" id="labANew">-</p>
+              <p class="why" id="labANewWhy">-</p>
+            </div>
+          </div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">Status the walk answers</p>
+              <p class="v" id="labAStatus">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Gate the walk stopped at</p>
+              <p class="v" id="labAGate">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">The two badges</p>
+              <p class="v" id="labAAgree">-</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labAVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== 3 ===================== -->
+      <section id="ch3">
+        <div class="chapter-head">
+          <span class="chapter-num">03</span>
+          <div>
+            <h2>One bool for two edition rules</h2>
+            <p class="kicker">
+              A quest can demand one edition and bar another, and the answer was a single bool.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          <code>IsEditionRequirementMet</code> reads two independent facts. A quest can require an
+          edition the account must own, and it can bar an edition the account must not own. Twelve
+          published quests require Edge of Darkness, and one bars The Unheard.
+        </p>
+        <p>
+          The method returned false for either. The badge then asked its own question, found a
+          required edition, and printed its name. A player barred by the excluded edition read
+          <code>EOD</code>, which names an edition they were not missing.
+        </p>
+        <p>
+          The met answer did not change. What changed is that the walk now reports which of the
+          two rules failed. So the badge can say <code>Edition</code> for the excluded case, where
+          neither edition name is the right thing to print.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">Why one bool was not enough</p>
+          <p>
+            Both facts can be true at once. A quest that requires Edge of Darkness and bars The
+            Unheard is barred for an account that owns both. It also passes the rule the badge
+            was reading. The bool said no, and the reason it said no was not the reason the badge
+            reported.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== 4 ===================== -->
+      <section id="ch4">
+        <div class="chapter-head">
+          <span class="chapter-num">04</span>
+          <div>
+            <h2>The table nothing loaded</h2>
+            <p class="kicker">
+              Trader names came from a service that nothing started.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The drawer, the badge and the detail lines all show trader names in the app's language.
+          Those names live in the <code>Traders</code> table, which
+          <code>TraderDbService</code> reads. Part 1 called that service and assumed it was
+          loaded.
+        </p>
+        <p>
+          Nothing loaded it. The service reloads itself on
+          <code>DatabaseUpdated</code>, and that event is sent only after an actual download. The
+          only other caller is the in-progress quest dialog, which a player may never open.
+        </p>
+        <p>
+          So every trader name read as the English nickname for the whole session. Korean and
+          Japanese users saw English. Then, the first time an hourly update landed, the names
+          changed under the player mid-session.
+        </p>
+        <p>
+          The quest load now loads the traders first, before the rows that reference them. It is
+          two lines, and it is the kind of defect no unit test finds: every test that needed
+          trader data loaded it itself.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/QuestDbService.cs</span><span>LoadQuestsAsync</span></div>
+          <pre>    <span class="cmt">// 5a. The Traders table before the requirement rows, because each row is</span>
+    <span class="cmt">// stamped with the trader's published NormalizedName as it is read.</span>
+<span class="add">+   await TraderDbService.Instance.LoadTradersAsync();</span>
+
+    <span class="cmt">// 5b. The loyalty requirement rows.</span>
+    await LoadQuestTraderRequirementsAsync(
+        connection,
+        questLookup,
+<span class="add">+       id =&gt; TraderDbService.Instance.GetTraderById(id)?.NormalizedName);</span></pre>
+        </div>
+      </section>
+
+      <!-- ===================== 5 ===================== -->
+      <section id="ch5">
+        <div class="chapter-head">
+          <span class="chapter-num">05</span>
+          <div>
+            <h2>Dropping a row fails open</h2>
+            <p class="kicker">
+              A guard that discards bad data has to ask what discarding costs.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Part 1 dropped a requirement row whose trader id was empty, whose nickname was empty, or
+          whose level was below 1. The reasoning was that such a row could never be matched to an
+          entered level, so keeping it would lock the quest for good.
+        </p>
+        <p>
+          That reasoning holds for the id and for the level. It does not hold for the nickname.
+          The gate compares the trader id; the nickname is a display value. Dropping the row
+          removes a gate the game still applies, so the quest becomes available to everybody.
+        </p>
+        <p>
+          A guard has two directions to fail in. Failing closed locks a quest the player could
+          take. Failing open shows a quest the game locks, which is the defect this whole phase
+          exists to remove. A blank nickname now keeps the row and falls back for the name.
+        </p>
+        <p>
+          A published level above the app's ceiling is the same question with a different answer.
+          Keeping it locks the quest behind a level no profile can hold. Dropping it un-gates the
+          quest. It is kept, because the gate is right and the input is what has fallen behind. It gets a
+          warning of its own, so the publish that produces it is visible in the log.
+        </p>
+
+        <div class="note">
+          <p class="note-label">The rule these three rows follow</p>
+          <p>
+            Drop a row only when keeping it would lock a quest that nothing can unlock. Keep it
+            whenever dropping it would open a quest the game keeps shut. The two dropped cases are
+            the empty trader id and the level below 1, and both are unmatchable by construction.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== LAB B ===================== -->
+      <div class="lab" id="lab-b">
+        <div class="lab-head">
+          <span class="lab-tag">Lab B</span>
+          <h3>What the loader keeps</h3>
+          <p class="sub">
+            The shipped rule is
+            <code>QuestDbService.AttachQuestTraderRequirementsAsync</code>, pinned by
+            <code>A_row_with_no_nickname_is_kept_so_the_quest_stays_gated</code> and
+            <code>A_level_above_the_apps_ceiling_is_kept_and_warned_about</code>.
+          </p>
+          <p class="sub">
+            Each row below is a published row with one field damaged. Read the fate, then read
+            what the quest does. The question a guard has to answer is not "is this row good" but
+            "which way does discarding it fail".
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">The damaged field</span>
+            <div class="seg" id="labBCase">
+              <button type="button" data-b-case="nickname" aria-pressed="true">no nickname</button>
+              <button type="button" data-b-case="ceiling">level above the ceiling</button>
+              <button type="button" data-b-case="id">no trader id</button>
+              <button type="button" data-b-case="zero">level below 1</button>
+            </div>
+            <span class="ctl-label">The loader</span>
+            <div class="seg" id="labBRule">
+              <button type="button" data-b-rule="before" data-tone="bad" aria-pressed="true">before this review</button>
+              <button type="button" data-b-rule="after" data-tone="good">after this review</button>
+            </div>
+          </div>
+
+          <div id="labBRows"></div>
+
+          <div class="answers">
+            <div class="answer" id="labBQuestCard">
+              <h4>The quest, on a profile that entered nothing</h4>
+              <p class="big" id="labBQuest">-</p>
+              <p class="why" id="labBQuestWhy">-</p>
+            </div>
+            <div class="answer" id="labBDrawerCard">
+              <h4>The drawer</h4>
+              <p class="big" id="labBDrawer">-</p>
+              <p class="why" id="labBDrawerWhy">-</p>
+            </div>
+          </div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">The row</p>
+              <p class="v" id="labBFate">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Direction of the failure</p>
+              <p class="v" id="labBDirection">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Warning in the log</p>
+              <p class="v" id="labBWarn">-</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labBVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== 6 ===================== -->
+      <section id="ch6">
+        <div class="chapter-head">
+          <span class="chapter-num">06</span>
+          <div>
+            <h2>One order, in three places</h2>
+            <p class="kicker">
+              The badge, the detail lines and the first-unmet rule each sorted for themselves.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          A quest can name several traders. Collector names seven. Something has to decide which
+          one the badge points at, and in what order the detail pane lists them. The rule is the
+          quest's own trader first, then the game's trader order, then the nickname.
+        </p>
+        <p>
+          Part 1 wrote that rule three times. <code>FirstUnmetTraderLoyalty</code> ranked as it
+          scanned. The detail pane sorted its own copy with a LINQ chain. The loader ordered its
+          SQL by trader name, which was a fourth, weaker version of the same intent.
+        </p>
+        <p>
+          Three copies of an ordering rule is three chances for the badge to name one trader while
+          the list under it puts another first. The player reads a badge that says Jaeger and a
+          list whose first line says Therapist. There is no way to tell which one to act on.
+        </p>
+        <p>
+          The rule now runs once, at load. <code>SortIntoBadgeOrder</code> leaves each quest's
+          rows in badge order as they are read, and every consumer is a plain walk over that
+          order. <code>FirstUnmetTraderLoyalty</code> became "the first unmet entry".
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/QuestProgressService.cs</span><span>FirstUnmetTraderLoyalty</span></div>
+          <pre>internal static QuestTraderRequirement? FirstUnmetTraderLoyalty(
+    TarkovTask task, ProfileSettingsSnapshot settings)
+{
+    if (!task.HasTraderLoyaltyRequirements) return null;
+
+<span class="del">-   QuestTraderRequirement? best = null;</span>
+<span class="del">-   var bestRank = int.MaxValue;</span>
+<span class="del">-   // ... rank each unmet row, prefer the giver, break ties by name ...</span>
+
+    foreach (var requirement in task.TraderLoyaltyRequirements!)
+    {
+<span class="add">+       // The list is already in badge order, so the first unmet row IS the answer.</span>
+<span class="add">+       if (!IsTraderLoyaltyMet(requirement, settings)) return requirement;</span>
+    }
+
+    return null;
+}</pre>
+        </div>
+
+        <p>
+          Sorting at load also needs the trader's normalized name, which is what the order is
+          written in. Each row is stamped with it as it is read. A reader must never derive it
+          from the nickname: lower casing gives "btr driver" for BTR Driver, and the published
+          name is "btr-driver".
+        </p>
+      </section>
+
+      <!-- ===================== LAB C ===================== -->
+      <div class="lab" id="lab-c">
+        <div class="lab-head">
+          <span class="lab-tag">Lab C</span>
+          <h3>Three consumers, one answer</h3>
+          <p class="sub">
+            The shipped rule is <code>QuestDbService.SortIntoBadgeOrder</code>, pinned by
+            <code>The_badge_reads_the_loader_sorted_order_not_the_order_the_rows_arrived_in</code>
+            and <code>QuestRequirementLinesTests</code>.
+          </p>
+          <p class="sub">
+            The quest is Thirsty - Hounds, given by Jaeger, needing Jaeger, Skier and Therapist at
+            2. Change the order the database returns the rows in. With the rule in three places,
+            watch which consumer moves.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">The rule lives</span>
+            <div class="seg" id="labCWhere">
+              <button type="button" data-c-where="each" data-tone="bad" aria-pressed="true">in each consumer</button>
+              <button type="button" data-c-where="load" data-tone="good">once, at load</button>
+            </div>
+            <span class="ctl-label">Order the rows arrive in</span>
+            <div class="seg" id="labCArrival">
+              <button type="button" data-c-arrival="name" aria-pressed="true">by nickname</button>
+              <button type="button" data-c-arrival="id">by trader id</button>
+              <button type="button" data-c-arrival="reverse">reversed</button>
+            </div>
+            <span class="ctl-label">Jaeger entered at</span>
+            <div class="seg" id="labCJaeger">
+              <button type="button" data-c-jaeger="1" aria-pressed="true">1</button>
+              <button type="button" data-c-jaeger="2">2</button>
+            </div>
+          </div>
+
+          <div class="consumers" id="labCConsumers"></div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">The badge names</p>
+              <p class="v" id="labCBadge">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">First line of the detail pane</p>
+              <p class="v" id="labCFirst">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">The three consumers</p>
+              <p class="v" id="labCAgree">-</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labCVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== 7 ===================== -->
+      <section id="ch7">
+        <div class="chapter-head">
+          <span class="chapter-num">07</span>
+          <div>
+            <h2>The value that gave away its store</h2>
+            <p class="kicker">
+              An immutable type with one cast between a caller and its backing dictionary.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          <code>TraderLoyaltyLevels</code> exists to give the settings record a member it can
+          compare by value. It holds a <code>SortedDictionary</code> and exposes the entries as
+          <code>IReadOnlyCollection</code>.
+        </p>
+        <p>
+          The declared type is read only. The runtime type is not. A caller could cast the result
+          back to <code>IDictionary</code> and add, clear or retarget entries in the value's own
+          store.
+        </p>
+        <p>
+          The worst target is <code>Empty</code>, which is a single shared static. Every snapshot
+          built from <code>Defaults</code> carries that same instance. One mutation through a cast
+          would corrupt the loyalty of every profile in the process, including profiles that had
+          not been loaded yet.
+        </p>
+        <p>
+          <code>Entries</code> returns a copy now. It is at most eleven pairs, built once per
+          published fan-out. The clamp moved into the type at the same time, so
+          <code>With</code> and <code>From</code> are the only doors in and both bound the level.
+          The snapshot's read no longer clamps for itself.
+        </p>
+
+        <div class="note">
+          <p class="note-label">Two kinds of immutable</p>
+          <p>
+            A type is not immutable because its fields are private. It is immutable when nothing
+            it hands out can be written through. The first kind is a convention, and the second is
+            a property.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== 8 ===================== -->
+      <section id="ch8">
+        <div class="chapter-head">
+          <span class="chapter-num">08</span>
+          <div>
+            <h2>What stayed open, and why</h2>
+            <p class="kicker">
+              Four findings refuted, and two decisions that chose a process over a mechanism.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Four findings did not survive re-verification. One was already fixed by an earlier pass
+          in the same run. One proposed a fix that would have left twenty-eight tooltips in the
+          wrong language. One would have deleted the only signal that arrives when the loyalty
+          fan-out is empty, which is the case part 1 added it for. One was a confirmed no-op: the
+          hideout page names two traders, and both are in the roster already.
+        </p>
+        <p>
+          Two decisions went to the author and came back choosing a process guarantee over a
+          mechanical one. Both are recorded with what they leave open, because a process guarantee
+          holds only as long as somebody keeps it.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">The loyalty ceiling stays an app constant</p>
+          <p>
+            The highest level a profile can hold is four, in the app. A publish that asks for five
+            reaches installed builds without an app release. Those builds show the quest locked
+            behind a stepper that stops at four. A content test fails on the publish PR, so
+            the guarantee is that CI runs and somebody reads it. The loader now warns at load as
+            well, which is the second place that failure becomes visible.
+          </p>
+        </div>
+
+        <div class="note is-wrong">
+          <p class="note-label">Six copies of TableExistsAsync</p>
+          <p>
+            The same helper body is in six database services, and a second one is in three of
+            them. Collapsing them was declined in favour of an issue,
+            <code>josephjang/TarkovHelper#56</code>, cross-referenced from a comment at the
+            duplication site. The seventh copy gets written by whoever adds the next service, and
+            the issue is the only thing standing between now and that.
+          </p>
+        </div>
+
+        <p>
+          Both are defensible. Neither is free. The difference between them and every other fix in
+          this review is that the rest made the mistake impossible, and these two made it visible.
+        </p>
+      </section>
+
+      <!-- ===================== QUIZ ===================== -->
+      <section id="quiz">
+        <div class="chapter-head">
+          <span class="chapter-num">09</span>
+          <div>
+            <h2>Comprehension gate</h2>
+            <p class="kicker">
+              There are eight questions. Each one needs the reasoning, and not the words. The
+              approval checklist below opens when all eight answers are correct. Every answer
+              gives an explanation, so you can read the chapter again.
+            </p>
+          </div>
+        </div>
+
+        <div class="quiz-intro">
+          <div class="quiz-score" id="quizScore">0/8</div>
+          <div>
+            <strong>Every question here is about a rule that had more than one copy.</strong>
+            <p style="margin:4px 0 0;color:#c2c2c2;">
+              Questions 4 and 5 are the important ones. Question 4 is a guard that failed in the
+              open direction. Question 5 is the defect a whole session of the app would have
+              shown. If you cannot answer them, you did not review this change.
+            </p>
+          </div>
+        </div>
+
+        <div id="quizList"></div>
+
+        <div class="gate is-locked" id="gate">
+          <h3 id="gateTitle">Approval checklist: locked</h3>
+          <p id="gateBody">Answer all eight questions correctly to unlock the reviewer checklist.</p>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          Sources. The product decision is
+          <code>docs/decisions/feature-quest-loyalty-gating.md</code>. The technical design is
+          <code>docs/decisions/feature-quest-loyalty-gating.spec.md</code>, which this PR extends
+          with four appended decisions. Part 1 of this guide is
+          <code>docs/2026-09-quest-loyalty-gating-code-guide.html</code>, and the data both rest on
+          arrived in <code>docs/2026-08-quest-data-1-1-refresh-code-guide.html</code>.
+        </p>
+        <p>
+          The labs obey the same decision logic as the code, and they use the rows and the numbers
+          of the published 1.1.0 database. But they are examples, and they are not the released
+          code. The released behaviour is pinned by <code>QuestRequirementBadgeTests</code>,
+          <code>QuestStatusLoyaltyTests</code>, <code>QuestDbServiceLoyaltyReadTests</code>,
+          <code>QuestRequirementLinesTests</code>, <code>TraderLoyaltyLevelsTests</code>,
+          <code>TraderLoyaltyPanelTests</code>, <code>ProfileDrawerFitTests</code>,
+          <code>MainWindowTeardownTests</code> and, end to end,
+          <code>QuestLoyaltyE2ETests</code>.
+        </p>
+      </footer>
+    </main>
+  </div>
+  <script>
+  (function () {
+    "use strict";
+
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+
+    function bindSegment(root, attr, onPick) {
+      var buttons = Array.prototype.slice.call(root.querySelectorAll("[" + attr + "]"));
+      buttons.forEach(function (b) {
+        b.addEventListener("click", function () {
+          buttons.forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+          onPick(b.getAttribute(attr));
+        });
+      });
+    }
+
+    function say(node, tone, title, body) {
+      node.setAttribute("data-tone", tone);
+      node.innerHTML = "";
+      node.appendChild(el("b", null, title));
+      node.appendChild(document.createTextNode(body));
+    }
+
+    function setTone(node, attr, value) { node.setAttribute(attr, value); }
+
+    /* ============================================================
+       Shared. The traders these labs name, and the game's order.
+       ============================================================ */
+
+    var PRAPOR = "54cb50c76803fa8b248b4571";
+    var THERAPIST = "54cb57776803fa99248b456e";
+    var SKIER = "58330581ace78e27b8b10cee";
+    var JAEGER = "5c0647fdd443bc2504c2d371";
+
+    var NAME = {};
+    NAME[PRAPOR] = "Prapor";
+    NAME[THERAPIST] = "Therapist";
+    NAME[SKIER] = "Skier";
+    NAME[JAEGER] = "Jaeger";
+
+    var NORMALIZED = {};
+    NORMALIZED[PRAPOR] = "prapor";
+    NORMALIZED[THERAPIST] = "therapist";
+    NORMALIZED[SKIER] = "skier";
+    NORMALIZED[JAEGER] = "jaeger";
+
+    /* TraderDbService.DisplayRank. */
+    var DISPLAY_ORDER = [
+      "prapor", "therapist", "fence", "skier", "peacekeeper", "mechanic", "ragman", "jaeger",
+      "ref", "lightkeeper", "btr-driver"
+    ];
+
+    function displayRank(normalizedName) {
+      if (!normalizedName) return Number.MAX_SAFE_INTEGER;
+      var i = DISPLAY_ORDER.indexOf(String(normalizedName).toLowerCase());
+      return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+    }
+
+    var MAX_LOYALTY = 4;    /* SettingsService.MaxTraderLoyaltyLevel */
+    var DEFAULT_LOYALTY = 1;
+
+    function levelOf(levels, traderId) {
+      return Object.prototype.hasOwnProperty.call(levels, traderId)
+        ? levels[traderId] : DEFAULT_LOYALTY;
+    }
+
+    /* ============================================================
+       LAB A. GetStatus reporting the gate it stopped at, against a
+       badge that re-walks its own copy of the order.
+       ============================================================ */
+
+    var labA = { eod: "no", unheard: "no", bars: "none", level: 8, loyalty: 1 };
+
+    var labAGates = document.getElementById("labAGates");
+    var labALevel = document.getElementById("labALevel");
+    var labALevelRead = document.getElementById("labALevelRead");
+    var labAOld = document.getElementById("labAOld");
+    var labANew = document.getElementById("labANew");
+    var labAOldWhy = document.getElementById("labAOldWhy");
+    var labANewWhy = document.getElementById("labANewWhy");
+    var labAOldCard = document.getElementById("labAOldCard");
+    var labANewCard = document.getElementById("labANewCard");
+    var labAStatus = document.getElementById("labAStatus");
+    var labAGate = document.getElementById("labAGate");
+    var labAAgree = document.getElementById("labAAgree");
+    var labAVerdict = document.getElementById("labAVerdict");
+
+    /* The quest: requires EOD, may bar Unheard, level 12, Prapor loyalty 2. */
+    function labAQuest() {
+      return {
+        trader: "Prapor",
+        requiredEdition: "eod",
+        excludedEdition: labA.bars === "unheard" ? "unheard" : null,
+        minLevel: 12,
+        loyalty: [{ traderId: PRAPOR, name: "Prapor", level: 2 }]
+      };
+    }
+
+    /* QuestProgressService.GetStatus, reporting the gate. The order below IS the
+       precedence, and the only statement of it. */
+    function walk(q, s) {
+      if (q.requiredEdition === "eod" && !s.eod) {
+        return { status: "Unavailable", gate: "RequiredEdition" };
+      }
+      if (q.excludedEdition === "unheard" && s.unheard) {
+        return { status: "Unavailable", gate: "ExcludedEdition" };
+      }
+      if (s.level < q.minLevel) return { status: "LevelLocked", gate: "PlayerLevel" };
+      for (var i = 0; i < q.loyalty.length; i++) {
+        if (levelOf(s.levels, q.loyalty[i].traderId) < q.loyalty[i].level) {
+          return { status: "LevelLocked", gate: "TraderLoyalty" };
+        }
+      }
+      return { status: "Active", gate: "None" };
+    }
+
+    /* The badge AFTER: a switch over the gate the walk reported. */
+    function badgeFromGate(q, s, gate) {
+      switch (gate) {
+        case "PlayerLevel": return "Lv." + q.minLevel;
+        case "TraderLoyalty": {
+          for (var i = 0; i < q.loyalty.length; i++) {
+            var r = q.loyalty[i];
+            if (levelOf(s.levels, r.traderId) < r.level) {
+              return r.name.toLowerCase() === q.trader.toLowerCase()
+                ? "LL" + r.level : r.name + " LL" + r.level;
+            }
+          }
+          return null;
+        }
+        case "RequiredEdition": return "EOD";
+        case "ExcludedEdition": return "Edition";
+        default: return null;
+      }
+    }
+
+    /* The badge BEFORE: its own walk, in its own order. It asked the edition
+       question as one bool, and it asked level before loyalty with no tie to the
+       engine's order. */
+    function badgeByItsOwnWalk(q, s) {
+      var editionMet =
+        !(q.requiredEdition === "eod" && !s.eod)
+        && !(q.excludedEdition === "unheard" && s.unheard);
+      if (!editionMet) {
+        // One bool for two rules: it found a required edition and printed its name.
+        if (q.requiredEdition === "eod") return "EOD";
+        return "Edition";
+      }
+      if (s.level < q.minLevel) return "Lv." + q.minLevel;
+      for (var i = 0; i < q.loyalty.length; i++) {
+        var r = q.loyalty[i];
+        if (levelOf(s.levels, r.traderId) < r.level) {
+          return r.name.toLowerCase() === q.trader.toLowerCase()
+            ? "LL" + r.level : r.name + " LL" + r.level;
+        }
+      }
+      return null;
+    }
+
+    function labASettings() {
+      var levels = {};
+      levels[PRAPOR] = labA.loyalty;
+      return { eod: labA.eod === "yes", unheard: labA.unheard === "yes", level: labA.level, levels: levels };
+    }
+
+    function renderLabA() {
+      var q = labAQuest();
+      var s = labASettings();
+      var w = walk(q, s);
+
+      labALevelRead.textContent = String(labA.level);
+
+      var steps = [
+        { name: "required edition", gate: "RequiredEdition",
+          value: q.requiredEdition ? "needs EOD, owns " + (s.eod ? "EOD" : "nothing") : "none" },
+        { name: "excluded edition", gate: "ExcludedEdition",
+          value: q.excludedEdition ? "bars Unheard, owns " + (s.unheard ? "Unheard" : "nothing") : "none" },
+        { name: "player level", gate: "PlayerLevel", value: s.level + " of " + q.minLevel },
+        { name: "trader loyalty", gate: "TraderLoyalty",
+          value: "Prapor " + levelOf(s.levels, PRAPOR) + " of 2" }
+      ];
+
+      labAGates.innerHTML = "";
+      var stopped = false;
+      steps.forEach(function (step, i) {
+        var row = el("div", "grow");
+        row.appendChild(el("span", "gn", String(i + 1).padStart(2, "0")));
+        row.appendChild(el("span", null, step.name));
+        row.appendChild(el("span", "gv", step.value));
+        if (stopped) row.setAttribute("data-state", "skip");
+        else if (w.gate === step.gate) { row.setAttribute("data-state", "stop"); stopped = true; }
+        else row.setAttribute("data-state", "pass");
+        labAGates.appendChild(row);
+      });
+
+      var oldBadge = badgeByItsOwnWalk(q, s);
+      var newBadge = badgeFromGate(q, s, w.gate);
+      if (oldBadge === null) oldBadge = w.status === "Active" ? "Active" : w.status;
+      if (newBadge === null) newBadge = w.status === "Active" ? "Active" : w.status;
+
+      labAOld.textContent = oldBadge;
+      labANew.textContent = newBadge;
+      labAStatus.textContent = w.status;
+      labAGate.textContent = w.gate;
+
+      var agree = oldBadge === newBadge;
+      labAAgree.textContent = agree ? "agree" : "disagree";
+      setTone(labAOldCard, "data-verdict", agree ? "right" : "wrong");
+      setTone(labANewCard, "data-verdict", "right");
+
+      labAOldWhy.textContent = agree
+        ? "It reached the same answer here, by asking its own questions."
+        : "It asked the edition question as one bool, found the required edition and printed its name.";
+      labANewWhy.textContent = "It formats the gate the walk reported: " + w.gate + ".";
+
+      if (!agree) {
+        say(labAVerdict, "bad", "The two badges disagree. ",
+          "The walk stopped at " + w.gate + ", and the old badge says " + oldBadge
+          + ". The player owns the edition the quest demands, and is barred by the one it bars. "
+          + "Naming EOD points at a requirement they have already met.");
+      } else if (w.gate === "None") {
+        say(labAVerdict, "good", "Active. ",
+          "Every gate passed, so there is no requirement to name and both badges say the status.");
+      } else {
+        say(labAVerdict, "warn", "They agree here. ",
+          "Both name " + w.gate + ". Agreement in one state is what made the old badge look "
+          + "correct: nothing tied its order to the engine's, so it agreed until it did not.");
+      }
+    }
+
+    bindSegment(document.getElementById("labAEod"), "data-a-eod", function (v) {
+      labA.eod = v; renderLabA();
+    });
+    bindSegment(document.getElementById("labAUnheard"), "data-a-unheard", function (v) {
+      labA.unheard = v; renderLabA();
+    });
+    bindSegment(document.getElementById("labABars"), "data-a-bars", function (v) {
+      labA.bars = v; renderLabA();
+    });
+    bindSegment(document.getElementById("labALoyalty"), "data-a-loyalty", function (v) {
+      labA.loyalty = Number(v); renderLabA();
+    });
+    labALevel.addEventListener("input", function () {
+      labA.level = Number(labALevel.value); renderLabA();
+    });
+
+    renderLabA();
+
+    /* ============================================================
+       LAB B. Which rows the loader keeps, and which way dropping
+       one fails.
+       ============================================================ */
+
+    var labB = { one: "nickname", rule: "before" };
+
+    var labBRows = document.getElementById("labBRows");
+    var labBQuest = document.getElementById("labBQuest");
+    var labBQuestWhy = document.getElementById("labBQuestWhy");
+    var labBQuestCard = document.getElementById("labBQuestCard");
+    var labBDrawer = document.getElementById("labBDrawer");
+    var labBDrawerWhy = document.getElementById("labBDrawerWhy");
+    var labBDrawerCard = document.getElementById("labBDrawerCard");
+    var labBFate = document.getElementById("labBFate");
+    var labBDirection = document.getElementById("labBDirection");
+    var labBWarn = document.getElementById("labBWarn");
+    var labBVerdict = document.getElementById("labBVerdict");
+
+    var LAB_B_CASES = {
+      nickname: { traderId: PRAPOR, traderName: "", level: 2, label: "TraderName is empty" },
+      ceiling: { traderId: PRAPOR, traderName: "Prapor", level: 5, label: "RequiredLevel is 5" },
+      id: { traderId: "", traderName: "Prapor", level: 2, label: "TraderId is empty" },
+      zero: { traderId: PRAPOR, traderName: "Prapor", level: 0, label: "RequiredLevel is 0" }
+    };
+
+    /* The loader BEFORE: any of the three blanks dropped the row. */
+    function keptBefore(row) {
+      if (!row.traderId || !row.traderName || row.level < 1) return false;
+      return true;
+    }
+
+    /* The loader AFTER: only the unmatchable rows are dropped. */
+    function keptAfter(row) {
+      if (!row.traderId || row.level < 1) return false;
+      return true;
+    }
+
+    function renderLabB() {
+      var row = LAB_B_CASES[labB.one];
+      var kept = labB.rule === "before" ? keptBefore(row) : keptAfter(row);
+      var overCeiling = kept && row.level > MAX_LOYALTY;
+
+      labBRows.innerHTML = "";
+      var card = el("div", "rowcard");
+      card.setAttribute("data-kept", !kept ? "dropped" : (overCeiling ? "warned" : "kept"));
+      card.appendChild(el("span", null,
+        "TraderId=" + (row.traderId ? "prapor" : "''")
+        + "  TraderName='" + row.traderName + "'"
+        + "  RequiredLevel=" + row.level));
+      card.appendChild(el("span", "fate", kept ? (overCeiling ? "kept, warned" : "kept") : "dropped"));
+      labBRows.appendChild(card);
+
+      labBFate.textContent = kept ? (overCeiling ? "kept, warned" : "kept") : "dropped";
+
+      /* On a profile that entered nothing, a kept row at level 2 or more gates. */
+      var gated = kept && row.level >= 2;
+      labBQuest.textContent = gated ? "locked" : "available";
+      setTone(labBQuestCard, "data-verdict", gated ? "right" : "wrong");
+
+      /* The drawer offers a trader for every kept row. */
+      var inDrawer = kept;
+      labBDrawer.textContent = inDrawer ? "offers Prapor" : "offers nobody";
+      setTone(labBDrawerCard, "data-verdict", inDrawer ? "right" : "wrong");
+
+      if (!kept) {
+        labBDirection.textContent = "opens the quest";
+        labBQuestWhy.textContent = "The row is gone, so nothing gates the quest at all.";
+        labBDrawerWhy.textContent = "No row names the trader, so it has no input either.";
+      } else if (overCeiling) {
+        labBDirection.textContent = "locks the quest";
+        labBQuestWhy.textContent =
+          "The row asks for 5 and a profile can hold 4, so no entry clears it.";
+        labBDrawerWhy.textContent = "The input offers 1 to 4, which is the app's own range.";
+      } else {
+        labBDirection.textContent = "none";
+        labBQuestWhy.textContent = "The row gates the quest, which is what the game does.";
+        labBDrawerWhy.textContent = "The name falls back when the nickname is blank.";
+      }
+
+      labBWarn.textContent = !kept ? "unusable row" : (overCeiling ? "above the ceiling" : (row.traderName ? "none" : "no nickname"));
+
+      if (labB.one === "nickname" && labB.rule === "before") {
+        say(labBVerdict, "bad", "Dropped, and the quest opened. ",
+          "The nickname is a display value and the gate compares the trader id, so this row was "
+          + "usable. Dropping it removed a gate the game still applies, which is the failure this "
+          + "phase exists to remove.");
+      } else if (labB.one === "nickname") {
+        say(labBVerdict, "good", "Kept, and the name falls back. ",
+          "The quest stays gated, the drawer still offers the trader, and the name comes from the "
+          + "Traders table or the id.");
+      } else if (labB.one === "ceiling" && labB.rule === "before") {
+        say(labBVerdict, "warn", "Kept, and silent. ",
+          "The row is above the highest level a profile can hold, so the quest is locked for good "
+          + "and nothing in the log says why.");
+      } else if (labB.one === "ceiling") {
+        say(labBVerdict, "good", "Kept, and warned about. ",
+          "Keeping it is right: the gate is correct and the app's ceiling is what has fallen "
+          + "behind. The warning is how that publish becomes visible.");
+      } else if (labB.one === "id") {
+        say(labBVerdict, "good", "Dropped, in both. ",
+          "There is no trader to key an entry under, so no profile could ever clear it. This is "
+          + "the case where dropping is right, and both loaders agree.");
+      } else {
+        say(labBVerdict, "good", "Dropped, in both. ",
+          "Every trader starts at 1, so a requirement below 1 gates nothing and a row carrying "
+          + "one is a parse that lost its level.");
+      }
+    }
+
+    bindSegment(document.getElementById("labBCase"), "data-b-case", function (v) {
+      labB.one = v; renderLabB();
+    });
+    bindSegment(document.getElementById("labBRule"), "data-b-rule", function (v) {
+      labB.rule = v; renderLabB();
+    });
+
+    renderLabB();
+
+    /* ============================================================
+       LAB C. One ordering rule, and what three copies of it do.
+       ============================================================ */
+
+    var labC = { where: "each", arrival: "name", jaeger: 1 };
+
+    var labCConsumers = document.getElementById("labCConsumers");
+    var labCBadge = document.getElementById("labCBadge");
+    var labCFirst = document.getElementById("labCFirst");
+    var labCAgree = document.getElementById("labCAgree");
+    var labCVerdict = document.getElementById("labCVerdict");
+
+    /* Thirsty - Hounds: given by Jaeger, needing Jaeger, Skier and Therapist at 2. */
+    var THIRSTY = { trader: "Jaeger", rows: [
+      { traderId: JAEGER, name: "Jaeger", level: 2 },
+      { traderId: SKIER, name: "Skier", level: 2 },
+      { traderId: THERAPIST, name: "Therapist", level: 2 }
+    ]};
+
+    function arrivalOrder(rows) {
+      var copy = rows.slice();
+      if (labC.arrival === "name") {
+        copy.sort(function (a, b) { return a.name < b.name ? -1 : 1; });
+      } else if (labC.arrival === "id") {
+        copy.sort(function (a, b) { return a.traderId < b.traderId ? -1 : 1; });
+      } else {
+        copy.reverse();
+      }
+      return copy;
+    }
+
+    /* SortIntoBadgeOrder: giver first, then display rank, then nickname. */
+    function badgeOrder(quest, rows) {
+      return rows.slice().sort(function (a, b) {
+        var ga = a.name.toLowerCase() === quest.trader.toLowerCase() ? 0 : 1;
+        var gb = b.name.toLowerCase() === quest.trader.toLowerCase() ? 0 : 1;
+        if (ga !== gb) return ga - gb;
+        var ra = displayRank(NORMALIZED[a.traderId]);
+        var rb = displayRank(NORMALIZED[b.traderId]);
+        if (ra !== rb) return ra - rb;
+        return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1;
+      });
+    }
+
+    function renderLabC() {
+      var levels = {};
+      levels[JAEGER] = labC.jaeger;
+      var arrived = arrivalOrder(THIRSTY.rows);
+      var sortedAtLoad = labC.where === "load" ? badgeOrder(THIRSTY, arrived) : arrived;
+
+      var unmet = function (list) {
+        for (var i = 0; i < list.length; i++) {
+          if (levelOf(levels, list[i].traderId) < list[i].level) return list[i];
+        }
+        return null;
+      };
+
+      /* Three consumers. Before: each applies its own rule, and the first-unmet
+         scan takes the list as it arrived. After: all three read one order. */
+      var badgeRow = labC.where === "load"
+        ? unmet(sortedAtLoad)
+        : unmet(arrived);
+      var detailFirst = labC.where === "load"
+        ? sortedAtLoad[0]
+        : badgeOrder(THIRSTY, arrived)[0];
+      var listOrder = labC.where === "load" ? sortedAtLoad : arrived;
+
+      var consumers = [
+        { name: "the row badge names", value: badgeRow ? badgeRow.name : "nothing" },
+        { name: "the detail pane lists first", value: detailFirst.name },
+        { name: "the rows, in order", value: listOrder.map(function (r) { return r.name; }).join(", ") }
+      ];
+
+      var badgeName = badgeRow ? badgeRow.name : "nothing";
+      var agrees = badgeRow != null && badgeRow.name === detailFirst.name;
+
+      labCConsumers.innerHTML = "";
+      consumers.forEach(function (c, i) {
+        var row = el("div", "consumer");
+        row.setAttribute("data-agrees", (i < 2 && !agrees) ? "no" : "yes");
+        row.appendChild(el("span", "cname", c.name));
+        row.appendChild(el("span", "cval", c.value));
+        labCConsumers.appendChild(row);
+      });
+
+      labCBadge.textContent = badgeName;
+      labCFirst.textContent = detailFirst.name;
+      labCAgree.textContent = agrees ? "agree" : "disagree";
+
+      if (!badgeRow) {
+        say(labCVerdict, "good", "Nothing unmet. ",
+          "Every trader the quest names is entered, so there is no row to name and the order "
+          + "decides nothing.");
+      } else if (!agrees) {
+        say(labCVerdict, "bad", "The badge and the list disagree. ",
+          "The badge says " + badgeName + " and the first line says " + detailFirst.name
+          + ". Both are real requirements, and the player has no way to tell which one to act "
+          + "on. The scan took the rows as the database returned them; the pane sorted its own "
+          + "copy.");
+      } else {
+        say(labCVerdict, "good", "One order, one answer. ",
+          "The badge names " + badgeName + " and the pane lists it first, because both read the "
+          + "order the loader established once.");
+      }
+    }
+
+    bindSegment(document.getElementById("labCWhere"), "data-c-where", function (v) {
+      labC.where = v; renderLabC();
+    });
+    bindSegment(document.getElementById("labCArrival"), "data-c-arrival", function (v) {
+      labC.arrival = v; renderLabC();
+    });
+    bindSegment(document.getElementById("labCJaeger"), "data-c-jaeger", function (v) {
+      labC.jaeger = Number(v); renderLabC();
+    });
+
+    renderLabC();
+
+    /* ============================================================
+       Comprehension gate.
+       ============================================================ */
+
+    var QUESTIONS = [
+      {
+        q: "The badge re-walked the engine's precedence in a hand-copied order. Why did the whole test suite stay green over that?",
+        options: [
+          "The badge had no tests of its own",
+          "The engine tests asserted statuses, which do not move when the order changes, and the badge tests chose settings where only one gate was unmet",
+          "The two orders were generated from one list, so they could not drift",
+          "The badge was only used by the detail pane, which had no tests"
+        ],
+        answer: 1,
+        why: "Neither suite asked the question the defect lives in: does the badge name the gate the walk stopped at. That is now a coupling test which walks all ten gates."
+      },
+      {
+        q: "A quest requires Edge of Darkness and bars The Unheard. The player owns both. What did the old badge print, and why?",
+        options: [
+          "Edition, because the excluded rule is checked first",
+          "N/A, because the badge had no name for that state",
+          "EOD, because the edition check was one bool and the badge then looked for a required edition and printed its name",
+          "Unheard, because that is the edition the player owns"
+        ],
+        answer: 2,
+        why: "The bool said no, and the reason it said no was not the reason the badge reported. The walk now says WHICH of the two rules failed, and the excluded case reads Edition."
+      },
+      {
+        q: "Nothing loaded TraderDbService on a normal launch. What did a player actually see?",
+        options: [
+          "An empty drawer, because the roster comes from that service",
+          "A crash on the first quest that names a trader",
+          "English trader names for the whole session, which then changed mid-session the first time an hourly database update landed",
+          "Trader names that were correct, because the quest rows carry them anyway"
+        ],
+        answer: 2,
+        why: "The service reloads on DatabaseUpdated, which fires only after an actual download. Every test that needed trader data loaded it itself, which is why no test found this."
+      },
+      {
+        q: "A published row has a trader id and a level but no nickname. Why is it kept rather than dropped?",
+        options: [
+          "The nickname is required by the drawer, so dropping it would empty the roster",
+          "Dropping it fails OPEN: the gate compares the trader id, so the row is usable, and removing it un-gates a quest the game still gates",
+          "Keeping it is cheaper than the check that would drop it",
+          "The publisher guarantees the nickname is never blank"
+        ],
+        answer: 1,
+        why: "A guard has two directions to fail in. Drop a row only when keeping it would lock a quest nothing can unlock. Keep it whenever dropping it would open a quest the game keeps shut."
+      },
+      {
+        q: "A published requirement asks for loyalty level 5, above the app's ceiling of 4. It is kept. What does that cost, and what makes the cost visible?",
+        options: [
+          "Nothing. The gate clamps the requirement to 4 before comparing",
+          "The quest is locked for good on that build, and a load-time warning plus a content test on the publish PR are what surface it",
+          "The drawer grows a fifth button, so the player can clear it",
+          "The row is rejected by the database schema before it ships"
+        ],
+        answer: 1,
+        why: "Keeping it is right: the gate is correct and the input is what has fallen behind. This is one of the two decisions that chose a process guarantee over a mechanical one."
+      },
+      {
+        q: "The badge ordering rule existed in three places. What is the observable consequence of that, beyond the duplication itself?",
+        options: [
+          "The list renders more slowly, because it sorts three times",
+          "The badge can name one trader while the first line of the detail pane names another. The player cannot tell which to act on",
+          "The rows are stored in the wrong order in the database",
+          "The roster in the drawer comes out in a different order"
+        ],
+        answer: 1,
+        why: "Lab C drives it. The rule now runs once at load, so FirstUnmetTraderLoyalty is 'the first unmet entry' and the pane is a plain projection of the same order."
+      },
+      {
+        q: "TraderLoyaltyLevels.Entries returned its own SortedDictionary behind a read-only interface. What is the worst case?",
+        options: [
+          "A caller sorts the entries differently and the drawer order changes",
+          "The value compares unequal to itself after enumeration",
+          "One cast mutates the shared Empty instance, corrupting the loyalty of every profile built from Defaults for the life of the process",
+          "Enumerating it twice returns different results"
+        ],
+        answer: 2,
+        why: "The declared type was read only and the runtime type was not. A type is immutable when nothing it hands out can be written through, which is a property rather than a convention."
+      },
+      {
+        q: "Four findings were refuted rather than fixed. What does refuting one require here?",
+        options: [
+          "A judgement that the fix is not worth its cost",
+          "Proof: that it is already fixed, that the fix would break something named, or that it is a confirmed no-op",
+          "Agreement from the author that it is out of scope",
+          "That no test covers the code in question"
+        ],
+        answer: 1,
+        why: "One was already fixed by an earlier pass; one would have left 28 tooltips in the wrong language; one would have deleted the only signal sent when the loyalty fan-out is empty; one was a no-op because both hideout traders are already in the roster."
+      }
+    ];
+
+    var CHECKLIST = [
+      "GetStatus reports the gate it stopped at, and the badge is a switch over that answer with no predicate of its own.",
+      "The edition walk distinguishes the required rule from the excluded rule, and the excluded case reads Edition.",
+      "The quest load loads the Traders table before the rows that reference it.",
+      "A row with no nickname or a level above the ceiling is kept and warned about; only an empty id or a level below 1 is dropped.",
+      "SortIntoBadgeOrder runs once at load, each row carries its published NormalizedName, and no consumer re-sorts.",
+      "TraderLoyaltyLevels.Entries returns a copy, and Clamp is the one door every level goes through.",
+      "The drawer's loyalty controls are a passive panel; MainWindow keeps the subscriptions and the matching detaches.",
+      "The two process-guarantee decisions are recorded with what they leave open, and issue #56 is cross-referenced from the code."
+    ];
+
+    var answered = {};
+    var quizList = document.getElementById("quizList");
+    var quizScore = document.getElementById("quizScore");
+    var railLabel = document.getElementById("railGateLabel");
+    var railHint = document.getElementById("railGateHint");
+    var railBar = document.getElementById("railGateBar");
+
+    QUESTIONS.forEach(function (item, qi) {
+      var card = el("div", "q");
+
+      var head = el("div", "q-head");
+      head.appendChild(el("span", "q-num", String(qi + 1).padStart(2, "0")));
+      head.appendChild(el("p", "q-text", item.q));
+      card.appendChild(head);
+
+      var why = el("div", "q-why");
+
+      var opts = el("div", "q-opts");
+      item.options.forEach(function (text, oi) {
+        var label = el("label", "opt");
+        var input = document.createElement("input");
+        input.type = "radio";
+        input.name = "q" + qi;
+        input.value = String(oi);
+        label.appendChild(input);
+        label.appendChild(el("span", null, text));
+        opts.appendChild(label);
+
+        input.addEventListener("change", function () {
+          answered[qi] = oi;
+          var correct = oi === item.answer;
+          card.setAttribute("data-state", correct ? "right" : "wrong");
+
+          Array.prototype.forEach.call(opts.children, function (child, ci) {
+            child.classList.remove("is-right", "is-wrong");
+            if (ci === item.answer && (correct || ci === oi)) child.classList.add("is-right");
+            if (ci === oi && !correct) child.classList.add("is-wrong");
+          });
+
+          why.innerHTML = "";
+          var p = el("p");
+          var word = el("span", "verdict-word", correct ? "Correct. " : "Not quite. ");
+          p.appendChild(word);
+          p.appendChild(document.createTextNode(item.why));
+          why.appendChild(p);
+
+          updateGate();
+        });
+      });
+      card.appendChild(opts);
+      card.appendChild(why);
+
+      quizList.appendChild(card);
+    });
+
+    var gate = document.getElementById("gate");
+    var gateTitle = document.getElementById("gateTitle");
+    var gateBody = document.getElementById("gateBody");
+
+    function updateGate() {
+      var correct = 0;
+      QUESTIONS.forEach(function (item, i) { if (answered[i] === item.answer) correct++; });
+
+      quizScore.textContent = correct + "/" + QUESTIONS.length;
+      railHint.textContent = correct + " of " + QUESTIONS.length + " correct";
+      railBar.style.width = (100 * correct / QUESTIONS.length) + "%";
+
+      if (correct === QUESTIONS.length) {
+        railLabel.textContent = "Gate open";
+        gate.className = "gate is-open";
+        gateTitle.textContent = "Approval checklist: unlocked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Eight of eight. You know which rule each fix collapsed. Now compare the changes with "
+          + "it. Check these items before you approve:"));
+        var ul = el("ul");
+        CHECKLIST.forEach(function (line) { ul.appendChild(el("li", null, line)); });
+        gateBody.appendChild(ul);
+        var pre = el("pre", "approval",
+          "Reviewed the trader loyalty deep review on PR #57.\n" +
+          "Guide: docs/2026-09-quest-loyalty-gating-deep-review-guide.html\n" +
+          "Comprehension gate: 8/8\n" +
+          "Checklist items examined:\n" +
+          "1. The reported gate, and the badge as a formatter over it.\n" +
+          "2. The two edition rules, told apart.\n" +
+          "3. The Traders load, before the rows that reference it.\n" +
+          "4. Which rows are dropped, and which way dropping fails.\n" +
+          "5. The ordering rule, applied once at load.\n" +
+          "6. Entries as a copy, and the one clamp.\n" +
+          "7. The passive panel, and the teardown detaches.\n" +
+          "8. The two process guarantees, and what they leave open.\n" +
+          "Read closely: the loyalty ceiling, which CI alone now defends.");
+        gateBody.appendChild(pre);
+      } else {
+        railLabel.textContent = "Gate locked";
+        gate.className = "gate is-locked";
+        gateTitle.textContent = "Approval checklist: locked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Answer all eight questions correctly to open the reviewer checklist. You have "
+          + correct + " of " + QUESTIONS.length
+          + " correct. Each incorrect answer gives an explanation, so read the chapter again."));
+      }
+    }
+
+    updateGate();
+  })();
+  </script>
+</body>
+</html>
