@@ -50,6 +50,12 @@ same PR as the work):
 - Neither (obvious bug fix, mechanical refactor) → no document; the PR body is enough
 - Adding the sibling file mid-flight is expected — just add it.
 
+Once a pair is approved, `/deliver` (or `$deliver` in Codex) sequences the work
+that implements it: a plan file, slices, a code guide, PR A, a deep review on a
+stacked branch, its guide, and PR B. It uses
+`.agents/skills/deliver/references/workflow.md`. Skip it for anything that
+needed no document.
+
 Documents live flat in `docs/decisions/`, are never moved, and are append-only: a
 document on `main` is a finished decision record, and state (in flight / done /
 dropped) belongs to GitHub PRs. Name the documents a PR implements in the PR body.
