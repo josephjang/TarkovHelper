@@ -1,8 +1,9 @@
 # Plan template
 
 Copy to `PLAN-<topic>.md` at the repo root, fill the bracketed parts, and
-delete the parts that do not apply. It is never committed and is deleted at the
-end of the wrap-up.
+delete the parts that do not apply. It is never committed: `/PLAN-*.md` is
+gitignored at the repo root, so the file stays out of `git status` while the run
+is in progress, and it is deleted at the end of the wrap-up.
 
 The template is longer than it looks like it needs to be. Every section below is
 one that was consulted mid-run in the phase this came from; the plan earns its
@@ -13,10 +14,10 @@ means stopping.
 
 # Plan: [topic], from code to merged fixes
 
-Temporary working document. It is never committed (the commit workflow stages by
-explicit path) and it is deleted at the end of the wrap-up. The decisions live in
-`docs/decisions/[name].md` and its spec; this file only sequences the work and
-records what each step needs.
+Temporary working document. It is never committed (`/PLAN-*.md` is gitignored,
+and the commit workflow stages by explicit path) and it is deleted at the end of
+the wrap-up. The decisions live in `docs/decisions/[name].md` and its spec; this
+file only sequences the work and records what each step needs.
 
 ## Starting state ([date])
 
@@ -28,13 +29,17 @@ records what each step needs.
   do not re-derive them.
 - **Baseline, measured before the first edit:** build [N] warnings / [N] errors,
   non-E2E suite [N] passed, E2E [N] passed / [N] skipped.
-- Six steps, two PRs, two guides:
-  1. implement on `[feature-branch]`
-  2. code guide `docs/[YYYY-MM]-[topic]-code-guide.html`
-  3. PR A (feature)
+- Six steps, up to two PRs and two guides:
+  1. implement on `[feature-branch]`, then open PR A as a draft
+  2. code guide `docs/[YYYY-MM]-[topic]-code-guide.html`, citing the draft's
+     number
+  3. PR A (feature): body, then `gh pr ready`
   4. `/deep-review` of PR A, fixes on `fix/[topic]-review-fixes`
   5. deep-review guide `docs/[YYYY-MM]-[topic]-deep-review-guide.html`
   6. PR B (fixes), stacked on PR A
+
+  Steps 5 and 6 exist only if step 4 produced fixes. A review that finds nothing
+  ends the run at the wrap-up, with the outcome recorded in PR A's body.
 
 ## Rules that apply to every step
 
@@ -82,6 +87,9 @@ Exit criteria before step 2:
 - [ ] the spec's "Files touched" matches the diff; a divergence is appended to
       the spec's Technical Decisions, not left silent
 - [ ] working tree clean, every slice committed
+- [ ] PR A open as a draft, so step 2 has a number to cite:
+      `gh pr create --draft --base [base] --head [feature-branch] --title "..."
+      --body "Body follows; see step 3."` (check for an existing PR first)
 
 ## Step 2. Code guide
 
@@ -102,12 +110,13 @@ Verification, all required:
       against the C# behaviour, not the lab's current output
 - [ ] headless render pass at 1440 and 390
 - [ ] `docs/README.md` entry in Korean, matching its neighbours, with the PR
-      number
+      number (the draft opened at the end of step 1, never a guess)
 - [ ] commit on the feature branch
 
 ## Step 3. PR A
 
-[Base, repo, title.] Check for an existing PR first.
+[Repo, title.] The draft is already open from step 1: write its body, then
+`gh pr ready [number]`.
 
 Body checklist:
 
@@ -115,6 +124,8 @@ Body checklist:
 - [ ] Why (in numbers), What changed (one bullet per slice), divergences from
       the spec, Tests (before/after and the fail-first evidence), Verification
       (exact commands), Residuals
+- [ ] names the guide file from step 2, with its checker commands under
+      Verification
 - [ ] no attribution footer
 - [ ] CI green
 
@@ -131,8 +142,8 @@ Preparation:
 - [ ] **a fresh agent session in that worktree**, not this one
 
 Run `/deep-review main...[feature-branch]`. Answer its steering questions.
-If interrupted, re-invoke with the same arguments; it resumes from its
-checkpoint.
+If interrupted, re-invoke with the same arguments in the same worktree; it
+resumes from its checkpoint.
 
 After the report:
 
@@ -143,10 +154,13 @@ After the report:
 - [ ] a fix that reverses a recorded decision appends to the spec
 - [ ] commit (the repo's precedent is one fix commit, clusters in the body)
 - [ ] keep the report for step 5 and the PR B body
+- [ ] no production fixes at all: skip steps 5 and 6, put the review's outcome
+      (angles run or skipped, findings refuted and with what proof) in PR A's
+      body, and go to the wrap-up
 
 ## Step 5. Deep-review guide
 
-`/code-guide fix/[topic]-review-fixes`, file
+Only if step 4 produced fixes. `/code-guide fix/[topic]-review-fixes`, file
 `docs/[YYYY-MM]-[topic]-deep-review-guide.html`, same topic slug so the pair
 sorts together.
 
@@ -154,11 +168,12 @@ sorts together.
       as defect then fix, then what stayed open and why
 - [ ] labs only where a finding changed decision logic; a chapters-only guide is
       a legitimate answer
-- [ ] the same five verifications as step 2
+- [ ] the same verification list as step 2, commit included
 
 ## Step 6. PR B
 
-Create directly (the PR skill always bases on the default branch):
+Only if step 4 produced fixes. Create directly (the PR skill always bases on the
+default branch):
 
     gh pr create --base [feature-branch] --head fix/[topic]-review-fixes \
       --title "..." --body-file <file>
@@ -183,9 +198,9 @@ Merge order: PR A first; confirm PR B's base reads `main` before merging it.
 
 ## Progress
 
-- [ ] 1. implementation
+- [ ] 1. implementation, draft PR A open
 - [ ] 2. code guide
-- [ ] 3. PR A
+- [ ] 3. PR A ready
 - [ ] 4. deep review and fixes
-- [ ] 5. deep-review guide
-- [ ] 6. PR B
+- [ ] 5. deep-review guide (only if step 4 produced fixes)
+- [ ] 6. PR B (only if step 4 produced fixes)
