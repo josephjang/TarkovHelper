@@ -144,3 +144,12 @@ $RECYCLE.BIN/
 nul
 
 _NCrunch*
+
+# =========================
+# Agent working files
+# =========================
+
+# Per-run plan file written by the deliver skill. Anchored to the repo root so
+# an unrelated nested PLAN-*.md stays visible; never committed, deleted at the
+# end of the run.
+/PLAN-*.md
