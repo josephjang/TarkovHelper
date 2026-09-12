@@ -1689,9 +1689,15 @@ namespace TarkovHelper.Pages
             // Get Kappa progress
             var (completed, total, percentage) = KappaProgressIn(pass);
 
-            // Update progress text
-            TxtKappaProgress.Text = $"Prerequisites: ({completed}/{total} completed)";
+            // The section's texts, from the localization service on every rebuild so a language
+            // switch (which rebuilds the pane) repaints them. "Kappa quests", never
+            // "Prerequisites": the thirteen include Collector itself, and a player who had done
+            // its twelve prerequisites read "12/13" here and went looking for the one they had
+            // missed (feature-kappa-collector-1-1.md, R4).
+            TxtKappaProgressHeading.Text = _loc.KappaProgressHeading;
+            TxtKappaProgress.Text = string.Format(_loc.KappaCountFormat, completed, total);
             TxtKappaProgressPercent.Text = $"{percentage}%";
+            BtnShowKappaQuests.Content = _loc.ShowKappaQuests;
 
             // Update progress bar width
             KappaProgressBar.Width = (percentage / 100.0) * (KappaProgressBar.Parent as Grid)?.ActualWidth ?? 0;
@@ -1721,7 +1727,7 @@ namespace TarkovHelper.Pages
             // Create a popup window to show all Kappa required quests
             var popupWindow = new Window
             {
-                Title = "Kappa Required Quests",
+                Title = _loc.KappaProgressHeading,
                 Width = 500,
                 Height = 600,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
@@ -1736,7 +1742,7 @@ namespace TarkovHelper.Pages
             var (completed, total, _) = KappaProgressIn(pass);
             var headerText = new TextBlock
             {
-                Text = $"Kappa Required Quests ({completed}/{total})",
+                Text = string.Format(_loc.KappaQuestListTitle, completed, total),
                 FontSize = 18,
                 FontWeight = FontWeights.SemiBold,
                 Foreground = (Brush)FindResource("AccentBrush"),
