@@ -7,6 +7,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using TarkovHelper.Models;
+using TarkovHelper.Pages.Components;
 using TarkovHelper.Services;
 using TarkovHelper.Services.Settings;
 using TarkovHelper.Windows;
@@ -175,13 +176,7 @@ namespace TarkovHelper.Pages
             return brush;
         }
 
-        // Status brushes
-        private static readonly Brush LockedBrush = new SolidColorBrush(Color.FromRgb(102, 102, 102));
-        private static readonly Brush ActiveBrush = new SolidColorBrush(Color.FromRgb(76, 175, 80));
-        private static readonly Brush DoneBrush = new SolidColorBrush(Color.FromRgb(33, 150, 243));
-        private static readonly Brush FailedBrush = new SolidColorBrush(Color.FromRgb(244, 67, 54));
-        private static readonly Brush LevelLockedBrush = new SolidColorBrush(Color.FromRgb(255, 152, 0)); // Orange for Level Locked
-        private static readonly Brush UnavailableBrush = new SolidColorBrush(Color.FromRgb(158, 158, 158)); // Gray for Unavailable
+        // The status brushes live in QuestStatusBrushes, shared with the Collector page.
 
         public QuestListPage()
         {
@@ -740,7 +735,7 @@ namespace TarkovHelper.Pages
                 TraderInitial = GetTraderInitial(task.Trader),
                 Status = status,
                 StatusText = GetStatusText(status, gate, task, pass),
-                StatusBackground = GetStatusBrush(status),
+                StatusBackground = QuestStatusBrushes.For(status),
                 CompleteButtonVisibility = (status == QuestStatus.Active || status == QuestStatus.Locked || status == QuestStatus.LevelLocked)
                     && status != QuestStatus.Unavailable ? Visibility.Visible : Visibility.Collapsed,
                 IsKappaRequired = task.ReqKappa
@@ -773,7 +768,7 @@ namespace TarkovHelper.Pages
             => RequirementLineViewModel.BuildFor(
                 task, pass.Settings, _loc, TraderDisplayName,
                 metBrush: (Brush)FindResource("TextPrimaryBrush"),
-                unmetBrush: LevelLockedBrush);
+                unmetBrush: QuestStatusBrushes.LevelLocked);
 
         /// <summary>
         /// The badge text for one quest within a pass. A thin adapter over
@@ -793,20 +788,6 @@ namespace TarkovHelper.Pages
             QuestStatus status, QuestGate gate, TarkovTask task, RenderPass pass)
             => QuestRequirementBadge.StatusText(
                 status, gate, task, pass.Settings, TraderDisplayName);
-
-        private static Brush GetStatusBrush(QuestStatus status)
-        {
-            return status switch
-            {
-                QuestStatus.Locked => LockedBrush,
-                QuestStatus.Active => ActiveBrush,
-                QuestStatus.Done => DoneBrush,
-                QuestStatus.Failed => FailedBrush,
-                QuestStatus.LevelLocked => LevelLockedBrush,
-                QuestStatus.Unavailable => UnavailableBrush,
-                _ => Brushes.Gray
-            };
-        }
 
         private void RefreshQuestDisplayNames()
         {
@@ -829,7 +810,7 @@ namespace TarkovHelper.Pages
                 var (status, gate) = StatusIn(pass, vm.Task);
                 vm.Status = status;
                 vm.StatusText = GetStatusText(status, gate, vm.Task, pass);
-                vm.StatusBackground = GetStatusBrush(status);
+                vm.StatusBackground = QuestStatusBrushes.For(status);
                 vm.CompleteButtonVisibility = (status == QuestStatus.Active || status == QuestStatus.Locked || status == QuestStatus.LevelLocked)
                     && status != QuestStatus.Unavailable ? Visibility.Visible : Visibility.Collapsed;
             }
@@ -1397,7 +1378,7 @@ namespace TarkovHelper.Pages
             // used to omit it and read the literal "Level" for every level-locked quest, which
             // said nothing about which of the three requirements was actually holding it.
             TxtDetailStatus.Text = GetStatusText(status, gate, task, pass);
-            DetailStatusBadge.Background = GetStatusBrush(status);
+            DetailStatusBadge.Background = QuestStatusBrushes.For(status);
 
             // Maps
             if (task.Maps != null && task.Maps.Count > 0)
@@ -1455,7 +1436,7 @@ namespace TarkovHelper.Pages
                                 Task = reqTask,
                                 DisplayName = pName,
                                 StatusText = GetStatusText(pStatus, pGate, reqTask, pass),
-                                StatusBackground = GetStatusBrush(pStatus),
+                                StatusBackground = QuestStatusBrushes.For(pStatus),
                                 IsOrItem = false
                             }
                         }
@@ -1488,7 +1469,7 @@ namespace TarkovHelper.Pages
                                         Task = reqTask,
                                         DisplayName = pName,
                                         StatusText = GetStatusText(pStatus, pGate, reqTask, pass),
-                                        StatusBackground = GetStatusBrush(pStatus),
+                                        StatusBackground = QuestStatusBrushes.For(pStatus),
                                         IsOrItem = false
                                     }
                                 }
@@ -1519,7 +1500,7 @@ namespace TarkovHelper.Pages
                             Task = reqTask,
                             DisplayName = pName,
                             StatusText = GetStatusText(pStatus, pGate, reqTask, pass),
-                            StatusBackground = GetStatusBrush(pStatus),
+                            StatusBackground = QuestStatusBrushes.For(pStatus),
                             IsOrItem = !isFirst  // Show "OR" separator for 2nd item onwards
                         });
                         isFirst = false;
@@ -1553,7 +1534,7 @@ namespace TarkovHelper.Pages
                         DisplayName = displayName,
                         TraderName = alt.Trader,
                         StatusText = GetStatusText(altStatus, altGate, alt, pass),
-                        StatusBackground = GetStatusBrush(altStatus)
+                        StatusBackground = QuestStatusBrushes.For(altStatus)
                     };
                 }).ToList();
 
@@ -1723,77 +1704,11 @@ namespace TarkovHelper.Pages
             var pass = CapturePass();
             var kappaQuests = QuestGraphService.Instance.GetKappaQuestsWithStatus(
                 task => IsDoneIn(pass, task));
-
-            // Create a popup window to show all Kappa required quests
-            var popupWindow = new Window
-            {
-                Title = _loc.KappaProgressHeading,
-                Width = 500,
-                Height = 600,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = Window.GetWindow(this),
-                Background = (Brush)FindResource("BackgroundDarkBrush")
-            };
-
-            var scrollViewer = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-            var stackPanel = new StackPanel { Margin = new Thickness(16) };
-
-            // Header
             var (completed, total, _) = KappaProgressIn(pass);
-            var headerText = new TextBlock
-            {
-                Text = string.Format(_loc.KappaQuestListTitle, completed, total),
-                FontSize = 18,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = (Brush)FindResource("AccentBrush"),
-                Margin = new Thickness(0, 0, 0, 16)
-            };
-            stackPanel.Children.Add(headerText);
 
-            // Quest list
-            foreach (var (quest, isCompleted) in kappaQuests)
-            {
-                var (displayName, _, _) = GetLocalizedNames(quest);
-                var questPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 4) };
-
-                // Status indicator
-                var statusIndicator = new TextBlock
-                {
-                    Text = isCompleted ? "✓" : "○",
-                    FontSize = 14,
-                    Foreground = isCompleted ? DoneBrush : (Brush)FindResource("TextSecondaryBrush"),
-                    Width = 24,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-
-                // Quest name
-                var questName = new TextBlock
-                {
-                    Text = displayName,
-                    FontSize = 13,
-                    Foreground = isCompleted ? (Brush)FindResource("TextSecondaryBrush") : (Brush)FindResource("TextPrimaryBrush"),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    TextDecorations = isCompleted ? TextDecorations.Strikethrough : null
-                };
-
-                // Trader
-                var traderText = new TextBlock
-                {
-                    Text = $"  ({quest.Trader})",
-                    FontSize = 11,
-                    Foreground = (Brush)FindResource("TextSecondaryBrush"),
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-
-                questPanel.Children.Add(statusIndicator);
-                questPanel.Children.Add(questName);
-                questPanel.Children.Add(traderText);
-                stackPanel.Children.Add(questPanel);
-            }
-
-            scrollViewer.Content = stackPanel;
-            popupWindow.Content = scrollViewer;
-            popupWindow.ShowDialog();
+            KappaQuestListWindow.Show(
+                Window.GetWindow(this), kappaQuests, completed, total,
+                quest => GetLocalizedNames(quest).DisplayName, _loc);
         }
 
         #endregion
