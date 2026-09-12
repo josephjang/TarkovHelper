@@ -25,7 +25,7 @@ Once installed, the app keeps both itself and its game data up to date automatic
 - **Quests**: browse and search every quest; filter by status, trader, map, Kappa, and faction; see objectives, prerequisites, and follow-ups; get recommendations for what to play next
 - **Hideout**: track station levels and see the items, traders, skills, and other stations each upgrade requires
 - **Items**: one aggregated list of everything your quests and hideout upgrades still need, with FIR (Found in Raid) and non-FIR tracked separately against what you own
-- **Collector**: a dedicated checklist for the Collector quest's items
+- **Collector**: a dedicated checklist for the Collector quest's items, and what still locks it
 - **Map**: interactive maps with quest markers and extracts, including in-raid position tracking
 - **Overlay minimap**: an always-on-top minimap for use while playing, controlled by global hotkeys
 - **Game-log sync**: quest started/completed/failed states and game mode are picked up automatically from the game's log files

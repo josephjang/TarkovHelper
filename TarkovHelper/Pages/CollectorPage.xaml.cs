@@ -56,10 +56,25 @@ namespace TarkovHelper.Pages
             _unlockRefresh = RefreshCoalescer.OnDispatcher(this, RefreshUnlockPanelForSettingsChange);
 
             InitializeComponent();
+            ApplyLocalizedTexts();
             SubscribeServiceEvents();
 
             Loaded += CollectorPage_Loaded;
             Unloaded += CollectorPage_Unloaded;
+        }
+
+        /// <summary>
+        /// The page's own localized labels: the option's text and tooltip. Written once at
+        /// construction and again on a language switch. The stats line is composed in
+        /// <see cref="ApplyFilters"/> and the unlock panel in <see cref="RebuildUnlockPanel"/>,
+        /// both of which the language switch re-runs; the page's other literals (search
+        /// placeholder, combo items, column headers, item detail) stay English by the recorded
+        /// Non-Goal.
+        /// </summary>
+        private void ApplyLocalizedTexts()
+        {
+            ChkIncludePreQuest.Content = _loc.CollectorIncludePrerequisites;
+            ChkIncludePreQuest.ToolTip = _loc.CollectorIncludePrerequisitesTip;
         }
 
         /// <summary>
@@ -242,6 +257,7 @@ namespace TarkovHelper.Pages
         {
             Dispatcher.Invoke(async () =>
             {
+                ApplyLocalizedTexts();
                 await LoadItemsAsync();
                 ApplyFilters();
                 UpdateDetailPanel();
@@ -583,11 +599,15 @@ namespace TarkovHelper.Pages
             var inProgressCount = filteredList.Count(i => i.FulfillmentStatus == ItemFulfillmentStatus.PartiallyFulfilled);
             var includePreQuest = ChkIncludePreQuest.IsChecked == true;
 
-            TxtStats.Text = $"Showing {totalItems} items | " +
-                           $"Total: {totalCount} | " +
-                           $"Fulfilled: {fulfilledCount} | " +
-                           $"In Progress: {inProgressCount}" +
-                           (includePreQuest ? " | Including Pre-Quests" : " | Kappa Quests Only");
+            // The scope names what the list holds: Collector's items, or those plus its
+            // prerequisite quests' items. It used to read "Kappa Quests Only" with the option
+            // off, which under 1.1 names the thirteen flagged quests, a set this page never
+            // lists (feature-kappa-collector-1-1.md, R6).
+            var scope = includePreQuest
+                ? _loc.CollectorScopeWithPrerequisites
+                : _loc.CollectorScopeCollectorOnly;
+            TxtStats.Text = string.Format(
+                _loc.CollectorStatsFormat, totalItems, totalCount, fulfilledCount, inProgressCount, scope);
         }
 
         private async void ChkIncludePreQuest_Changed(object sender, RoutedEventArgs e)
