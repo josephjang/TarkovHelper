@@ -699,20 +699,10 @@ namespace TarkovHelper.Pages
         }
 
         /// <summary>
-        /// The two snapshots one render pass reads: the recorded progress and the profile-scoped
-        /// player settings. Captured ONCE at the top of a pass and threaded through it, so a
-        /// profile publish landing mid-pass cannot render a quest's status from one profile and
-        /// its badge, or the Requirements line under it, from another - the tearing
-        /// <see cref="ProfileSettingsSnapshot"/> exists to make unobservable.
-        /// <see cref="QuestProgressService.GetStatus(TarkovTask, ProgressSnapshot, ProfileSettingsSnapshot)"/>
-        /// takes the same pair for the same reason.
+        /// The snapshots for one pass (see <see cref="RenderPass"/>). Call once per pass, never
+        /// per quest.
         /// </summary>
-        private readonly record struct RenderPass(
-            ProgressSnapshot Progress, ProfileSettingsSnapshot Settings);
-
-        /// <summary>The snapshots for one pass. Call once per pass, never per quest.</summary>
-        private RenderPass CapturePass()
-            => new(_progressService.Snapshot, SettingsService.Instance.ProfileSettings);
+        private RenderPass CapturePass() => RenderPass.Capture(_progressService);
 
         /// <summary>
         /// The status of one quest within a pass, against that pass's snapshots, together with
@@ -724,6 +714,17 @@ namespace TarkovHelper.Pages
             var status = _progressService.GetStatus(task, pass.Progress, pass.Settings, out var gate);
             return (status, gate);
         }
+
+        /// <summary>Whether <paramref name="task"/> is Done within <paramref name="pass"/>.</summary>
+        private bool IsDoneIn(RenderPass pass, TarkovTask task)
+            => StatusIn(pass, task).Status == QuestStatus.Done;
+
+        /// <summary>
+        /// The Kappa count within one pass: the flagged quests, Collector included, against the
+        /// pass's snapshots (see <see cref="QuestGraphService.GetKappaProgress"/>).
+        /// </summary>
+        private (int Completed, int Total, int Percentage) KappaProgressIn(RenderPass pass)
+            => QuestGraphService.Instance.GetKappaProgress(task => IsDoneIn(pass, task));
 
         private QuestViewModel CreateQuestViewModel(TarkovTask task, RenderPass pass)
         {
@@ -1164,23 +1165,36 @@ namespace TarkovHelper.Pages
             QuestListSettings.Instance.DetailPanelWidth = DetailColumn.ActualWidth;
         }
 
+        /// <summary>
+        /// The Kappa gauge beside the status chips, counted from the SAME statuses the chips
+        /// count from: the ones cached on the row view models by the pass
+        /// <see cref="LoadQuests"/> or <see cref="RefreshQuestStatuses"/> captured. It used to
+        /// re-walk every flagged quest against the live singletons here, so during a profile
+        /// switch the gauge could describe one profile while the chips next to it described
+        /// another. Keyed by NormalizedName rather than by task instance, the same key the graph
+        /// service resolves quests under.
+        /// </summary>
         private void UpdateKappaGauge()
         {
-            try
+            var graphService = QuestGraphService.Instance;
+            if (!graphService.IsInitialized)
             {
-                var graphService = QuestGraphService.Instance;
-                var (completed, total, percentage) = graphService.GetCollectorProgress(
-                    normalizedName => _progressService.IsQuestCompleted(normalizedName));
-
-                TxtKappaGauge.Text = $"{completed}/{total}";
-                KappaGaugeBar.Width = (percentage / 100.0) * 120; // 120 is the gauge width
-            }
-            catch
-            {
-                // QuestGraphService not initialized yet
+                // A refresh before the graph is built (a service event ahead of Loaded) has
+                // nothing to count yet; Loaded's own ApplyFilters draws the real number.
                 TxtKappaGauge.Text = "0/0";
                 KappaGaugeBar.Width = 0;
+                return;
             }
+
+            var doneInThisPass = _allQuestViewModels
+                .Where(vm => vm.Status == QuestStatus.Done && !string.IsNullOrEmpty(vm.Task.NormalizedName))
+                .Select(vm => vm.Task.NormalizedName!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var (completed, total, percentage) = graphService.GetKappaProgress(
+                task => doneInThisPass.Contains(task.NormalizedName!));
+
+            TxtKappaGauge.Text = $"{completed}/{total}";
+            KappaGaugeBar.Width = (percentage / 100.0) * 120; // 120 is the gauge width
         }
 
         private void TxtSearch_TextChanged(object sender, TextChangedEventArgs e)
@@ -1398,8 +1412,8 @@ namespace TarkovHelper.Pages
                 MapInfoPanel.Visibility = Visibility.Visible;
             }
 
-            // Kappa Progress Section (for Collector quest)
-            UpdateKappaProgressSection(task);
+            // Kappa Progress Section (for Collector quest), counted within this same pass
+            UpdateKappaProgressSection(task, pass);
 
             // Requirements - one line per gate the quest carries (level, Scav karma, each trader
             // loyalty row), in the badge's precedence order. One list, so the section appears
@@ -1654,7 +1668,12 @@ namespace TarkovHelper.Pages
 
         #region Kappa Progress Section
 
-        private void UpdateKappaProgressSection(TarkovTask task)
+        /// <summary>
+        /// The detail pane's Kappa section, shown for Collector only. Counted within the pass
+        /// that built the rest of the pane, so the number and the badge above it describe one
+        /// profile.
+        /// </summary>
+        private void UpdateKappaProgressSection(TarkovTask task, RenderPass pass)
         {
             // Check if this is the Collector quest
             var isCollector = task.NormalizedName?.Equals("collector", StringComparison.OrdinalIgnoreCase) == true;
@@ -1668,9 +1687,7 @@ namespace TarkovHelper.Pages
             KappaProgressSection.Visibility = Visibility.Visible;
 
             // Get Kappa progress
-            var graphService = QuestGraphService.Instance;
-            var (completed, total, percentage) = graphService.GetCollectorProgress(
-                normalizedName => _progressService.IsQuestCompleted(normalizedName));
+            var (completed, total, percentage) = KappaProgressIn(pass);
 
             // Update progress text
             TxtKappaProgress.Text = $"Prerequisites: ({completed}/{total} completed)";
@@ -1695,9 +1712,11 @@ namespace TarkovHelper.Pages
 
         private void BtnShowKappaQuests_Click(object sender, RoutedEventArgs e)
         {
-            var graphService = QuestGraphService.Instance;
-            var kappaQuests = graphService.GetKappaRequiredQuestsWithStatus(
-                normalizedName => _progressService.IsQuestCompleted(normalizedName));
+            // One pass for the header's count and the rows under it, captured at the click: the
+            // list is a fresh reading, and both of its numbers come from the same profile.
+            var pass = CapturePass();
+            var kappaQuests = QuestGraphService.Instance.GetKappaQuestsWithStatus(
+                task => IsDoneIn(pass, task));
 
             // Create a popup window to show all Kappa required quests
             var popupWindow = new Window
@@ -1714,8 +1733,7 @@ namespace TarkovHelper.Pages
             var stackPanel = new StackPanel { Margin = new Thickness(16) };
 
             // Header
-            var (completed, total, percentage) = graphService.GetCollectorProgress(
-                normalizedName => _progressService.IsQuestCompleted(normalizedName));
+            var (completed, total, _) = KappaProgressIn(pass);
             var headerText = new TextBlock
             {
                 Text = $"Kappa Required Quests ({completed}/{total})",
