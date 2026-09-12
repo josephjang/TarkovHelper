@@ -418,6 +418,59 @@ refer to is the achievement 1.1 retired.
   Non-Goal. Within the touched set the rule is all-or-nothing: the
   stats line is one composed string in three languages rather than a
   localized suffix on an English sentence.
+- **TD8 (appended by the implementation): the quest tab's gauge counts from
+  the statuses cached on the row view models.** Design 1 says the gauge counts
+  "from the pass `ApplyFilters` already captured"; `ApplyFilters` captures no
+  pass of its own, and the chips beside the gauge count from the `Status` each
+  row cached when `LoadQuests` or `RefreshQuestStatuses` last captured one. The
+  gauge now counts from that same cache (keyed by `NormalizedName`), which is
+  what makes it agree with the chips. The detail pane counts within the pass
+  that built it, and the list button captures one pass at the click for its
+  header and its rows rather than reusing the pane's, so a stale pane pass can
+  never feed a fresh list. Pinned by `KappaProgressTests` and the two e2e flows.
+- **TD9 (appended): `QuestGraphService.IsInitialized` replaces the gauge's
+  catch-all.** The gauge used to swallow every exception into "0/0", which
+  could not tell "no data yet" from "nothing is flagged"; the pages now ask.
+- **TD10 (appended): the shared status brushes are frozen, and tested.**
+  `QuestStatusBrushes` freezes its six brushes so no page's dispatcher owns
+  them; `QuestStatusBrushesTests` (not in Files touched) pins one distinct
+  frozen brush per status and the Gray fallback.
+- **TD11 (appended): the Collector page's subscription test is a source
+  guard, and the page joins the shared page guards.** Test Strategy asked for
+  the page "constructed on an STA thread" and a burst "asserted through the
+  coalescer the page exposes for the test". The page cannot be constructed in
+  the unit suite: its markup resolves App.xaml's brushes through
+  StaticResource and its constructor reaches six singletons that open the
+  databases, and no page in the suite is constructed that way. So
+  `CollectorPageSubscriptionTests` reads the source, in the shape
+  `MainWindowTeardownTests` and `RefreshCoalescerSchedulingTests` already use:
+  which four events, that each handler is a one-liner over the coalescer, that
+  the coalescer is built in the constructor body, that the refresh repaints
+  the panel only and only while loaded, and that every status the page reads
+  goes through the pass adapter. The page also joins the existing mirror,
+  lifecycle and factory theories in `RefreshCoalescerSchedulingTests`, whose
+  brace matcher moved to a shared `SourceGuards` helper rather than gaining a
+  third copy. The burst-to-one-run rule itself is `RefreshCoalescerTests`.
+- **TD12 (appended): the e2e drawer and language choreography is shared.**
+  The loyalty suite kept its drawer helpers and its language switch private;
+  the Kappa/Collector suite needs both, so they moved to `ProfileDrawerDriver`
+  and `AppDriver.SelectLanguage`, and `QuestLoyaltyE2ETests` reads the same as
+  before through them. Collector's detail pane is reached through the Kappa
+  filter plus the search rather than the search alone, since "Collector" is
+  not guaranteed to be a unique search substring across every quest name.
+- **TD13 (appended): the detail panel's quest sources read the list's pass.**
+  `GetQuestSources` uses the pass the listed items were aggregated under
+  (`_listPass`, null before the first load) rather than capturing a fresh one,
+  so the detail panel names exactly the quests whose items the list shows;
+  every change that alters the scope reloads the list, and the detail with it.
+- **TD14 (appended): Design order.** The detail pane's four strings (Design 4)
+  landed before the window extraction (Design 2), because the window's title
+  reads `KappaQuestListTitle`; otherwise the slices follow the Design order.
+  Files touched beyond the list above: `QuestStatusBrushesTests`,
+  `SourceGuards`, `ProfileDrawerDriver` and `QuestStartedEventTests` (new);
+  `RefreshCoalescerSchedulingTests`, `E2ETestHarness`, `QuestLoyaltyE2ETests`
+  and `LoyaltyFixtures` (three trader ids) touched; `QuestProgressService`
+  touched for the defect recorded under Verification.
 
 ## Open Questions
 
@@ -525,6 +578,33 @@ dotnet test --filter "Category=E2E"
   revision; the commands above have not run and no result is claimed. The
   implementation PR appends what ran, the tested revision, and what was not
   run and why.
+- Ran, at the implementation (branch `feat/kappa-collector-1-1`, last code
+  commit `01ff489`, 2026-09-12): `dotnet build TarkovHelper.sln` in Debug and
+  Release, 0 warnings / 0 errors. `dotnet test --no-build --filter
+  "Category!=E2E"`: 1672 passed / 0 failed / 0 skipped, from a baseline of
+  1606 measured at `ffa33f9` before the first edit (+66: `KappaProgressTests`
+  8, `QuestStatusBrushesTests` 4, `CollectorUnlockViewModelTests` 9,
+  `CollectorPageSubscriptionTests` 13, `RefreshCoalescerSchedulingTests` +3
+  rows, `LocalizationHeaderStringsTests` +24 rows, `E2EQuestDataTests` +3,
+  `QuestStartedEventTests` 2). `dotnet test --no-build --filter
+  "Category=E2E"` on the development desktop: 49 passed / 0 failed / 2
+  skipped (the two legacy smoke cases, which need no run here: no data
+  publish), from a baseline of 47 / 0 / 2; the two new cases are
+  `KappaCollectorE2ETests`. The fail-first evidence is in the commit bodies:
+  the count suite failed to compile against the old signatures (CS1061), the
+  subscription guards failed 13 of 13 against the parent commit's page, and
+  the started-event tests failed on "the started quest was recorded instead
+  of left Active".
+- Found and fixed in the same PR, outside this phase's scope: a "quest
+  started" log event recorded the started quest itself as Done, because the
+  prerequisite walk it plans over answers the target as its last entry (the
+  walk's comment claimed otherwise, and is corrected). Own commit, own tests
+  (`QuestStartedEventTests`); nothing had covered the Started path.
+- Not run: the manual check of the panel's wrapping at the 600 pixel minimum
+  window and of the badge colours is reported in the PR body with what it
+  found. The Japanese fallback to English trader names was not driven; it is
+  the same resolver path `QuestLoyaltyE2ETests` and `KappaCollectorE2ETests`
+  drive for Korean.
 
 ## Risks & Migration
 
