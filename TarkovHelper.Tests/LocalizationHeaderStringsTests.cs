@@ -44,6 +44,8 @@ public class LocalizationHeaderStringsTests
         // Quest detail Kappa section and the Kappa quest list window
         // (feature-kappa-collector-1-1.spec.md, Design 4): one count, one label, app-wide.
         "KappaProgressHeading", "KappaCountFormat", "ShowKappaQuests", "KappaQuestListTitle",
+        // Collector page (LocalizationService.Collector.cs), the page's first strings of its own
+        "CollectorUnlockHeading",
         // Settings pre-existing rows (migrated from inline switches; the overlay
         // title reuses the Core "Settings" property)
         "Settings", "SettingsLogFolderLabel", "SettingsLogFolderDesc",
@@ -132,6 +134,7 @@ public class LocalizationHeaderStringsTests
     private static readonly string[] KappaCollectorKeys =
     {
         "KappaProgressHeading", "KappaCountFormat", "ShowKappaQuests", "KappaQuestListTitle",
+        "CollectorUnlockHeading",
     };
 
     /// <summary>
