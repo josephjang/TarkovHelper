@@ -4,7 +4,9 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using TarkovHelper.Models;
+using TarkovHelper.Pages.Components;
 using TarkovHelper.Services;
+using TarkovHelper.Services.Settings;
 
 namespace TarkovHelper.Pages
 {
@@ -23,6 +25,24 @@ namespace TarkovHelper.Pages
         private bool _needsRefreshOnLoad = false; // Flag to indicate data refresh needed after unload
         private string? _pendingItemSelection = null;
 
+        /// <summary>
+        /// The pass the listed items were aggregated under, so the detail panel's quest sources
+        /// name exactly the quests whose items the list shows. Null until the first load.
+        /// </summary>
+        private RenderPass? _listPass;
+
+        /// <summary>
+        /// Collapses the profile-scoped settings burst into one rebuild of the unlock panel. A
+        /// published reload (a profile switch, a reset, a self-heal) announces the player level,
+        /// the Scav Rep, one <see cref="SettingsService.TraderLoyaltyChanged"/> per STORED loyalty
+        /// entry and then <see cref="SettingsService.ProfileSettingsReloaded"/>; a seven-trader
+        /// profile would otherwise repaint the panel nine times over one snapshot. Built by
+        /// <see cref="RefreshCoalescer.OnDispatcher"/> in the constructor BODY, not here:
+        /// <see cref="System.Windows.Threading.DispatcherObject.Dispatcher"/> is only set once the
+        /// base constructor has run, which is after field initializers.
+        /// </summary>
+        private readonly RefreshCoalescer _unlockRefresh;
+
         // Currency items should count by reference count, not total amount
         private static readonly HashSet<string> CurrencyItems = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -33,26 +53,90 @@ namespace TarkovHelper.Pages
 
         public CollectorPage()
         {
+            _unlockRefresh = RefreshCoalescer.OnDispatcher(this, RefreshUnlockPanelForSettingsChange);
+
             InitializeComponent();
+            SubscribeServiceEvents();
+
+            Loaded += CollectorPage_Loaded;
+            Unloaded += CollectorPage_Unloaded;
+        }
+
+        /// <summary>
+        /// The service events this page consumes. The constructor, Unloaded and the Loaded
+        /// re-subscribe all go through this pair, so an event added to one list cannot be
+        /// forgotten in another (the three lists used to be kept by hand).
+        /// <para>
+        /// Four settings events, not the quest page's eight (feature-kappa-collector-1-1.spec.md,
+        /// TD4): Collector carries no edition, prestige, DSP or faction gate in the data, and the
+        /// item list reads none of those values either, so those events cannot change anything
+        /// this page shows. A publish that changed the data arrives through DataRefreshed, which
+        /// rebuilds everything. Progress and language changes reload the whole page already, and
+        /// the panel is part of that reload.
+        /// </para>
+        /// </summary>
+        private void SubscribeServiceEvents()
+        {
             _loc.LanguageChanged += OnLanguageChanged;
             _questProgressService.ProgressChanged += OnProgressChanged;
             _inventoryService.InventoryChanged += OnInventoryChanged;
             QuestDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
             ItemDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
+            SettingsService.Instance.PlayerLevelChanged += OnPlayerLevelChanged;
+            SettingsService.Instance.ScavRepChanged += OnScavRepChanged;
+            SettingsService.Instance.TraderLoyaltyChanged += OnTraderLoyaltyChanged;
+            SettingsService.Instance.ProfileSettingsReloaded += OnProfileSettingsReloaded;
+        }
 
-            Loaded += CollectorPage_Loaded;
-            Unloaded += CollectorPage_Unloaded;
+        /// <summary>Mirror of <see cref="SubscribeServiceEvents"/>; keep the lists in sync.</summary>
+        private void UnsubscribeServiceEvents()
+        {
+            _loc.LanguageChanged -= OnLanguageChanged;
+            _questProgressService.ProgressChanged -= OnProgressChanged;
+            _inventoryService.InventoryChanged -= OnInventoryChanged;
+            QuestDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
+            ItemDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
+            SettingsService.Instance.PlayerLevelChanged -= OnPlayerLevelChanged;
+            SettingsService.Instance.ScavRepChanged -= OnScavRepChanged;
+            SettingsService.Instance.TraderLoyaltyChanged -= OnTraderLoyaltyChanged;
+            SettingsService.Instance.ProfileSettingsReloaded -= OnProfileSettingsReloaded;
         }
 
         private void CollectorPage_Unloaded(object sender, RoutedEventArgs e)
         {
             _isUnloaded = true;
             _needsRefreshOnLoad = true; // Mark for refresh on next load to catch changes
-            _loc.LanguageChanged -= OnLanguageChanged;
-            _questProgressService.ProgressChanged -= OnProgressChanged;
-            _inventoryService.InventoryChanged -= OnInventoryChanged;
-            QuestDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
-            ItemDbService.Instance.DataRefreshed -= OnDatabaseRefreshed;
+            UnsubscribeServiceEvents();
+        }
+
+        // The four settings events each book the same coalesced rebuild: a value typed into the
+        // drawer, a profile switch and a reset all reach the panel through one refresh per burst.
+
+        private void OnPlayerLevelChanged(object? sender, int e) => _unlockRefresh.Request();
+
+        private void OnScavRepChanged(object? sender, double e) => _unlockRefresh.Request();
+
+        private void OnTraderLoyaltyChanged(object? sender, TraderLoyaltyChange e) => _unlockRefresh.Request();
+
+        // Not redundant with the three above: a profile that has entered no levels raises no
+        // loyalty event at all, and this closing signal joins the burst it closes rather than
+        // booking a rebuild of its own.
+        private void OnProfileSettingsReloaded(object? sender, EventArgs e) => _unlockRefresh.Request();
+
+        /// <summary>
+        /// The rebuild a profile-scoped settings change needs: the unlock panel only, against a
+        /// fresh pass. The item list is not reloaded, because none of the four events can move a
+        /// quest into or out of Done, Failed or Unavailable, which is all the list's scope reads.
+        /// Runs on the dispatcher, once per burst, scheduled by <see cref="_unlockRefresh"/>.
+        /// </summary>
+        private void RefreshUnlockPanelForSettingsChange()
+        {
+            // Scheduled rather than inline, so it can land after Unloaded dropped the
+            // subscriptions or before the first load built anything; both are skipped, and the
+            // next Loaded or load rebuilds the panel anyway.
+            if (_isUnloaded || !_isDataLoaded) return;
+
+            RebuildUnlockPanel(RenderPass.Capture(_questProgressService));
         }
 
         private void OnInventoryChanged(object? sender, EventArgs e)
@@ -92,11 +176,7 @@ namespace TarkovHelper.Pages
             if (_isUnloaded)
             {
                 _isUnloaded = false;
-                _loc.LanguageChanged += OnLanguageChanged;
-                _questProgressService.ProgressChanged += OnProgressChanged;
-                _inventoryService.InventoryChanged += OnInventoryChanged;
-                QuestDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
-                ItemDbService.Instance.DataRefreshed += OnDatabaseRefreshed;
+                SubscribeServiceEvents();
             }
 
             // Check if data needs refresh (changes might have occurred while unloaded)
@@ -183,8 +263,13 @@ namespace TarkovHelper.Pages
         // signature so the awaiting callers stay untouched if it grows real awaits later.
         private Task LoadItemsAsync()
         {
+            // One pass for the item aggregation, the detail panel's quest sources and the unlock
+            // panel, so the list and the panel above it describe one profile (see RenderPass).
+            var pass = RenderPass.Capture(_questProgressService);
+            _listPass = pass;
+
             var includePreQuest = ChkIncludePreQuest.IsChecked == true;
-            var collectorItems = GetCollectorItemRequirements(includePreQuest);
+            var collectorItems = GetCollectorItemRequirements(pass, includePreQuest);
 
             _allItemViewModels = collectorItems.Values.Select(item =>
             {
@@ -216,48 +301,19 @@ namespace TarkovHelper.Pages
                 vm.OwnedNonFirQuantity = inventory.NonFirQuantity;
             }
 
+            RebuildUnlockPanel(pass);
+
             return Task.CompletedTask;
         }
 
         /// <summary>
-        /// Get items required for Collector quest and optionally its prerequisites
+        /// Get items required for Collector quest and optionally its prerequisites, within one pass.
         /// </summary>
-        private Dictionary<string, CollectorQuestItemAggregate> GetCollectorItemRequirements(bool includePreQuests)
+        private Dictionary<string, CollectorQuestItemAggregate> GetCollectorItemRequirements(
+            RenderPass pass, bool includePreQuests)
         {
             var result = new Dictionary<string, CollectorQuestItemAggregate>(StringComparer.OrdinalIgnoreCase);
-            var questsToInclude = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            // Find the Collector quest
-            var collectorQuest = _questProgressService.AllTasks
-                .FirstOrDefault(t => string.Equals(t.NormalizedName, "collector", StringComparison.OrdinalIgnoreCase));
-
-            if (collectorQuest != null && !string.IsNullOrEmpty(collectorQuest.NormalizedName))
-            {
-                // Always include Collector quest itself (unless completed, failed, or unavailable)
-                var status = _questProgressService.GetStatus(collectorQuest);
-                if (status != QuestStatus.Done && status != QuestStatus.Failed && status != QuestStatus.Unavailable)
-                {
-                    questsToInclude.Add(collectorQuest.NormalizedName);
-                }
-
-                // If include pre-quests, add all prerequisites of Collector (which are Kappa quests)
-                if (includePreQuests)
-                {
-                    var prereqs = _questGraphService.GetAllPrerequisites(collectorQuest.NormalizedName);
-                    foreach (var prereq in prereqs)
-                    {
-                        if (string.IsNullOrEmpty(prereq.NormalizedName))
-                            continue;
-
-                        // Skip completed, failed, or unavailable quests
-                        var prereqStatus = _questProgressService.GetStatus(prereq);
-                        if (prereqStatus == QuestStatus.Done || prereqStatus == QuestStatus.Failed || prereqStatus == QuestStatus.Unavailable)
-                            continue;
-
-                        questsToInclude.Add(prereq.NormalizedName);
-                    }
-                }
-            }
+            var questsToInclude = QuestsInScope(pass, includePreQuests);
 
             // Collect items from all included quests
             foreach (var task in _questProgressService.AllTasks)
@@ -712,39 +768,18 @@ namespace TarkovHelper.Pages
             QuestSection.Visibility = questSources.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
+        /// <summary>
+        /// The quests in scope that ask for <paramref name="itemNormalizedName"/>, within the pass
+        /// the listed items were aggregated under, so the detail panel names exactly the quests
+        /// whose items the list shows. Empty before the first load.
+        /// </summary>
         private List<CollectorQuestItemSourceViewModel> GetQuestSources(string itemNormalizedName)
         {
             var sources = new List<CollectorQuestItemSourceViewModel>();
+            if (_listPass is not { } pass) return sources;
+
             var includePreQuest = ChkIncludePreQuest.IsChecked == true;
-            var questsToInclude = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            // Find the Collector quest
-            var collectorQuest = _questProgressService.AllTasks
-                .FirstOrDefault(t => string.Equals(t.NormalizedName, "collector", StringComparison.OrdinalIgnoreCase));
-
-            if (collectorQuest != null && !string.IsNullOrEmpty(collectorQuest.NormalizedName))
-            {
-                var status = _questProgressService.GetStatus(collectorQuest);
-                if (status != QuestStatus.Done && status != QuestStatus.Failed && status != QuestStatus.Unavailable)
-                {
-                    questsToInclude.Add(collectorQuest.NormalizedName);
-                }
-
-                // Add prerequisites if needed
-                if (includePreQuest)
-                {
-                    var prereqs = _questGraphService.GetAllPrerequisites(collectorQuest.NormalizedName);
-                    foreach (var prereq in prereqs)
-                    {
-                        if (string.IsNullOrEmpty(prereq.NormalizedName))
-                            continue;
-                        var prereqStatus = _questProgressService.GetStatus(prereq);
-                        if (prereqStatus == QuestStatus.Done || prereqStatus == QuestStatus.Failed || prereqStatus == QuestStatus.Unavailable)
-                            continue;
-                        questsToInclude.Add(prereq.NormalizedName);
-                    }
-                }
-            }
+            var questsToInclude = QuestsInScope(pass, includePreQuest);
 
             foreach (var task in _questProgressService.AllTasks)
             {
@@ -761,11 +796,10 @@ namespace TarkovHelper.Pages
                 {
                     if (string.Equals(questItem.ItemNormalizedName, itemNormalizedName, StringComparison.OrdinalIgnoreCase))
                     {
-                        var questName = GetLocalizedQuestName(task);
                         var traderName = task.Trader;
                         sources.Add(new CollectorQuestItemSourceViewModel
                         {
-                            QuestName = questName,
+                            QuestName = _loc.GetQuestName(task),
                             TraderName = traderName,
                             Amount = questItem.Amount,
                             FoundInRaid = questItem.FoundInRaid,
@@ -780,16 +814,125 @@ namespace TarkovHelper.Pages
             return sources;
         }
 
-        private string GetLocalizedQuestName(TarkovTask task)
+        #region Quest scope and the unlock panel
+
+        /// <summary>The loaded Collector quest, or null when the data has none.</summary>
+        private TarkovTask? FindCollector()
+            => _questProgressService.AllTasks.FirstOrDefault(
+                t => string.Equals(t.NormalizedName, "collector", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// The status of one quest within a pass, against that pass's snapshots, together with
+        /// the gate the walk stopped at (the condition the badge names). The quest page's own
+        /// adapter over the same call; a page that reads a status captures a pass first.
+        /// </summary>
+        private (QuestStatus Status, QuestGate Gate) StatusIn(RenderPass pass, TarkovTask task)
         {
-            var lang = _loc.CurrentLanguage;
-            return lang switch
-            {
-                AppLanguage.KO => task.NameKo ?? task.Name,
-                AppLanguage.JA => task.NameJa ?? task.Name,
-                _ => task.Name
-            };
+            var status = _questProgressService.GetStatus(task, pass.Progress, pass.Settings, out var gate);
+            return (status, gate);
         }
+
+        /// <summary>Whether <paramref name="task"/> is Done within <paramref name="pass"/>.</summary>
+        private bool IsDoneIn(RenderPass pass, TarkovTask task)
+            => StatusIn(pass, task).Status == QuestStatus.Done;
+
+        /// <summary>A quest whose items are still worth listing: not done, not failed, not barred.</summary>
+        private static bool IsInScope(QuestStatus status)
+            => status != QuestStatus.Done && status != QuestStatus.Failed && status != QuestStatus.Unavailable;
+
+        /// <summary>
+        /// The quests whose items the page lists, within one pass: Collector itself unless it is
+        /// Done, Failed or Unavailable, plus (with the option on) every transitive prerequisite in
+        /// the same states. One computation for the item aggregation and the detail panel's quest
+        /// sources, which used to carry two near-identical copies of it, each calling GetStatus
+        /// live per quest. The set's content is unchanged; under the 1.1 data the transitive walk
+        /// is the twelve flagged quests.
+        /// </summary>
+        private HashSet<string> QuestsInScope(RenderPass pass, bool includePrerequisites)
+        {
+            var quests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var collector = FindCollector();
+            if (collector == null || string.IsNullOrEmpty(collector.NormalizedName)) return quests;
+
+            if (IsInScope(StatusIn(pass, collector).Status))
+            {
+                quests.Add(collector.NormalizedName);
+            }
+
+            if (includePrerequisites)
+            {
+                foreach (var prerequisite in _questGraphService.GetAllPrerequisites(collector.NormalizedName))
+                {
+                    if (string.IsNullOrEmpty(prerequisite.NormalizedName)) continue;
+                    if (!IsInScope(StatusIn(pass, prerequisite).Status)) continue;
+                    quests.Add(prerequisite.NormalizedName);
+                }
+            }
+
+            return quests;
+        }
+
+        /// <summary>
+        /// A loyalty requirement's trader in the app's language, falling back to the nickname the
+        /// row itself carries. The one resolver the badge and the condition lines share.
+        /// </summary>
+        private string TraderDisplayName(QuestTraderRequirement requirement)
+            => _loc.GetTraderDisplayName(requirement.TraderId, requirement.TraderName);
+
+        /// <summary>
+        /// Writes the unlock panel from one pass: Collector's badge, its condition lines and the
+        /// Kappa count, all composed by <see cref="CollectorUnlockViewModel.BuildFor"/> from the
+        /// engine's answer for that pass. Collapsed when the loaded data has no Collector quest.
+        /// Runs from every load of the page (a progress change, a language switch, a data
+        /// refresh, coming back to the tab) and from the coalesced settings refresh.
+        /// </summary>
+        private void RebuildUnlockPanel(RenderPass pass)
+        {
+            var collector = FindCollector();
+            if (collector == null)
+            {
+                UnlockPanel.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            var (status, gate) = StatusIn(pass, collector);
+            var (kappaDone, kappaTotal, _) = _questGraphService.IsInitialized
+                ? _questGraphService.GetKappaProgress(task => IsDoneIn(pass, task))
+                : (0, 0, 0);
+
+            var panel = CollectorUnlockViewModel.BuildFor(
+                collector, status, gate, pass.Settings, _loc, TraderDisplayName,
+                kappaDone, kappaTotal,
+                metBrush: (Brush)FindResource("TextPrimaryBrush"),
+                unmetBrush: QuestStatusBrushes.LevelLocked)!;
+
+            TxtUnlockHeading.Text = _loc.CollectorUnlockHeading;
+            TxtCollectorStatus.Text = panel.StatusText;
+            CollectorStatusBadge.Background = QuestStatusBrushes.For(panel.Status);
+            CollectorRequirementsList.ItemsSource = panel.Lines;
+            TxtKappaCount.Text = panel.CountText;
+            BtnCollectorKappaQuests.Content = _loc.ShowKappaQuests;
+            UnlockPanel.Visibility = Visibility.Visible;
+        }
+
+        /// <summary>
+        /// Opens the same Kappa quest list the detail pane on the quest tab opens, against a pass
+        /// captured at the click so the header's count and the rows agree.
+        /// </summary>
+        private void BtnCollectorKappaQuests_Click(object sender, RoutedEventArgs e)
+        {
+            if (!_questGraphService.IsInitialized) return;
+
+            var pass = RenderPass.Capture(_questProgressService);
+            var quests = _questGraphService.GetKappaQuestsWithStatus(task => IsDoneIn(pass, task));
+            var (completed, total, _) = _questGraphService.GetKappaProgress(task => IsDoneIn(pass, task));
+
+            KappaQuestListWindow.Show(
+                Window.GetWindow(this), quests, completed, total, _loc.GetQuestName, _loc);
+        }
+
+        #endregion
 
         private void QuestName_Click(object sender, MouseButtonEventArgs e)
         {

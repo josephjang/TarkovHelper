@@ -3,9 +3,89 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using TarkovHelper.Models;
+using TarkovHelper.Services;
+using TarkovHelper.Services.Settings;
 
 namespace TarkovHelper.Pages
 {
+    /// <summary>
+    /// The Collector page's unlock panel: Collector's status badge, one line per unlock
+    /// condition, and the Kappa count, as one value built from one render pass.
+    /// <para>
+    /// COMPOSED, with no rule of its own (feature-kappa-collector-1-1.spec.md, TD1). The badge
+    /// is <see cref="QuestRequirementBadge.StatusText"/> over the gate the status walk reported,
+    /// the lines are <see cref="RequirementLineViewModel.BuildFor"/> in the badge's own
+    /// precedence order, and the count is the graph service's. So which condition holds
+    /// Collector is the engine's answer, carried in the gate, and the badge and the first unmet
+    /// line agree because both derive from it; a Collector-specific "met" comparison here would
+    /// be the second copy of the gate rule the loyalty phase removed. The conditions are shown
+    /// met or unmet and never counted into the Kappa number (PD1): they are values the player
+    /// typed into the drawer, not progress the app tracks.
+    /// </para>
+    /// </summary>
+    public sealed class CollectorUnlockViewModel
+    {
+        private CollectorUnlockViewModel(
+            string statusText,
+            QuestStatus status,
+            IReadOnlyList<RequirementLineViewModel> lines,
+            string countText)
+        {
+            StatusText = statusText;
+            Status = status;
+            Lines = lines;
+            CountText = countText;
+        }
+
+        /// <summary>The badge text, the same string the quest list shows for Collector.</summary>
+        public string StatusText { get; }
+
+        /// <summary>The status behind the badge, for its fill (<see cref="QuestStatusBrushes.For"/>).</summary>
+        public QuestStatus Status { get; }
+
+        /// <summary>
+        /// One line per condition the data carries for Collector, in badge order: the player
+        /// level, the Scav karma, then one per trader loyalty row. The first unmet line is the
+        /// condition the badge names.
+        /// </summary>
+        public IReadOnlyList<RequirementLineViewModel> Lines { get; }
+
+        /// <summary>The Kappa count, in the same words the detail pane uses.</summary>
+        public string CountText { get; }
+
+        /// <summary>
+        /// The panel for <paramref name="collector"/> as one render pass saw it, or null when the
+        /// loaded data has no Collector quest (the page then collapses the panel).
+        /// </summary>
+        /// <param name="status">Collector's status in the pass.</param>
+        /// <param name="gate">The gate the same walk stopped at: the condition the badge names.</param>
+        /// <param name="settings">The pass's profile settings, which the lines are read against.</param>
+        /// <param name="traderDisplayName">A trader's name in the app's language, given the requirement row.</param>
+        /// <param name="kappaDone">Flagged Kappa quests done in the pass.</param>
+        /// <param name="kappaTotal">Flagged Kappa quests in the loaded data.</param>
+        internal static CollectorUnlockViewModel? BuildFor(
+            TarkovTask? collector,
+            QuestStatus status,
+            QuestGate gate,
+            ProfileSettingsSnapshot settings,
+            LocalizationService loc,
+            Func<QuestTraderRequirement, string> traderDisplayName,
+            int kappaDone,
+            int kappaTotal,
+            Brush metBrush,
+            Brush unmetBrush)
+        {
+            if (collector == null) return null;
+
+            return new CollectorUnlockViewModel(
+                QuestRequirementBadge.StatusText(status, gate, collector, settings, traderDisplayName),
+                status,
+                RequirementLineViewModel.BuildFor(
+                    collector, settings, loc, traderDisplayName, metBrush, unmetBrush),
+                string.Format(loc.KappaCountFormat, kappaDone, kappaTotal));
+        }
+    }
+
     /// <summary>
     /// Aggregated item view model for Collector page display with inventory tracking
     /// </summary>

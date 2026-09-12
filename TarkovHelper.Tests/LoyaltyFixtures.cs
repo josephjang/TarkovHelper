@@ -28,6 +28,9 @@ internal static class LoyaltyFixtures
     internal const string Jaeger = "5c0647fdd443bc2504c2d371";
     internal const string Skier = "58330581ace78e27b8b10cee";
     internal const string Therapist = "54cb57776803fa99248b456e";
+    internal const string Peacekeeper = "5935c25fb3acc3127c3d8cd9";
+    internal const string Mechanic = "5a7c2eca46aef81a7ca2145d";
+    internal const string Ragman = "5ac3b934156ae10c4430e83c";
 
     /// <summary>
     /// A quest called "q" given by <paramref name="giver"/> with the loyalty rows it names, for

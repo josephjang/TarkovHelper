@@ -174,11 +174,55 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
+            <!-- Collector unlock panel: the status badge the quest list shows for Collector, one
+                 line per unlock condition coloured met or unmet, and the Kappa count with the list
+                 button. Written from CollectorUnlockViewModel in RebuildUnlockPanel; collapsed when
+                 the loaded data has no Collector quest. Above the item list, not instead of it:
+                 players gather Collector's items long before it unlocks (PD3). A WrapPanel so it
+                 folds at the 600 px minimum window instead of clipping. -->
+            <Border x:Name="UnlockPanel" Grid.Row="0" Background="{StaticResource BackgroundMediumBrush}"
+                    CornerRadius="6" Padding="12,10" Margin="0,0,0,12" Visibility="Collapsed">
+                <WrapPanel Orientation="Horizontal">
+                    <TextBlock x:Name="TxtUnlockHeading" FontSize="{DynamicResource FontSizeSmall}" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimaryBrush}"
+                               VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <Border x:Name="CollectorStatusBadge" Padding="6,2" CornerRadius="3"
+                            VerticalAlignment="Center" Margin="0,0,16,0">
+                        <TextBlock x:Name="TxtCollectorStatus" FontSize="{DynamicResource FontSizeTiny}"
+                                   Foreground="White" FontWeight="SemiBold"/>
+                    </Border>
+                    <!-- One line per condition, in the badge's own order, so the first unmet
+                         line is the condition the badge names. Same template as the quest
+                         detail pane's Requirements section. -->
+                    <ItemsControl x:Name="CollectorRequirementsList" VerticalAlignment="Center" Margin="0,0,16,0">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding DisplayText}"
+                                           Foreground="{Binding Foreground}"
+                                           FontSize="{DynamicResource FontSizeXSmall}"
+                                           Margin="0,0,12,2"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock x:Name="TxtKappaCount" FontSize="{DynamicResource FontSizeXSmall}"
+                               Foreground="{StaticResource TextPrimaryBrush}"
+                               VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <Button x:Name="BtnCollectorKappaQuests" Padding="8,4" VerticalAlignment="Center"
+                            Click="BtnCollectorKappaQuests_Click"/>
+                </WrapPanel>
+            </Border>
+
             <!-- Filter Bar -->
-        <Border Grid.Row="0" Background="{StaticResource BackgroundMediumBrush}"
+        <Border Grid.Row="1" Background="{StaticResource BackgroundMediumBrush}"
                 CornerRadius="6" Padding="12,10" Margin="0,0,0,12">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -243,7 +287,7 @@
         </Border>
 
         <!-- Statistics Bar -->
-        <Border Grid.Row="1" Padding="12,6" Margin="0,0,0,12">
+        <Border Grid.Row="2" Padding="12,6" Margin="0,0,0,12">
             <StackPanel Orientation="Horizontal">
                 <TextBlock x:Name="TxtStats" FontSize="{DynamicResource FontSizeXSmall}"
                            Foreground="{StaticResource TextSecondaryBrush}"/>
@@ -251,7 +295,7 @@
         </Border>
 
         <!-- Main Content -->
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="3">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" MinWidth="400"/>
                 <ColumnDefinition Width="Auto"/>

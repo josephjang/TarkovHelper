@@ -190,43 +190,24 @@ public sealed class RefreshCoalescerSchedulingTests
     #region Source-level guards
 
     private static readonly string MainWindowSource =
-        ReadSource("TarkovHelper", "MainWindow.xaml.cs");
-
-    private static readonly string QuestListPageSource =
-        ReadSource("TarkovHelper", "Pages", "QuestListPage.xaml.cs");
-
-    private static readonly string ItemsPageSource =
-        ReadSource("TarkovHelper", "Pages", "ItemsPage.xaml.cs");
-
-    private static string ReadSource(params string[] relativeParts)
-    {
-        var path = Path.Combine(TestRepo.Root(), Path.Combine(relativeParts));
-        Assert.True(File.Exists(path), $"Source file not found: {path}");
-        return File.ReadAllText(path);
-    }
+        SourceGuards.Read("TarkovHelper", "MainWindow.xaml.cs");
 
     /// <summary>
-    /// The body of the member whose declaration contains <paramref name="signature"/>, braces
-    /// included. Naive brace matching is enough for these members: none of them contains a brace
-    /// inside a string or comment that is not itself balanced.
+    /// The pages that consume settings events through a coalescer, by name. The Collector page
+    /// joined with its unlock panel (feature-kappa-collector-1-1.spec.md, Design 3).
     /// </summary>
-    private static string MemberBody(string source, string signature)
-    {
-        var declaration = source.IndexOf(signature, StringComparison.Ordinal);
-        Assert.True(declaration >= 0, $"'{signature}' no longer exists; update this test with it.");
-
-        var open = source.IndexOf('{', declaration);
-        Assert.True(open >= 0, $"'{signature}' has no body.");
-
-        var depth = 0;
-        for (var i = open; i < source.Length; i++)
+    private static readonly IReadOnlyDictionary<string, string> PageSources =
+        new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            if (source[i] == '{') depth++;
-            else if (source[i] == '}' && --depth == 0) return source[open..(i + 1)];
-        }
+            ["QuestListPage"] = SourceGuards.Read("TarkovHelper", "Pages", "QuestListPage.xaml.cs"),
+            ["ItemsPage"] = SourceGuards.Read("TarkovHelper", "Pages", "ItemsPage.xaml.cs"),
+            ["CollectorPage"] = SourceGuards.Read("TarkovHelper", "Pages", "CollectorPage.xaml.cs"),
+        };
 
-        throw new InvalidOperationException($"Unbalanced braces after '{signature}'.");
-    }
+    private static string QuestListPageSource => PageSources["QuestListPage"];
+
+    private static string MemberBody(string source, string signature)
+        => SourceGuards.MemberBody(source, signature);
 
     /// <summary>
     /// Every method that repaints a profile-drawer control from the settings service. Assigning a
@@ -359,9 +340,10 @@ public sealed class RefreshCoalescerSchedulingTests
     [Theory]
     [InlineData("QuestListPage")]
     [InlineData("ItemsPage")]
+    [InlineData("CollectorPage")]
     public void Page_subscription_lists_are_mirrors(string page)
     {
-        var source = page == "QuestListPage" ? QuestListPageSource : ItemsPageSource;
+        var source = PageSources[page];
 
         var subscribed = HandlerWirings(
             MemberBody(source, "private void SubscribeServiceEvents()"), "+=");
@@ -397,10 +379,11 @@ public sealed class RefreshCoalescerSchedulingTests
     [Theory]
     [InlineData("QuestListPage", "public QuestListPage()", "private async void QuestListPage_Loaded(", "private void QuestListPage_Unloaded(")]
     [InlineData("ItemsPage", "public ItemsPage()", "private async void ItemsPage_Loaded(", "private void ItemsPage_Unloaded(")]
+    [InlineData("CollectorPage", "public CollectorPage()", "private async void CollectorPage_Loaded(", "private void CollectorPage_Unloaded(")]
     public void Page_lifecycle_routes_through_the_subscription_pair(
         string page, string constructor, string loaded, string unloaded)
     {
-        var source = page == "QuestListPage" ? QuestListPageSource : ItemsPageSource;
+        var source = PageSources[page];
 
         Assert.Contains("SubscribeServiceEvents();", MemberBody(source, constructor),
             StringComparison.Ordinal);
@@ -419,9 +402,10 @@ public sealed class RefreshCoalescerSchedulingTests
     [Theory]
     [InlineData("QuestListPage")]
     [InlineData("ItemsPage")]
+    [InlineData("CollectorPage")]
     public void Pages_build_their_coalescer_through_the_factory(string page)
     {
-        var source = page == "QuestListPage" ? QuestListPageSource : ItemsPageSource;
+        var source = PageSources[page];
 
         Assert.Contains("RefreshCoalescer.OnDispatcher(", source, StringComparison.Ordinal);
         Assert.DoesNotContain("new RefreshCoalescer(", source, StringComparison.Ordinal);
