@@ -114,6 +114,13 @@ Current Behavior 섹션으로 남깁니다. 코드베이스 전반을 훑는 시
   테이블, 별명이 비었다고 행을 버려 게임이 잠근 퀘스트를 열어 주던 가드, 세 군데에 적혀 있어
   배지와 상세 목록이 서로 다른 상인을 가리키던 정렬 규칙을 조작해 보는 인터랙티브 랩 3개와
   퀴즈 게이트를 포함합니다 (PR #57)
+- [2026-09-kappa-collector-1-1-code-guide.html](2026-09-kappa-collector-1-1-code-guide.html):
+  EFT 1.1 로드맵의 마지막 단계, Kappa와 Collector 변경을 다룹니다. 열세 개 플래그 퀘스트를
+  "선행 퀘스트"라 부르던 상세 패널과 Collector의 잠금 상태를 한마디도 하지 않던 Collector
+  페이지, 렌더 패스 안에서 한 번만 세는 Kappa 카운트, 두 순수 헬퍼와 엔진의 게이트를 조합할
+  뿐 자체 규칙이 없는 해금 패널, 설정 이벤트 버스트를 한 번의 리빌드로 접는 코얼레서, 그리고
+  선행 퀘스트 탐색의 잘못된 주석이 감추고 있던 "퀘스트 시작" 로그 결함을 조작해 보는
+  인터랙티브 랩 4개와 퀴즈 게이트를 포함합니다 (PR #60)
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
   마커 API 분석
 
