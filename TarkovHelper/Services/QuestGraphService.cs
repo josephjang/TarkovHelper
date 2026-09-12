@@ -45,6 +45,14 @@ namespace TarkovHelper.Services
             BuildLookup();
         }
 
+        /// <summary>
+        /// Whether <see cref="Initialize"/> or <see cref="InitializeAsync"/> has run. The pages
+        /// that draw a Kappa count ask this rather than catching the exception the other members
+        /// throw: a page that swallowed it into "0/0" could not tell "no data yet" from "nothing
+        /// is flagged".
+        /// </summary>
+        public bool IsInitialized => _tasks != null && _taskLookup != null;
+
         private void BuildLookup()
         {
             if (_tasks == null) return;
@@ -360,20 +368,38 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Get Collector quest progress statistics
-        /// Returns the count and percentage of completed reqKappa quests
+        /// The quests the game flags as required for the Kappa container, which is the one
+        /// membership rule every Kappa surface reads: the quest tab's gauge and filter, the row
+        /// badges, Collector's detail pane and the Collector page. Collector itself carries the
+        /// flag and is a member, because the thirteenth quest is the one that awards the
+        /// container. Rows with no NormalizedName are left out: they have no progress key, so
+        /// they could never be done and would only inflate the total
+        /// (feature-kappa-collector-1-1.spec.md, TD2).
         /// </summary>
-        /// <param name="isQuestCompleted">Function to check if a quest is completed by its normalizedName</param>
-        /// <returns>Tuple of (completed count, total count, percentage)</returns>
-        public (int Completed, int Total, int Percentage) GetCollectorProgress(Func<string, bool> isQuestCompleted)
+        private IEnumerable<TarkovTask> KappaQuests()
+            => _tasks!.Where(t => t.ReqKappa && !string.IsNullOrEmpty(t.NormalizedName));
+
+        /// <summary>
+        /// How many of the flagged Kappa quests <paramref name="isDone"/> reports done, out of
+        /// how many there are, with the integer percentage the gauges draw (0 of 0 is 0).
+        /// <para>
+        /// The predicate takes the TASK, not its name: the caller answers it against the render
+        /// pass it drew everything else from, so the count agrees with the rows and chips beside
+        /// it during a profile switch. The previous shape took a name and re-ran a live status
+        /// walk per quest against the singletons, which was the one reading on the quest tab
+        /// that could come from a different profile than the chips next to it (TD3).
+        /// </para>
+        /// </summary>
+        /// <param name="isDone">
+        /// Whether a flagged quest is done, in the caller's pass. Asked once per flagged quest.
+        /// </param>
+        public (int Completed, int Total, int Percentage) GetKappaProgress(Func<TarkovTask, bool> isDone)
         {
             EnsureInitialized();
 
-            var kappaQuests = _tasks!
-                .Where(t => t.ReqKappa && !string.IsNullOrEmpty(t.NormalizedName))
-                .ToList();
+            var kappaQuests = KappaQuests().ToList();
 
-            var completedCount = kappaQuests.Count(t => isQuestCompleted(t.NormalizedName!));
+            var completedCount = kappaQuests.Count(isDone);
             var total = kappaQuests.Count;
             var percentage = total > 0 ? (completedCount * 100 / total) : 0;
 
@@ -381,20 +407,21 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Get all reqKappa quests with their completion status
+        /// Every flagged Kappa quest with whether <paramref name="isDone"/> reports it done, for
+        /// the list window: the ones still to do first, then by trader, then by name.
         /// </summary>
-        /// <param name="isQuestCompleted">Function to check if a quest is completed</param>
-        /// <returns>List of tuples (quest, isCompleted)</returns>
-        public List<(TarkovTask Quest, bool IsCompleted)> GetKappaRequiredQuestsWithStatus(Func<string, bool> isQuestCompleted)
+        /// <param name="isDone">
+        /// Whether a flagged quest is done, in the caller's pass. Asked once per flagged quest.
+        /// </param>
+        public List<(TarkovTask Quest, bool IsCompleted)> GetKappaQuestsWithStatus(Func<TarkovTask, bool> isDone)
         {
             EnsureInitialized();
 
-            return _tasks!
-                .Where(t => t.ReqKappa && !string.IsNullOrEmpty(t.NormalizedName))
-                .Select(t => (t, isQuestCompleted(t.NormalizedName!)))
-                .OrderBy(x => x.Item2) // Incomplete first
-                .ThenBy(x => x.t.Trader)
-                .ThenBy(x => x.t.Name)
+            return KappaQuests()
+                .Select(t => (Quest: t, IsCompleted: isDone(t)))
+                .OrderBy(x => x.IsCompleted) // Incomplete first
+                .ThenBy(x => x.Quest.Trader)
+                .ThenBy(x => x.Quest.Name)
                 .ToList();
         }
 
