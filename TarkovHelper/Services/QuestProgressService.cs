@@ -1723,7 +1723,14 @@ namespace TarkovHelper.Services
                     // started, not which of two mutually exclusive predecessors was taken.
                     if (string.IsNullOrEmpty(task.NormalizedName)) return new();
 
-                    var prerequisites = QuestGraphService.Instance.GetAllPrerequisites(task.NormalizedName);
+                    // The walk answers the STARTED quest itself as its last entry (see
+                    // QuestGraphService.CollectPrerequisites), and the batch planner marks every
+                    // entry it is given Done. Left in, every quest the live sync saw a player
+                    // start was recorded as finished; QuestStartedEventTests pins the exclusion.
+                    var prerequisites = QuestGraphService.Instance
+                        .GetAllPrerequisites(task.NormalizedName)
+                        .Where(prerequisite => !string.Equals(
+                            prerequisite.NormalizedName, task.NormalizedName, StringComparison.OrdinalIgnoreCase));
                     return PlanBatchCompletion(snapshot, prerequisites);
                 }
 
