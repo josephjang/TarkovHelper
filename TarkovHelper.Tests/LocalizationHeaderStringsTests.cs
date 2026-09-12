@@ -45,7 +45,8 @@ public class LocalizationHeaderStringsTests
         // (feature-kappa-collector-1-1.spec.md, Design 4): one count, one label, app-wide.
         "KappaProgressHeading", "KappaCountFormat", "ShowKappaQuests", "KappaQuestListTitle",
         // Collector page (LocalizationService.Collector.cs), the page's first strings of its own
-        "CollectorUnlockHeading",
+        "CollectorUnlockHeading", "CollectorIncludePrerequisites", "CollectorIncludePrerequisitesTip",
+        "CollectorStatsFormat", "CollectorScopeWithPrerequisites", "CollectorScopeCollectorOnly",
         // Settings pre-existing rows (migrated from inline switches; the overlay
         // title reuses the Core "Settings" property)
         "Settings", "SettingsLogFolderLabel", "SettingsLogFolderDesc",
@@ -71,7 +72,7 @@ public class LocalizationHeaderStringsTests
         "SettingsCurrentVersionFormat", "SettingsUpdateToFormat", "TimeMinutesAgoFormat",
         "ProfileResetTargetFormat", "ProfileResetSuccessFormat", "ProfileResetConfirmButtonFormat",
         "RequirementLevelFormat", "RequirementScavKarmaFormat", "RequirementLoyaltyFormat",
-        "KappaCountFormat", "KappaQuestListTitle",
+        "KappaCountFormat", "KappaQuestListTitle", "CollectorStatsFormat",
     };
 
     /// <summary>
@@ -98,7 +99,8 @@ public class LocalizationHeaderStringsTests
     /// <summary>
     /// The Kappa and Collector strings that carry slots, and how many. The count fills two
     /// ({0} done of {1}); a translation that dropped the total would print a bare number, which
-    /// reads as the total.
+    /// reads as the total. The stats line fills five, the last being the scope word, so a
+    /// translation that dropped it would name no scope at all.
     /// </summary>
     public static IEnumerable<object[]> KappaCollectorFormatSlots() =>
         from language in new[] { AppLanguage.EN, AppLanguage.KO, AppLanguage.JA }
@@ -106,6 +108,7 @@ public class LocalizationHeaderStringsTests
         {
             ("KappaCountFormat", 2),
             ("KappaQuestListTitle", 2),
+            ("CollectorStatsFormat", 5),
         }
         select new object[] { language, key.Item1, key.Item2 };
 
@@ -125,40 +128,68 @@ public class LocalizationHeaderStringsTests
         }
     }
 
-    #region Kappa and Collector wording (feature-kappa-collector-1-1.md, R4 and R7)
+    #region Kappa and Collector wording (feature-kappa-collector-1-1.md, R4, R6 and R7)
 
-    /// <summary>
-    /// Every Kappa and Collector string this phase added or changed. The set the two wording
-    /// rules below run over.
-    /// </summary>
-    private static readonly string[] KappaCollectorKeys =
+    // Two sets that name two different things, and the wording rules keep them apart. The
+    // thirteen flagged quests include Collector itself, so they are not Collector's
+    // prerequisites (those are twelve). The detail pane used to read "Prerequisites: (x/13
+    // completed)" over the thirteen, and the Collector page's stats line "Kappa Quests Only"
+    // over Collector's own items: each label borrowed the other set's name.
+
+    /// <summary>The strings about the thirteen flagged quests: they say "Kappa quests", never "prerequisites" (R4).</summary>
+    private static readonly string[] KappaCountKeys =
     {
         "KappaProgressHeading", "KappaCountFormat", "ShowKappaQuests", "KappaQuestListTitle",
         "CollectorUnlockHeading",
     };
 
-    /// <summary>
-    /// The thirteen flagged quests include Collector itself, so they are not Collector's
-    /// prerequisites (those are twelve). The detail pane used to read "Prerequisites: (x/13
-    /// completed)" and the Collector page's option "Include Pre-Quest"; a player who had done all
-    /// twelve read "12/13" and went looking for the one they had missed. No string in the set
-    /// may call the flagged quests prerequisites, in any of the three languages.
-    /// </summary>
+    /// <summary>The strings about the item list's scope: Collector's own items and its twelve prerequisites' items. They say "prerequisites", never "Kappa" (R6).</summary>
+    private static readonly string[] CollectorScopeKeys =
+    {
+        "CollectorIncludePrerequisites", "CollectorIncludePrerequisitesTip", "CollectorStatsFormat",
+        "CollectorScopeWithPrerequisites", "CollectorScopeCollectorOnly",
+    };
+
     [Theory]
     [InlineData(AppLanguage.EN, "Prerequisite", "Pre-Quest")]
     [InlineData(AppLanguage.KO, "선행", "사전 퀘스트")]
     [InlineData(AppLanguage.JA, "先行", "前提")]
-    public void No_Kappa_or_Collector_string_calls_the_flagged_quests_prerequisites(
+    public void No_Kappa_count_string_calls_the_flagged_quests_prerequisites(
         AppLanguage language, string forbidden, string alsoForbidden)
     {
         var loc = TestLocalization.WithLanguage(language);
 
-        foreach (var key in KappaCollectorKeys)
+        foreach (var key in KappaCountKeys)
         {
             var value = GetString(loc, key);
             Assert.DoesNotContain(forbidden, value, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(alsoForbidden, value, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    /// <summary>
+    /// The scope strings name the twelve for what they are, and none of them borrows the other
+    /// set's name or the old label: "Kappa" would say the list is the thirteen, which it never
+    /// is, and "Pre-Quest" is the label this replaced.
+    /// </summary>
+    [Theory]
+    [InlineData(AppLanguage.EN, "prerequisite")]
+    [InlineData(AppLanguage.KO, "선행")]
+    [InlineData(AppLanguage.JA, "先行")]
+    public void The_scope_strings_say_prerequisites_and_never_Kappa(AppLanguage language, string prerequisites)
+    {
+        var loc = TestLocalization.WithLanguage(language);
+
+        foreach (var key in CollectorScopeKeys)
+        {
+            var value = GetString(loc, key);
+            Assert.DoesNotContain("Kappa", value, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("카파", value, StringComparison.Ordinal);
+            Assert.DoesNotContain("Pre-Quest", value, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.Contains(prerequisites, loc.CollectorIncludePrerequisites, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(prerequisites, loc.CollectorScopeWithPrerequisites, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

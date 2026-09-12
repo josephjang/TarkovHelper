@@ -243,13 +243,14 @@
 
                 <!-- Filter Toggles -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal">
-                    <!-- Include Pre-Quest Checkbox -->
-                    <CheckBox x:Name="ChkIncludePreQuest" Content="Include Pre-Quest"
+                    <!-- Include prerequisites checkbox. Its label and tooltip are written from
+                         LocalizationService in ApplyLocalizedTexts; the element name stays as
+                         the e2e suites address it. -->
+                    <CheckBox x:Name="ChkIncludePreQuest"
                               Foreground="{StaticResource TextPrimaryBrush}"
                               VerticalContentAlignment="Center"
                               Margin="0,0,12,0" Cursor="Hand"
-                              Checked="ChkIncludePreQuest_Changed" Unchecked="ChkIncludePreQuest_Changed"
-                              ToolTip="Include items required for Collector's prerequisite quests"/>
+                              Checked="ChkIncludePreQuest_Changed" Unchecked="ChkIncludePreQuest_Changed"/>
 
                     <!-- Fulfillment Filter -->
                     <ComboBox x:Name="CmbFulfillment" Width="100" Margin="0,0,8,0"
