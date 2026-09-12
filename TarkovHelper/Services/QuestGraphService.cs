@@ -140,7 +140,11 @@ namespace TarkovHelper.Services
             visiting.Remove(questName);
             visited.Add(questName);
 
-            // Add the task itself only if it's a prerequisite (not the target)
+            // Added after its own prerequisites, so the list reads earliest first. The TARGET
+            // quest is added too, as the last entry: a caller that wants strictly the
+            // prerequisites drops it (the Collector page folds the result into a set where the
+            // target's presence is harmless). The previous comment claimed the target was
+            // excluded; it never was.
             if (task != null)
             {
                 result.Add(task);
@@ -431,44 +435,6 @@ namespace TarkovHelper.Services
         public bool IsCollectorQuest(TarkovTask task)
         {
             return task.NormalizedName?.Equals("collector", StringComparison.OrdinalIgnoreCase) == true;
-        }
-
-        /// <summary>
-        /// Get all Kappa-required quests in optimal completion order
-        /// </summary>
-        public List<TarkovTask> GetKappaPath()
-        {
-            EnsureInitialized();
-
-            var kappaQuests = _tasks!.Where(t => t.ReqKappa).ToList();
-            var allRequired = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            // Collect all prerequisites for Kappa quests
-            foreach (var quest in kappaQuests)
-            {
-                if (!string.IsNullOrEmpty(quest.NormalizedName))
-                {
-                    allRequired.Add(quest.NormalizedName);
-                    var prereqs = GetAllPrerequisites(quest.NormalizedName);
-                    foreach (var prereq in prereqs)
-                    {
-                        if (!string.IsNullOrEmpty(prereq.NormalizedName))
-                            allRequired.Add(prereq.NormalizedName);
-                    }
-                }
-            }
-
-            // Sort by optimal completion order
-            var result = new List<TarkovTask>();
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var tempMark = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var questName in allRequired.OrderBy(q => q))
-            {
-                TopologicalSort(questName, visited, tempMark, result);
-            }
-
-            return result.Where(t => allRequired.Contains(t.NormalizedName ?? "")).ToList();
         }
 
         #region Unlock (Progression) Order

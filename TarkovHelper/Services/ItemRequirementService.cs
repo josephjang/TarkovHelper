@@ -301,66 +301,6 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Get items required for all Kappa quests
-        /// </summary>
-        public List<AggregatedItemRequirement> GetKappaItems()
-        {
-            EnsureInitialized();
-
-            var graphService = QuestGraphService.Instance;
-            graphService.Initialize(_tasks!);
-
-            var kappaPath = graphService.GetKappaPath();
-            var kappaQuestNames = new HashSet<string>(
-                kappaPath.Select(t => t.NormalizedName ?? ""),
-                StringComparer.OrdinalIgnoreCase
-            );
-
-            var itemTotals = new Dictionary<string, AggregatedItemRequirement>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var task in kappaPath)
-            {
-                if (task.RequiredItems == null) continue;
-
-                foreach (var questItem in task.RequiredItems)
-                {
-                    var normalizedName = questItem.ItemNormalizedName;
-
-                    if (!itemTotals.TryGetValue(normalizedName, out var aggregated))
-                    {
-                        aggregated = new AggregatedItemRequirement
-                        {
-                            ItemNormalizedName = normalizedName,
-                            Item = _itemLookup?.TryGetValue(normalizedName, out var item) == true ? item : null,
-                            Quests = new List<QuestItemReference>()
-                        };
-                        itemTotals[normalizedName] = aggregated;
-                    }
-
-                    aggregated.TotalAmount += questItem.Amount;
-                    if (questItem.FoundInRaid)
-                    {
-                        aggregated.TotalFIRAmount += questItem.Amount;
-                    }
-
-                    aggregated.Quests.Add(new QuestItemReference
-                    {
-                        QuestNormalizedName = task.NormalizedName ?? "",
-                        QuestName = task.Name,
-                        Amount = questItem.Amount,
-                        Requirement = questItem.Requirement,
-                        FoundInRaid = questItem.FoundInRaid,
-                        DogtagMinLevel = questItem.DogtagMinLevel
-                    });
-                }
-            }
-
-            return itemTotals.Values
-                .OrderByDescending(i => i.TotalAmount)
-                .ToList();
-        }
-
-        /// <summary>
         /// Get item requirement statistics
         /// </summary>
         public ItemRequirementStats GetStats()

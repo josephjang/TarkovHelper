@@ -739,8 +739,9 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Check if a quest is completed by its normalized name
-        /// Used for Collector quest progress calculation
+        /// Check if a quest is completed by its normalized name, against the live snapshot and
+        /// settings. Used by IntegratedItemService; the Kappa counts no longer go through here,
+        /// they answer "done" within their own render pass (QuestGraphService.GetKappaProgress).
         /// </summary>
         public bool IsQuestCompleted(string normalizedName)
         {
