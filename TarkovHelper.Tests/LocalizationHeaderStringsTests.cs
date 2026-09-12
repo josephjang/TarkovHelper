@@ -41,6 +41,9 @@ public class LocalizationHeaderStringsTests
         // beside two English literals that moved here with it
         // (feature-quest-loyalty-gating.spec.md).
         "RequirementLevelFormat", "RequirementScavKarmaFormat", "RequirementLoyaltyFormat",
+        // Quest detail Kappa section and the Kappa quest list window
+        // (feature-kappa-collector-1-1.spec.md, Design 4): one count, one label, app-wide.
+        "KappaProgressHeading", "KappaCountFormat", "ShowKappaQuests", "KappaQuestListTitle",
         // Settings pre-existing rows (migrated from inline switches; the overlay
         // title reuses the Core "Settings" property)
         "Settings", "SettingsLogFolderLabel", "SettingsLogFolderDesc",
@@ -66,6 +69,7 @@ public class LocalizationHeaderStringsTests
         "SettingsCurrentVersionFormat", "SettingsUpdateToFormat", "TimeMinutesAgoFormat",
         "ProfileResetTargetFormat", "ProfileResetSuccessFormat", "ProfileResetConfirmButtonFormat",
         "RequirementLevelFormat", "RequirementScavKarmaFormat", "RequirementLoyaltyFormat",
+        "KappaCountFormat", "KappaQuestListTitle",
     };
 
     /// <summary>
@@ -87,6 +91,29 @@ public class LocalizationHeaderStringsTests
     [MemberData(nameof(RequirementFormatSlots))]
     public void Requirement_lines_keep_every_slot_in_every_language(
         AppLanguage language, string key, int slots)
+        => AssertKeepsEverySlot(language, key, slots);
+
+    /// <summary>
+    /// The Kappa and Collector strings that carry slots, and how many. The count fills two
+    /// ({0} done of {1}); a translation that dropped the total would print a bare number, which
+    /// reads as the total.
+    /// </summary>
+    public static IEnumerable<object[]> KappaCollectorFormatSlots() =>
+        from language in new[] { AppLanguage.EN, AppLanguage.KO, AppLanguage.JA }
+        from key in new[]
+        {
+            ("KappaCountFormat", 2),
+            ("KappaQuestListTitle", 2),
+        }
+        select new object[] { language, key.Item1, key.Item2 };
+
+    [Theory]
+    [MemberData(nameof(KappaCollectorFormatSlots))]
+    public void Kappa_and_Collector_lines_keep_every_slot_in_every_language(
+        AppLanguage language, string key, int slots)
+        => AssertKeepsEverySlot(language, key, slots);
+
+    private static void AssertKeepsEverySlot(AppLanguage language, string key, int slots)
     {
         var value = GetString(TestLocalization.WithLanguage(language), key);
 
@@ -95,6 +122,74 @@ public class LocalizationHeaderStringsTests
             Assert.Contains("{" + slot + "}", value);
         }
     }
+
+    #region Kappa and Collector wording (feature-kappa-collector-1-1.md, R4 and R7)
+
+    /// <summary>
+    /// Every Kappa and Collector string this phase added or changed. The set the two wording
+    /// rules below run over.
+    /// </summary>
+    private static readonly string[] KappaCollectorKeys =
+    {
+        "KappaProgressHeading", "KappaCountFormat", "ShowKappaQuests", "KappaQuestListTitle",
+    };
+
+    /// <summary>
+    /// The thirteen flagged quests include Collector itself, so they are not Collector's
+    /// prerequisites (those are twelve). The detail pane used to read "Prerequisites: (x/13
+    /// completed)" and the Collector page's option "Include Pre-Quest"; a player who had done all
+    /// twelve read "12/13" and went looking for the one they had missed. No string in the set
+    /// may call the flagged quests prerequisites, in any of the three languages.
+    /// </summary>
+    [Theory]
+    [InlineData(AppLanguage.EN, "Prerequisite", "Pre-Quest")]
+    [InlineData(AppLanguage.KO, "선행", "사전 퀘스트")]
+    [InlineData(AppLanguage.JA, "先行", "前提")]
+    public void No_Kappa_or_Collector_string_calls_the_flagged_quests_prerequisites(
+        AppLanguage language, string forbidden, string alsoForbidden)
+    {
+        var loc = TestLocalization.WithLanguage(language);
+
+        foreach (var key in KappaCollectorKeys)
+        {
+            var value = GetString(loc, key);
+            Assert.DoesNotContain(forbidden, value, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(alsoForbidden, value, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// The Kappa wording 1.1 left true, pinned byte for byte so a broader "Kappa" rewording
+    /// cannot ride in beside the two texts this phase does change: the container is still
+    /// Collector's reward, so the recommendation priority keeps its text (R7, PD4).
+    /// </summary>
+    [Theory]
+    [InlineData(AppLanguage.EN, "Kappa Priority")]
+    [InlineData(AppLanguage.KO, "카파 필수")]
+    [InlineData(AppLanguage.JA, "Kappa必須")]
+    public void The_Kappa_priority_recommendation_keeps_its_text(AppLanguage language, string expected)
+        => Assert.Equal(expected, TestLocalization.WithLanguage(language).KappaPriority);
+
+    /// <summary>
+    /// The other R7 texts live in markup and in the recommendation service rather than on the
+    /// localization service, so they are pinned where they are written: the badge tooltip on
+    /// both surfaces that show it, the Kappa filter's label, and the recommendation reason.
+    /// </summary>
+    [Theory]
+    [InlineData("Pages/QuestListPage.xaml", "ToolTip=\"Required for Kappa Container\"")]
+    [InlineData("Pages/Components/QuestRecommendationsPanel.xaml", "ToolTip=\"Required for Kappa Container\"")]
+    [InlineData("Pages/QuestListPage.xaml", "x:Name=\"ChkKappaOnly\" Content=\"Kappa\"")]
+    [InlineData("Services/QuestRecommendationService.cs", "\"Kappa required + unlocks {unlocksCount} quest(s)\"")]
+    [InlineData("Services/QuestRecommendationService.cs", "\"카파 필수 + {unlocksCount}개 퀘스트 해금\"")]
+    [InlineData("Services/QuestRecommendationService.cs", "\"Kappa必須 + {unlocksCount}クエスト解放\"")]
+    public void The_Kappa_badge_filter_and_reason_keep_their_text(string relativePath, string literal)
+    {
+        var source = File.ReadAllText(Path.Combine(TestRepo.Root(), "TarkovHelper", relativePath));
+
+        Assert.Contains(literal, source, StringComparison.Ordinal);
+    }
+
+    #endregion
 
     /// <summary>
     /// The profile tooltip and the reset dialog both enumerate what the profile owns, and both

@@ -513,4 +513,50 @@ public partial class LocalizationService
     }
 
     #endregion
+
+    #region Quest detail: Kappa section
+
+    // The detail pane's Kappa section (shown for Collector) and the Kappa quest list window it
+    // opens, which the Collector page opens too. One count, one label, app-wide: the flagged
+    // quests are "Kappa quests", never "prerequisites". Collector's twelve prerequisites and
+    // the thirteen flagged quests are different sets, and the old literal "Prerequisites:
+    // (x/13 completed)" sent a player who had done all twelve looking for the one they missed
+    // (feature-kappa-collector-1-1.md, R4 and PD2). "Kappa" renders as "카파" in KO and stays
+    // "Kappa" in JA, as the recommendation reason already does.
+
+    public string KappaProgressHeading => CurrentLanguage switch
+    {
+        AppLanguage.KO => "카파 퀘스트",
+        AppLanguage.JA => "Kappaクエスト",
+        _ => "Kappa quests"
+    };
+
+    /// <summary>
+    /// {0} = flagged quests done, {1} = flagged quests in total. The same string on the detail
+    /// pane and on the Collector page, so the two never differ in wording either.
+    /// </summary>
+    public string KappaCountFormat => CurrentLanguage switch
+    {
+        AppLanguage.KO => "카파 퀘스트 {0}/{1} 완료",
+        AppLanguage.JA => "Kappaクエスト {0}/{1} 完了",
+        _ => "{0}/{1} Kappa quests completed"
+    };
+
+    /// <summary>The button that opens the Kappa quest list, on both pages.</summary>
+    public string ShowKappaQuests => CurrentLanguage switch
+    {
+        AppLanguage.KO => "카파 퀘스트 보기",
+        AppLanguage.JA => "Kappaクエストを表示",
+        _ => "Show Kappa quests"
+    };
+
+    /// <summary>The list window's header. {0} = done, {1} = total, as <see cref="KappaCountFormat"/>.</summary>
+    public string KappaQuestListTitle => CurrentLanguage switch
+    {
+        AppLanguage.KO => "카파 퀘스트 ({0}/{1})",
+        AppLanguage.JA => "Kappaクエスト ({0}/{1})",
+        _ => "Kappa quests ({0}/{1})"
+    };
+
+    #endregion
 }

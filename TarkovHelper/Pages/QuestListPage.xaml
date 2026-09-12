@@ -588,9 +588,12 @@
                                     </Border>
                                 </StackPanel>
 
-                                <!-- Kappa Progress Section (for Collector quest) -->
+                                <!-- Kappa Progress Section (for Collector quest). Its texts are
+                                     written from LocalizationService in UpdateKappaProgressSection,
+                                     which runs on every rebuild of the pane, a language switch
+                                     included. -->
                                 <StackPanel x:Name="KappaProgressSection" Visibility="Collapsed" Margin="0,0,0,16">
-                                    <TextBlock Text="Kappa Progress" FontSize="{DynamicResource FontSizeSmall}" FontWeight="SemiBold"
+                                    <TextBlock x:Name="TxtKappaProgressHeading" FontSize="{DynamicResource FontSizeSmall}" FontWeight="SemiBold"
                                                Foreground="{StaticResource TextPrimaryBrush}"
                                                Margin="0,0,0,8"/>
                                     <Border Background="{StaticResource BackgroundDarkBrush}"
@@ -609,8 +612,8 @@
                                                            HorizontalAlignment="Center" VerticalAlignment="Center"
                                                            FontSize="{DynamicResource FontSizeTiny}" FontWeight="SemiBold" Foreground="White"/>
                                             </Grid>
-                                            <!-- Show All Button -->
-                                            <Button x:Name="BtnShowKappaQuests" Content="Show All Required Quests"
+                                            <!-- Opens the Kappa quest list window -->
+                                            <Button x:Name="BtnShowKappaQuests"
                                                     Padding="8,4" Click="BtnShowKappaQuests_Click"/>
                                         </StackPanel>
                                     </Border>
