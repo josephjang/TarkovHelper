@@ -245,4 +245,97 @@ internal static class E2EQuestData
             while (reader.Read()) names.Add(reader.GetString(0));
             return names;
         });
+
+    #region Kappa and Collector (feature-kappa-collector-1-1.spec.md)
+
+    /// <summary>One flagged Kappa quest: the keys its progress row is written under, and its name.</summary>
+    internal sealed record KappaQuest(string Id, string NormalizedName, string Name);
+
+    /// <summary>One of Collector's loyalty rows: the trader, its Korean name, and the level required.</summary>
+    internal sealed record CollectorTrader(
+        string Id, string NormalizedName, string Name, string? NameKo, int Level);
+
+    /// <summary>Collector's own row and its loyalty rows, in the order the badge and the unlock panel list them.</summary>
+    internal sealed record CollectorQuest(
+        string Id, string NormalizedName, int? MinLevel, double? MinScavKarma,
+        IReadOnlyList<CollectorTrader> Traders);
+
+    /// <summary>How many quests the seed flags as required for Kappa, Collector included: the {total} every Kappa count shows.</summary>
+    public static int KappaFlagCount()
+        => Query("SELECT COUNT(*) FROM Quests WHERE KappaRequired = 1",
+            command => Convert.ToInt32(command.ExecuteScalar()));
+
+    /// <summary>
+    /// Every quest the seed flags as required for Kappa other than Collector itself, by name:
+    /// the set the count runs over, and the ones the Kappa/Collector e2e seeds Done so that the
+    /// prerequisite gate clears and the value gates show.
+    /// </summary>
+    public static IReadOnlyList<KappaQuest> KappaQuests()
+        => Query(@"
+            SELECT Id, NormalizedName, Name
+            FROM Quests
+            WHERE KappaRequired = 1 AND lower(NormalizedName) <> 'collector'
+            ORDER BY Name", command =>
+        {
+            var quests = new List<KappaQuest>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                quests.Add(new KappaQuest(reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            }
+            return quests;
+        });
+
+    /// <summary>
+    /// Collector as the seed publishes it: its level and Scav karma thresholds, and its loyalty
+    /// rows sorted the way the loader sorts them (the quest's own trader first, then the game's
+    /// trader order, then by name; see <c>QuestDbService.SortIntoBadgeOrder</c>), so the first
+    /// row is the trader the badge names once the level and karma are met.
+    /// <see cref="E2EQuestDataTests"/> pins that order against the loader's own.
+    /// </summary>
+    public static CollectorQuest Collector()
+    {
+        var (id, normalizedName, giver, minLevel, minScavKarma) = Query(@"
+            SELECT Id, NormalizedName, Trader, MinLevel, MinScavKarma
+            FROM Quests
+            WHERE lower(NormalizedName) = 'collector'", command =>
+        {
+            using var reader = command.ExecuteReader();
+            Assert.True(reader.Read(), "tarkov_data.db has no quest whose NormalizedName is 'collector'");
+            return (
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3),
+                reader.IsDBNull(4) ? (double?)null : reader.GetDouble(4));
+        });
+
+        var traders = Query(@"
+            SELECT t.Id, t.NormalizedName, r.TraderName, t.NameKO, r.RequiredLevel
+            FROM QuestTraderRequirements r
+            JOIN Traders t ON t.Id = r.TraderId
+            WHERE r.QuestId = $id", command =>
+        {
+            command.Parameters.AddWithValue("$id", id);
+            var rows = new List<CollectorTrader>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                rows.Add(new CollectorTrader(
+                    reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4)));
+            }
+            return rows;
+        });
+
+        var inBadgeOrder = traders
+            .OrderByDescending(t => string.Equals(t.Name, giver, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(t => TraderDbService.DisplayRank(t.NormalizedName))
+            .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new CollectorQuest(id, normalizedName, minLevel, minScavKarma, inBadgeOrder);
+    }
+
+    #endregion
 }

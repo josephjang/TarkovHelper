@@ -534,6 +534,31 @@ internal sealed class AppDriver : IDisposable
         return scope == null ? Array.Empty<AutomationElement>() : TextElementsUnder(scope);
     }
 
+    /// <summary>
+    /// Switches the app's language through the Settings overlay's combo, by the item's rendered
+    /// name (the three items are declared in MainWindow.xaml and carry no AutomationId). Selected
+    /// through SelectionItemPattern rather than clicked: the drop-down is a popup window of its
+    /// own, which a click would have to chase outside this window's UIA tree.
+    /// </summary>
+    public void SelectLanguage(string itemName)
+    {
+        InvokeElement("BtnSettings");
+        WaitForElementVisibility("CmbLanguage", visible: true);
+        var combo = WaitForElement("CmbLanguage");
+
+        // Expanded first because WPF realizes a ComboBox's items only once its popup opens: until
+        // then there is no item element to select.
+        ExpandElement("CmbLanguage");
+        AutomationElement? item = null;
+        PollUntil(
+            () => (item = combo.FindFirst(TreeScope.Descendants, new AndCondition(
+                      new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem),
+                      new PropertyCondition(AutomationElement.NameProperty, itemName)))) != null,
+            $"the language combo to offer '{itemName}'");
+
+        ((SelectionItemPattern)item!.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+    }
+
     private static IReadOnlyList<AutomationElement> TextElementsUnder(AutomationElement scope)
     {
         var found = scope.FindAll(TreeScope.Descendants,
