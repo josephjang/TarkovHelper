@@ -33,15 +33,7 @@ public sealed class QuestLoyaltyE2ETests : E2ETestBase
     }
 
     private static string LoyaltyButtonId(string traderNormalizedName, int level)
-        => $"Loyalty_{traderNormalizedName}_{level}";
-
-    /// <summary>Opens the drawer if it is closed, and waits for the loyalty inputs to be there.</summary>
-    private static void OpenDrawer(AppDriver app, string traderNormalizedName, int level)
-    {
-        app.WaitForElement("BtnProfile");
-        if (!app.IsElementVisible("TxtPlayerLevel")) app.InvokeElement("BtnProfile");
-        app.WaitForElementVisibility(LoyaltyButtonId(traderNormalizedName, level), visible: true);
-    }
+        => ProfileDrawerDriver.LoyaltyButtonId(traderNormalizedName, level);
 
     [E2EFact]
     public void A_loyalty_gated_quest_unlocks_when_its_traders_level_is_entered()
@@ -58,11 +50,7 @@ public sealed class QuestLoyaltyE2ETests : E2ETestBase
             $"'{questName}' to show the LL{level} badge before any loyalty is entered");
 
         // One click in the drawer, on the group the roster built for this trader.
-        OpenDrawer(app, trader, level);
-        app.InvokeElement(LoyaltyButtonId(trader, level));
-        WaitUntil(
-            () => app.TryGetItemStatus(LoyaltyButtonId(trader, level)) == QuestStatusTags.ChipSelected,
-            $"the level {level} button for '{trader}' to report selected");
+        ProfileDrawerDriver.EnterLoyalty(app, trader, level);
 
         // ...and the quest is available, without reopening or re-searching anything: the drawer
         // edit refreshes the list and the detail pane the way a level edit does.
@@ -78,11 +66,7 @@ public sealed class QuestLoyaltyE2ETests : E2ETestBase
 
         using (var app = LaunchMaximized(configDir))
         {
-            OpenDrawer(app, trader, level);
-            app.InvokeElement(LoyaltyButtonId(trader, level));
-            WaitUntil(
-                () => app.TryGetItemStatus(LoyaltyButtonId(trader, level)) == QuestStatusTags.ChipSelected,
-                "the entered level to be selected before the restart");
+            ProfileDrawerDriver.EnterLoyalty(app, trader, level);
             app.CloseAndWaitForExit();
         }
 
@@ -101,7 +85,7 @@ public sealed class QuestLoyaltyE2ETests : E2ETestBase
             WaitUntil(() => restarted.GetElementText("TxtDetailStatus") == "Active",
                 $"'{questName}' to still be Active after a restart");
 
-            OpenDrawer(restarted, trader, level);
+            ProfileDrawerDriver.Open(restarted, trader, level);
             WaitUntil(
                 () => restarted.TryGetItemStatus(LoyaltyButtonId(trader, level))
                       == QuestStatusTags.ChipSelected,
@@ -122,8 +106,7 @@ public sealed class QuestLoyaltyE2ETests : E2ETestBase
         var configDir = NewQuietConfigDir();
         using var app = LaunchMaximized(configDir);
 
-        OpenDrawer(app, trader, level);
-        app.InvokeElement(LoyaltyButtonId(trader, level));
+        ProfileDrawerDriver.EnterLoyalty(app, trader, level);
         QuestTabDriver.ShowQuestDetail(app, questName, "All");
         WaitUntil(() => app.GetElementText("TxtDetailStatus") == "Active",
             $"'{questName}' to be Active in the profile the level was entered under");
@@ -137,7 +120,7 @@ public sealed class QuestLoyaltyE2ETests : E2ETestBase
             $"'{questName}' to read LL{level} again under a profile that entered no loyalty");
 
         // ...and the drawer says so too, rather than still showing the other profile's level.
-        OpenDrawer(app, trader, level);
+        ProfileDrawerDriver.Open(app, trader, level);
         WaitUntil(
             () => app.TryGetItemStatus(LoyaltyButtonId(trader, level)) == QuestStatusTags.ChipUnselected,
             "the drawer to stop showing the other profile's entered level");
@@ -163,8 +146,7 @@ public sealed class QuestLoyaltyE2ETests : E2ETestBase
         var activeBefore = ChipCount(app, QuestStatusTags.Active);
         Assert.True(lockedBefore > 0, "no quest is locked before any loyalty is entered");
 
-        OpenDrawer(app, trader, level);
-        app.InvokeElement(LoyaltyButtonId(trader, level));
+        ProfileDrawerDriver.EnterLoyalty(app, trader, level);
 
         // At least one quest moved, and every quest that left Locked arrived in Active: the
         // entered level cannot make a quest vanish from the list or turn Unavailable.
@@ -205,8 +187,7 @@ public sealed class QuestLoyaltyE2ETests : E2ETestBase
         // Clearing the giver moves the badge onto the other trader, which is where it starts
         // carrying a NAME. Before the detail pane was handed the task it read the bare "Level"
         // here while the row beside it named the trader.
-        OpenDrawer(app, quest.GiverNormalizedName, quest.GiverLevel);
-        app.InvokeElement(LoyaltyButtonId(quest.GiverNormalizedName, quest.GiverLevel));
+        ProfileDrawerDriver.EnterLoyalty(app, quest.GiverNormalizedName, quest.GiverLevel);
         var englishBadge = $"{quest.OtherTraderName} LL{quest.OtherLevel}";
         WaitUntil(() => RowBadge(app) == englishBadge,
             $"the row badge to name the trader still holding the quest ('{englishBadge}')");
@@ -234,7 +215,7 @@ public sealed class QuestLoyaltyE2ETests : E2ETestBase
 
         // ...and the pair still agrees after a language switch. The row's copy is cached, so this
         // is the half that goes stale when the language handler refreshes only the quest names.
-        SelectLanguage(app, "한국어");
+        app.SelectLanguage("한국어");
         var koreanBadge = $"{quest.OtherTraderNameKo} LL{quest.OtherLevel}";
         WaitUntil(() => app.GetElementText("TxtDetailStatus") == koreanBadge,
             $"the detail badge to read '{koreanBadge}' after the switch to Korean");
@@ -252,31 +233,6 @@ public sealed class QuestLoyaltyE2ETests : E2ETestBase
               .FindFirst(TreeScope.Descendants,
                   new PropertyCondition(AutomationElement.AutomationIdProperty, "TxtRowStatus"))
               ?.Current.Name;
-
-    /// <summary>
-    /// Switches the app's language through the Settings overlay's combo, by the item's rendered
-    /// name (the three items are declared in MainWindow.xaml and carry no AutomationId). Selected
-    /// through SelectionItemPattern rather than clicked: the drop-down is a popup window of its
-    /// own, which a click would have to chase outside this window's UIA tree.
-    /// </summary>
-    private static void SelectLanguage(AppDriver app, string itemName)
-    {
-        app.InvokeElement("BtnSettings");
-        app.WaitForElementVisibility("CmbLanguage", visible: true);
-        var combo = app.WaitForElement("CmbLanguage");
-
-        // Expanded first because WPF realizes a ComboBox's items only once its popup opens: until
-        // then there is no item element to select.
-        app.ExpandElement("CmbLanguage");
-        AutomationElement? item = null;
-        AppDriver.PollUntil(
-            () => (item = combo.FindFirst(TreeScope.Descendants, new AndCondition(
-                      new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem),
-                      new PropertyCondition(AutomationElement.NameProperty, itemName)))) != null,
-            $"the language combo to offer '{itemName}'");
-
-        ((SelectionItemPattern)item!.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
-    }
 
     /// <summary>
     /// A quest gated on its own trader AND on exactly one other, and on nothing else a fresh

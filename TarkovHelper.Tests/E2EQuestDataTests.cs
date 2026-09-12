@@ -150,4 +150,98 @@ public sealed class E2EQuestDataTests
         // The app's traversal previews exactly the one guaranteed auto-failure.
         Assert.Equal(new[] { altName }, (await Cascade(questName)).Failures);
     }
+
+    #region Kappa and Collector (feature-kappa-collector-1-1.spec.md)
+
+    [Fact]
+    public void The_Kappa_fixtures_return_rows_and_the_set_is_the_seeds_flag_count()
+    {
+        var kappaQuests = E2EQuestData.KappaQuests();
+        var collector = E2EQuestData.Collector();
+
+        // The flagged set is Collector plus the rest, and the e2e seeds exactly the rest Done.
+        Assert.NotEmpty(kappaQuests);
+        Assert.Equal(E2EQuestData.KappaFlagCount(), kappaQuests.Count + 1);
+        Assert.DoesNotContain(kappaQuests, q => q.NormalizedName == collector.NormalizedName);
+
+        // The two value gates and the loyalty rows the panel lists; the e2e seeds the first two
+        // to the thresholds and clicks the rows.
+        Assert.NotNull(collector.MinLevel);
+        Assert.NotNull(collector.MinScavKarma);
+        Assert.NotEmpty(collector.Traders);
+        Assert.All(collector.Traders, t => Assert.False(string.IsNullOrWhiteSpace(t.NormalizedName)));
+        // The Korean half of the e2e reads the first trader's Korean name off the panel.
+        Assert.False(string.IsNullOrWhiteSpace(collector.Traders[0].NameKo));
+        Assert.NotEqual(collector.Traders[0].Name, collector.Traders[0].NameKo);
+    }
+
+    /// <summary>
+    /// The fixture sorts Collector's rows the way it believes the loader does. Asserted against
+    /// the loader's own output rather than restated, so the e2e's "{first trader} LL4" is the
+    /// badge the app really shows and not the fixture's opinion of it.
+    /// </summary>
+    [Fact]
+    public async Task Collectors_fixture_rows_are_in_the_order_the_loader_leaves_them()
+    {
+        Assert.True(await QuestDbService.Instance.LoadQuestsAsync(), "asset db did not load");
+        var fixture = E2EQuestData.Collector();
+        var loaded = QuestDbService.Instance.AllQuests.Single(q => q.NormalizedName == fixture.NormalizedName);
+        var rows = loaded.TraderLoyaltyRequirements;
+        Assert.NotNull(rows);
+
+        Assert.Equal(
+            rows!.Select(r => r.TraderId).ToArray(),
+            fixture.Traders.Select(t => t.Id).ToArray());
+        Assert.Equal(
+            rows.Select(r => r.Level).ToArray(),
+            fixture.Traders.Select(t => t.Level).ToArray());
+    }
+
+    /// <summary>
+    /// The states the Kappa/Collector e2e drives through, proved on the real walk over the real
+    /// data: Locked on a fresh profile; with the other flagged quests Done, held by the level,
+    /// then by the karma, then by the fixture's first trader, then Active. If any other gate
+    /// held Collector, the e2e's seeds and seven clicks would not flip it.
+    /// </summary>
+    [Fact]
+    public async Task Collector_walks_Locked_then_level_then_karma_then_the_first_trader_then_Active()
+    {
+        Assert.True(await QuestDbService.Instance.LoadQuestsAsync(), "asset db did not load");
+        var tasks = QuestDbService.Instance.AllQuests.ToArray();
+        var fixture = E2EQuestData.Collector();
+        var collector = tasks.Single(q => q.NormalizedName == fixture.NormalizedName);
+        var defaults = ProfileSettingsSnapshot.Defaults("fresh", 0);
+
+        var fresh = ProgressServiceHarness.Create(new ProgressStoreFake(), AppProfile.PvpSeason, tasks);
+        Assert.Equal(QuestStatus.Locked, fresh.GetStatus(collector, fresh.Snapshot, defaults, out var freshGate));
+        Assert.Equal(QuestGate.Prerequisite, freshGate);
+
+        var twelveDone = ProgressSnapshot.From(
+            "fresh", 0,
+            E2EQuestData.KappaQuests().ToDictionary(q => q.Id, _ => QuestStatus.Done),
+            new Dictionary<string, bool>());
+        var service = ProgressServiceHarness.Create(new ProgressStoreFake(), twelveDone, tasks);
+
+        service.GetStatus(collector, service.Snapshot, defaults, out var gate);
+        Assert.Equal(QuestGate.PlayerLevel, gate);
+
+        var atLevel = defaults with { PlayerLevel = fixture.MinLevel };
+        service.GetStatus(collector, service.Snapshot, atLevel, out gate);
+        Assert.Equal(QuestGate.ScavKarma, gate);
+
+        var atKarma = atLevel with { ScavRep = fixture.MinScavKarma };
+        service.GetStatus(collector, service.Snapshot, atKarma, out gate);
+        Assert.Equal(QuestGate.TraderLoyalty, gate);
+        Assert.Equal(
+            fixture.Traders[0].Id,
+            QuestProgressService.FirstUnmetTraderLoyalty(collector, atKarma)!.TraderId);
+
+        var levels = TraderLoyaltyLevels.Empty;
+        foreach (var trader in fixture.Traders) levels = levels.With(trader.Id, trader.Level);
+        Assert.Equal(
+            QuestStatus.Active,
+            service.GetStatus(collector, service.Snapshot, atKarma with { TraderLoyalty = levels }, out _));
+    }
+
+    #endregion
 }
