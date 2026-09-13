@@ -4,17 +4,24 @@ using System.Text.RegularExpressions;
 namespace TarkovHelper.Tests;
 
 /// <summary>
-/// Guards the four decision-doc invariants named in the Risks section of
-/// feature-decision-docs-process.md: the docs/decisions format is meant to be
-/// enforced by structure, not discipline, and these checks are the structure. All
-/// four run offline against the working tree (same repo-root walk as UpdateXmlTests).
+/// Guards the docs/decisions format: the four invariants named in the Risks section
+/// of feature-decision-docs-process.md, plus the shape rules of the change-proposal
+/// form adopted on 2026-09-13 (2026-09-13-adopt-change-proposal.md, R4). The format
+/// is meant to be enforced by structure, not discipline, and these checks are the
+/// structure. All run offline against the working tree (same repo-root walk as
+/// UpdateXmlTests); the shape rules themselves live in ChangeProposalFormat, where
+/// ChangeProposalFormatTests proves them on fixture text.
 ///
-/// Scope rules: the eleven documents flattened from the old active/ folder keep
-/// their legacy format and are exempted by a closed allowlist (the set can never
-/// grow, active/ is gone); archive/ is frozen history and out of scope entirely;
-/// feature-decision-docs-process.spec.md is excluded from the path-resolution check
-/// because it records the removed active/ paths and the deleted template by design
-/// (mirroring verification checks 4–5 in that spec).
+/// Scope rules: dated files (YYYY-MM-DD-slug...) and the three templates are the
+/// change-proposal form and are held to its title, section, and pairing rules;
+/// documents written before the adoption (feature-*, fix-*, *.spec.md) keep the
+/// earlier decision-doc format and are held only to the original invariants; the
+/// eleven documents flattened from the old active/ folder keep the legacy template
+/// format and are exempted from the kept-current-field check by a closed allowlist
+/// (the set can never grow, active/ is gone); archive/ is frozen history and out of
+/// scope entirely; feature-decision-docs-process.spec.md is excluded from the
+/// path-resolution check because it records the removed active/ paths and the
+/// deleted template by design (mirroring verification checks 4 and 5 in that spec).
 /// </summary>
 public sealed class DecisionDocsTests
 {
@@ -48,24 +55,58 @@ public sealed class DecisionDocsTests
 
     private static string DecisionsDir() => Path.Combine(TestRepo.Root(), "docs", "decisions");
 
+    private static string TemplatesDir() => Path.Combine(DecisionsDir(), "templates");
+
+    private static IEnumerable<string> FlatDocs() =>
+        Directory.EnumerateFiles(DecisionsDir(), "*.md", SearchOption.TopDirectoryOnly);
+
     /// <summary>
-    /// New-format decision docs: everything flat in docs/decisions/ plus the two
+    /// New-format decision docs: everything flat in docs/decisions/ plus the
     /// templates, minus the README and the legacy allowlist. archive/ is excluded
-    /// (frozen history).
+    /// (frozen history). "New format" here means "not the pre-2026-07 template", so
+    /// it covers both the decision-doc form and the change-proposal form.
     /// </summary>
     private static IEnumerable<string> NewFormatDocs()
     {
-        var decisions = DecisionsDir();
-        var flat = Directory.EnumerateFiles(decisions, "*.md", SearchOption.TopDirectoryOnly);
-        var templates = Directory.EnumerateFiles(
-            Path.Combine(decisions, "templates"), "*.md", SearchOption.TopDirectoryOnly);
+        var templates = Directory.EnumerateFiles(TemplatesDir(), "*.md", SearchOption.TopDirectoryOnly);
 
-        return flat.Concat(templates).Where(path =>
+        return FlatDocs().Concat(templates).Where(path =>
         {
             var name = Path.GetFileName(path);
             return !string.Equals(name, "README.md", StringComparison.OrdinalIgnoreCase)
                    && !LegacyFlattenedDocs.Contains(name, StringComparer.OrdinalIgnoreCase);
         });
+    }
+
+    /// <summary>Flat documents whose name starts with a date: the change-proposal form.</summary>
+    private static IEnumerable<string> DatedDocs() =>
+        FlatDocs().Where(path => ChangeProposalFormat.IsDated(Path.GetFileName(path)));
+
+    /// <summary>
+    /// Every document that has a form to be checked against: the dated documents by
+    /// their suffix, and the templates by their file name. A dated document whose
+    /// name is not one of the three shapes has no form and is reported by
+    /// <see cref="Dated_docs_take_one_of_the_three_names"/> instead.
+    /// </summary>
+    private static IEnumerable<(string Path, ChangeProposalFormat.Form Form)> FormedDocs()
+    {
+        foreach (var path in DatedDocs())
+        {
+            var form = ChangeProposalFormat.FormOf(Path.GetFileName(path));
+            if (form != null)
+            {
+                yield return (path, form.Value);
+            }
+        }
+
+        foreach (var name in ChangeProposalFormat.TemplateFileNames)
+        {
+            var path = Path.Combine(TemplatesDir(), name);
+            if (File.Exists(path))
+            {
+                yield return (path, ChangeProposalFormat.FormOfTemplate(name)!.Value);
+            }
+        }
     }
 
     [Fact]
@@ -94,6 +135,12 @@ public sealed class DecisionDocsTests
             + "or unticked checkboxes:\n" + string.Join("\n", violations));
     }
 
+    /// <summary>
+    /// The pairing rule of the pre-2026-09-13 decision-doc form, kept for the
+    /// documents written in it: a spec never stood alone here. The change-proposal
+    /// form's pairing (both ways, with links) is
+    /// <see cref="Every_split_pair_is_complete_and_links_both_ways"/>.
+    /// </summary>
     [Fact]
     public void Every_spec_has_its_sibling_prd()
     {
@@ -126,6 +173,78 @@ public sealed class DecisionDocsTests
 
         Assert.True(missing.Count == 0,
             "Every .ko.md twin pairs 1:1 with its English original:\n" + string.Join("\n", missing));
+    }
+
+    [Fact]
+    public void Templates_exist_for_each_form()
+    {
+        var missing = ChangeProposalFormat.TemplateFileNames
+            .Where(name => !File.Exists(Path.Combine(TemplatesDir(), name)))
+            .ToList();
+
+        Assert.True(missing.Count == 0,
+            "docs/decisions/templates/ holds one template per change-proposal form:\n" + string.Join("\n", missing));
+    }
+
+    [Fact]
+    public void Dated_docs_take_one_of_the_three_names()
+    {
+        var unrecognized = DatedDocs()
+            .Select(Path.GetFileName)
+            .Where(name => ChangeProposalFormat.FormOf(name!) == null)
+            .ToList();
+
+        Assert.True(unrecognized.Count == 0,
+            "A dated document is YYYY-MM-DD-<slug>.md, .requirements.md, or .design.md, with a "
+            + "lower-case kebab-case slug (new documents are English only, so there is no .ko.md "
+            + "shape):\n" + string.Join("\n", unrecognized));
+    }
+
+    [Fact]
+    public void Dated_docs_and_templates_follow_their_forms_layout()
+    {
+        var violations = new List<string>();
+        foreach (var (path, form) in FormedDocs())
+        {
+            foreach (var violation in ChangeProposalFormat.ShapeViolations(form, File.ReadAllText(path)))
+            {
+                violations.Add($"{Path.GetFileName(path)}: {violation}");
+            }
+        }
+
+        Assert.True(violations.Count == 0,
+            "A change proposal carries its form's title prefix and its fixed top-level sections, "
+            + "in the template's order, with the required ones present:\n" + string.Join("\n", violations));
+    }
+
+    [Fact]
+    public void Every_split_pair_is_complete_and_links_both_ways()
+    {
+        var problems = new List<string>();
+        foreach (var path in DatedDocs())
+        {
+            var name = Path.GetFileName(path);
+            var counterpart = ChangeProposalFormat.CounterpartOf(name);
+            if (counterpart == null)
+            {
+                continue;
+            }
+
+            if (!File.Exists(Path.Combine(DecisionsDir(), counterpart)))
+            {
+                problems.Add($"{name} has no {counterpart} beside it");
+                continue;
+            }
+
+            if (!ChangeProposalFormat.LinksCounterpartBelowTitle(File.ReadAllText(path), counterpart))
+            {
+                problems.Add($"{name} does not link {counterpart} between its title and its first section");
+            }
+        }
+
+        Assert.True(problems.Count == 0,
+            "A Split proposal is its .requirements.md and .design.md together, each linking the other "
+            + "below its title; neither alone is a proposal:\n" + string.Join("\n", problems));
     }
 
     [Fact]
