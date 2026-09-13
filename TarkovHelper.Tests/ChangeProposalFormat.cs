@@ -147,6 +147,32 @@ public static class ChangeProposalFormat
         return null;
     }
 
+    /// <summary>
+    /// The change an undated, pre-adoption file records: its name without the
+    /// <c>.ko.md</c>, <c>.spec.md</c>, or <c>.md</c> suffix, so a PRD, its spec, and
+    /// its Korean twin all share one stem. Used to hold the undated names to the
+    /// closed set of changes recorded before 2026-09-13.
+    /// </summary>
+    public static string LegacyStem(string fileName)
+    {
+        var stem = fileName;
+        if (stem.EndsWith(".ko.md", StringComparison.Ordinal))
+        {
+            stem = stem.Substring(0, stem.Length - ".ko.md".Length);
+        }
+        else if (stem.EndsWith(".md", StringComparison.Ordinal))
+        {
+            stem = stem.Substring(0, stem.Length - ".md".Length);
+        }
+
+        if (stem.EndsWith(".spec", StringComparison.Ordinal))
+        {
+            stem = stem.Substring(0, stem.Length - ".spec".Length);
+        }
+
+        return stem;
+    }
+
     /// <summary>The first "# " line outside comments and code fences, or null when there is none.</summary>
     public static string? Title(string text) =>
         ContentLines(text).Select(line => TitleLine.Match(line))

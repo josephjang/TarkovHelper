@@ -64,8 +64,6 @@ already diverged in four places that cost something:
 - Changing the deliver workflow's shape: the plan file, the slices, the two
   guides, the two PRs. Only its vocabulary changes, and which Technical Design
   sections it reads (D5).
-- Changing the global `design-product-spec` skill, which lives in the
-  agent-skills repository and still writes the PRD and spec pair (see Risks).
 - Tooling beyond the guard test: no docs CI step, no linter, unchanged from the
   process decision.
 - Translating the practice, or Korean editions of new documents; new documents
@@ -91,8 +89,9 @@ already diverged in four places that cost something:
   sections are not the form's fixed names in the template's order, or that
   lacks the form's required sections; it fails a `.requirements.md` or
   `.design.md` without its counterpart, or a pair whose documents do not link
-  each other below their titles. The four existing invariants still hold, the
-  legacy `.spec.md` pairing included.
+  each other below their titles; and it fails an undated document whose name is
+  not one of the twenty-seven changes recorded before this one. The four
+  existing invariants still hold, the legacy `.spec.md` pairing included.
 - R5: The deliver skill, its plan template, the deliver command, the code-guide
   workflow, and the PR template use the practice's vocabulary, and the deliver
   workflow reads planned checks from Test Strategy and records observed results
@@ -193,7 +192,11 @@ already diverged in four places that cost something:
   form; it costs nothing and keeps the three templates authoritative. A dated
   document with any other name shape, a `.ko.md` twin included, fails: new
   documents are English only, and the guard is where that rule is cheapest to
-  hold.
+  hold. The undated names are a closed set, the twenty-seven changes recorded
+  before this one, listed in the guard the way the eleven flattened legacy
+  documents already are; a new undated file fails, so a document written in the
+  old form, by habit or by tooling that knows only the old pair, cannot merge
+  unnoticed. The list never grows, because every later document is dated.
 
 ## Risks
 
@@ -203,13 +206,6 @@ already diverged in four places that cost something:
 - Two naming generations share one folder. Accepted: the seam is a date, the
   README explains it and maps the old sections to the new, and renaming merged
   files would break the permanent-address rule for no reader's benefit.
-- The global `design-product-spec` skill still writes `<name>.md` and
-  `<name>.spec.md` with the old section names, and the guard does not see
-  undated files, so a pair it writes would merge in the old form unnoticed.
-  Accepted for now: the skill's fix is in the agent-skills repository, and until
-  then a pair it produces is renamed to the dated names and its sections
-  retitled to the new templates' before the PR opens, at which point the guard
-  applies.
 - The local templates can drift from upstream. Accepted: they name the revision
   they came from, and adopting a later revision is a proposal like this one.
 - The section check can reject a document that legitimately wants a top-level

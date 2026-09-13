@@ -13,9 +13,10 @@ This skill turns decisions that are already made into merged, reviewed,
 documented work. It does not make product decisions: if the Product Requirements
 and Technical Design do not answer a question, that is a blocker to raise, not a
 gap to fill by guessing. Use `/design-product-spec` first when the pair does not
-exist; it still writes the older `<name>.md` and `<name>.spec.md` pair, which is
+exist. A pair drafted in the older `<name>.md` and `<name>.spec.md` form is
 renamed to the dated names and retitled to the templates in
-`docs/decisions/templates/` before PR A opens.
+`docs/decisions/templates/` before PR A opens; the guard rejects a new undated
+file.
 
 Three rules carry most of the value and are each easy to skip:
 
