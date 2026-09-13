@@ -5,6 +5,12 @@
 > The sibling `feature-decisions-folder-rename.spec.md` holds the technical design.
 > Written on the work's branch and merged in the same PR as the work.
 
+> Superseded in part by `2026-09-13-adopt-change-proposal.md` (2026-09-13): the
+> goal that the folder name match the process's umbrella term no longer holds.
+> The umbrella term is now Change Proposal and the folder keeps the name
+> `docs/decisions/`, for the reasons in that proposal's D3. The rename itself
+> and the choice of `decisions` over `design` or `specs` stand.
+
 ## Summary
 
 `docs/PRDs/` is renamed to `docs/decisions/`, so the folder carries the umbrella

@@ -10,6 +10,13 @@
 > the Technical Decisions entry "The folder keeps the name `docs/PRDs/`" is
 > reversed; the folder is now `docs/decisions/`. Every other decision stands.
 
+> Superseded in part by `2026-09-13-adopt-change-proposal.md` (2026-09-13): the
+> two templates in Design section 1 are replaced by the three change-proposal
+> templates under `templates/`; the trigger rules in Design sections 2 and 3 by
+> the behavior-change trigger; and the `DecisionDocsTests` guard (Design section
+> 5) is extended to the dated file names, the fixed section layouts, and the
+> two-way Split pairing. The four original invariants stand.
+
 ## Summary
 
 Four groups of changes plus two review-added guards, no application code: two new

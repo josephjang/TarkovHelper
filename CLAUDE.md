@@ -33,37 +33,52 @@ dotnet run --project TarkovHelper/TarkovHelper.csproj
 | **TarkovDBEditor** | Database editor tool for managing tarkov_data.db (see `TarkovDBEditor/CLAUDE.md` for details) |
 | **tools/DataDiff** | Console tool that compares two published databases into the markdown report a regeneration is reviewed against |
 
-## Documentation & Decision Docs
+## Documentation & Change Proposals
 
-Decisions are documented in `docs/decisions/` at the repo root — the single location
-for the whole solution (TarkovHelper, TarkovDBEditor, and cross-cutting work), kept at
-root since documents routinely span projects. Two document types pair by filename:
-`name.md` is a PRD (product decisions), `name.spec.md` is a spec (technical design).
-See the folder's `README.md` for the format.
+This repository follows the [change-proposal](https://github.com/josephjang/change-proposal)
+practice. **A change that alters observable behavior gets a Change Proposal**, written on
+the work's branch and merged in the same PR as the code. No behavior change (a refactor
+with identical behavior, a typo, a dependency patch, tests only): the PR description says
+so and how that was checked. Decide by what the change does, never by its size or by who
+wrote it.
 
-**When a change needs a document** (write it on the work's branch — it merges in the
-same PR as the work):
+Proposals live flat in `docs/decisions/` at the repo root, the single location for the
+whole solution (TarkovHelper, TarkovDBEditor, and cross-cutting work), in one of two forms:
 
-- A hard-to-reverse **product decision** → PRD (`name.md`)
-- A non-obvious **technical decision** → spec (`name.spec.md`)
-- Both → both files, sharing one name
-- Neither (obvious bug fix, mechanical refactor) → no document; the PR body is enough
-- Adding the sibling file mid-flight is expected — just add it.
+- **Unified**, the default for small, straightforward changes: one document,
+  `YYYY-MM-DD-<slug>.md`, titled `Change Proposal: <name>`.
+- **Split**, when the technical aspect needs its own explanation and review (interacting
+  state transitions, a data migration, compatibility across components, a consequential
+  architecture choice): `YYYY-MM-DD-<slug>.requirements.md` titled
+  `Product Requirements: <name>` plus `YYYY-MM-DD-<slug>.design.md` titled
+  `Technical Design: <name>`, each linking the other below its title. Both together are
+  one proposal; neither alone is.
+- Start Unified. Splitting a draft mid-flight when complexity shows up is expected: rename
+  `.md` to `.requirements.md` and add the `.design.md`.
 
-Once a pair is approved, `/deliver` (or `$deliver` in Codex) sequences the work
-that implements it: a plan file, slices, a code guide, PR A, a deep review on a
+Copy the matching template from `docs/decisions/templates/`. Section names and order are
+fixed per form and guarded by `DecisionDocsTests`; delete a section with nothing to say
+rather than fill it. What belongs in each section is explained once, upstream
+([guide](https://github.com/josephjang/change-proposal/blob/main/docs/guide.md),
+[Split form](https://github.com/josephjang/change-proposal/blob/main/docs/split-proposals.md)).
+`docs/decisions/README.md` holds this repository's conventions on top of the practice,
+including how documents merged before 2026-09-13 (`feature-<name>.md` PRD plus
+`feature-<name>.spec.md` spec, the same two roles under older names) map to the forms.
+
+Once a Split proposal is approved, `/deliver` (or `$deliver` in Codex) sequences the
+work that implements it: a plan file, slices, a code guide, PR A, a deep review on a
 stacked branch, its guide, and PR B. It uses
-`.agents/skills/deliver/references/workflow.md`. Skip it for anything that
-needed no document.
+`.agents/skills/deliver/references/workflow.md`. A change small enough for the Unified
+form does not need it.
 
-Documents live flat in `docs/decisions/`, are never moved, and are append-only: a
-document on `main` is a finished decision record, and state (in flight / done /
-dropped) belongs to GitHub PRs. Name the documents a PR implements in the PR body.
-New documents are written in English only; existing `.ko.md` twins stay paired 1:1
-with their originals, and the English original wins any conflict.
-The only post-merge write: a change that reverses a recorded decision appends
-`Superseded by <doc>` to the old document in that same PR. `archive/` holds frozen
-legacy documents in their original format.
+Documents are never moved or renamed: the filename is the permanent address, and other
+documents cite it by filename, never by path. A draft is revised while its change is
+open, keeping a reversed decision in its Decisions; after the change's last PR merges it
+records the judgment of its time, and the only later write is a
+`Superseded in part by <doc>` note that a reversing PR appends below the title. The PR
+body names the proposal it implements. New documents are written in English only;
+existing `.ko.md` twins stay paired 1:1 with their originals, and the English original
+wins any conflict. `archive/` holds frozen legacy documents in their original format.
 
 Pure reference/analysis docs (DB schemas, system analyses, log-format notes — anything
 describing how the system currently works rather than planned work) live directly under
