@@ -94,6 +94,17 @@ public sealed class ChangeProposalFormatTests
         Assert.Null(ChangeProposalFormat.CounterpartOf(fileName));
     }
 
+    [Theory]
+    [InlineData("feature-quest-loyalty-gating.md", "feature-quest-loyalty-gating")]
+    [InlineData("feature-quest-loyalty-gating.spec.md", "feature-quest-loyalty-gating")]
+    [InlineData("feature-hideout-localized-sort.ko.md", "feature-hideout-localized-sort")]
+    [InlineData("fix-userdata-init-deadlock.md", "fix-userdata-init-deadlock")]
+    [InlineData("feature-new-thing.md", "feature-new-thing")]
+    public void LegacyStem_drops_the_role_and_language_suffixes(string fileName, string expected)
+    {
+        Assert.Equal(expected, ChangeProposalFormat.LegacyStem(fileName));
+    }
+
     [Fact]
     public void A_conforming_unified_proposal_has_no_violations()
     {

@@ -15,7 +15,8 @@ namespace TarkovHelper.Tests;
 /// Scope rules: dated files (YYYY-MM-DD-slug...) and the three templates are the
 /// change-proposal form and are held to its title, section, and pairing rules;
 /// documents written before the adoption (feature-*, fix-*, *.spec.md) keep the
-/// earlier decision-doc format and are held only to the original invariants; the
+/// earlier decision-doc format, are held only to the original invariants, and are
+/// a closed set by stem, so a new undated file is rejected as the old form; the
 /// eleven documents flattened from the old active/ folder keep the legacy template
 /// format and are exempted from the kept-current-field check by a closed allowlist
 /// (the set can never grow, active/ is gone); archive/ is frozen history and out of
@@ -44,6 +45,44 @@ public sealed class DecisionDocsTests
         "fix-quest-name-localization.md",
         "fix-quest-name-localization.ko.md",
         "fix-userdata-init-deadlock.md",
+    };
+
+    /// <summary>
+    /// The changes recorded before the change-proposal adoption, by stem: each is a
+    /// PRD (stem.md), possibly with a spec (stem.spec.md) and a Korean twin
+    /// (stem.ko.md). Closed, like <see cref="LegacyFlattenedDocs"/>: every document
+    /// written after 2026-09-13 takes a dated name, so an undated file outside this
+    /// list is a document written in the old form and is rejected.
+    /// </summary>
+    private static readonly string[] PreAdoptionStems =
+    {
+        "feature-complete-profile-reset",
+        "feature-decision-docs-process",
+        "feature-decisions-folder-rename",
+        "feature-eft-1-1-roadmap",
+        "feature-eft-font-stack",
+        "feature-fork-release-process",
+        "feature-hideout-localized-sort",
+        "feature-kappa-collector-1-1",
+        "feature-persist-map-view-state",
+        "feature-preserve-quest-filters-on-navigation",
+        "feature-profile-log-auto-switch",
+        "feature-quest-chip-only-status-filter",
+        "feature-quest-complete-cascade-confirm",
+        "feature-quest-data-1-1-refresh",
+        "feature-quest-loyalty-gating",
+        "feature-quest-overview-filters",
+        "feature-quest-unlock-sort",
+        "feature-readme-restructure",
+        "feature-reference-docs-cleanup",
+        "feature-repo-rename",
+        "feature-seasonal-profile",
+        "feature-versioned-data-channel",
+        "fix-freeze-v2026-7-data-endpoint",
+        "fix-profile-data-attribution",
+        "fix-profile-settings-race",
+        "fix-quest-name-localization",
+        "fix-userdata-init-deadlock",
     };
 
     /// <summary>
@@ -184,6 +223,22 @@ public sealed class DecisionDocsTests
 
         Assert.True(missing.Count == 0,
             "docs/decisions/templates/ holds one template per change-proposal form:\n" + string.Join("\n", missing));
+    }
+
+    [Fact]
+    public void Undated_docs_are_the_pre_adoption_set()
+    {
+        var strays = FlatDocs()
+            .Select(path => Path.GetFileName(path))
+            .Where(name => !string.Equals(name, "README.md", StringComparison.OrdinalIgnoreCase)
+                           && !ChangeProposalFormat.IsDated(name)
+                           && !PreAdoptionStems.Contains(ChangeProposalFormat.LegacyStem(name), StringComparer.Ordinal))
+            .ToList();
+
+        Assert.True(strays.Count == 0,
+            "A document written after 2026-09-13 takes a dated name (YYYY-MM-DD-<slug>.md, "
+            + ".requirements.md, or .design.md); the undated names are the closed set of changes "
+            + "recorded before the adoption:\n" + string.Join("\n", strays));
     }
 
     [Fact]
