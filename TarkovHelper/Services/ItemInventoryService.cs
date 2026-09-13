@@ -164,19 +164,51 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Get FIR quantity for an item
+        /// Get the quantity of one kind for an item. The kind is a parameter because the read is
+        /// the same read either way (see <see cref="FirKind"/>).
         /// </summary>
-        public int GetFirQuantity(string itemNormalizedName)
+        public int GetQuantity(string itemNormalizedName, FirKind kind)
         {
-            return GetInventory(itemNormalizedName).FirQuantity;
+            return GetInventory(itemNormalizedName).QuantityOf(kind);
         }
 
         /// <summary>
-        /// Get Non-FIR quantity for an item
+        /// Set the quantity of one kind for an item, clamped at zero. A quantity that is already
+        /// what is asked for changes nothing: no entry is created, no save is scheduled and no
+        /// <see cref="InventoryChanged"/> is raised, so a repeated write cannot make the UI
+        /// repaint or the store take a row it does not need.
         /// </summary>
-        public int GetNonFirQuantity(string itemNormalizedName)
+        public void SetQuantity(string itemNormalizedName, FirKind kind, int quantity)
         {
-            return GetInventory(itemNormalizedName).NonFirQuantity;
+            quantity = Math.Max(0, quantity);
+
+            lock (_lock)
+            {
+                _inventoryData.Items.TryGetValue(itemNormalizedName, out var inventory);
+                if ((inventory?.QuantityOf(kind) ?? 0) == quantity) return;
+
+                if (inventory == null)
+                {
+                    inventory = new ItemInventory { ItemNormalizedName = itemNormalizedName };
+                    _inventoryData.Items[itemNormalizedName] = inventory;
+                }
+
+                inventory.SetQuantityOf(kind, quantity);
+                CleanupEmptyInventory(itemNormalizedName);
+                ScheduleSave(itemNormalizedName);
+                InventoryChanged?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        /// <summary>
+        /// Adjust the quantity of one kind by delta (can be positive or negative). The result is
+        /// clamped at zero by <see cref="SetQuantity"/>, so a delta below what is held empties
+        /// that half rather than going negative.
+        /// </summary>
+        public void AdjustQuantity(string itemNormalizedName, FirKind kind, int delta)
+        {
+            var current = GetQuantity(itemNormalizedName, kind);
+            SetQuantity(itemNormalizedName, kind, current + delta);
         }
 
         /// <summary>
@@ -187,73 +219,34 @@ namespace TarkovHelper.Services
             return GetInventory(itemNormalizedName).TotalQuantity;
         }
 
-        /// <summary>
-        /// Set FIR quantity for an item
-        /// </summary>
-        public void SetFirQuantity(string itemNormalizedName, int quantity)
-        {
-            quantity = Math.Max(0, quantity);
+        // The per-kind names the app used before the kind became a value. Kept as delegations
+        // because they read well at a call site that genuinely means one kind and nothing else
+        // (IntegratedItemService fills both halves of a fulfillment row); each is one line, so
+        // there is no second copy of the rule to drift.
 
-            lock (_lock)
-            {
-                if (!_inventoryData.Items.TryGetValue(itemNormalizedName, out var inventory))
-                {
-                    inventory = new ItemInventory { ItemNormalizedName = itemNormalizedName };
-                    _inventoryData.Items[itemNormalizedName] = inventory;
-                }
+        /// <summary>Get FIR quantity for an item</summary>
+        public int GetFirQuantity(string itemNormalizedName) =>
+            GetQuantity(itemNormalizedName, FirKind.Fir);
 
-                if (inventory.FirQuantity != quantity)
-                {
-                    inventory.FirQuantity = quantity;
-                    CleanupEmptyInventory(itemNormalizedName);
-                    ScheduleSave(itemNormalizedName);
-                    InventoryChanged?.Invoke(this, EventArgs.Empty);
-                }
-            }
-        }
+        /// <summary>Get Non-FIR quantity for an item</summary>
+        public int GetNonFirQuantity(string itemNormalizedName) =>
+            GetQuantity(itemNormalizedName, FirKind.NonFir);
 
-        /// <summary>
-        /// Set Non-FIR quantity for an item
-        /// </summary>
-        public void SetNonFirQuantity(string itemNormalizedName, int quantity)
-        {
-            quantity = Math.Max(0, quantity);
+        /// <summary>Set FIR quantity for an item</summary>
+        public void SetFirQuantity(string itemNormalizedName, int quantity) =>
+            SetQuantity(itemNormalizedName, FirKind.Fir, quantity);
 
-            lock (_lock)
-            {
-                if (!_inventoryData.Items.TryGetValue(itemNormalizedName, out var inventory))
-                {
-                    inventory = new ItemInventory { ItemNormalizedName = itemNormalizedName };
-                    _inventoryData.Items[itemNormalizedName] = inventory;
-                }
+        /// <summary>Set Non-FIR quantity for an item</summary>
+        public void SetNonFirQuantity(string itemNormalizedName, int quantity) =>
+            SetQuantity(itemNormalizedName, FirKind.NonFir, quantity);
 
-                if (inventory.NonFirQuantity != quantity)
-                {
-                    inventory.NonFirQuantity = quantity;
-                    CleanupEmptyInventory(itemNormalizedName);
-                    ScheduleSave(itemNormalizedName);
-                    InventoryChanged?.Invoke(this, EventArgs.Empty);
-                }
-            }
-        }
+        /// <summary>Adjust FIR quantity by delta (can be positive or negative)</summary>
+        public void AdjustFirQuantity(string itemNormalizedName, int delta) =>
+            AdjustQuantity(itemNormalizedName, FirKind.Fir, delta);
 
-        /// <summary>
-        /// Adjust FIR quantity by delta (can be positive or negative)
-        /// </summary>
-        public void AdjustFirQuantity(string itemNormalizedName, int delta)
-        {
-            var current = GetFirQuantity(itemNormalizedName);
-            SetFirQuantity(itemNormalizedName, current + delta);
-        }
-
-        /// <summary>
-        /// Adjust Non-FIR quantity by delta (can be positive or negative)
-        /// </summary>
-        public void AdjustNonFirQuantity(string itemNormalizedName, int delta)
-        {
-            var current = GetNonFirQuantity(itemNormalizedName);
-            SetNonFirQuantity(itemNormalizedName, current + delta);
-        }
+        /// <summary>Adjust Non-FIR quantity by delta (can be positive or negative)</summary>
+        public void AdjustNonFirQuantity(string itemNormalizedName, int delta) =>
+            AdjustQuantity(itemNormalizedName, FirKind.NonFir, delta);
 
         /// <summary>
         /// Remove inventory entry if both quantities are 0

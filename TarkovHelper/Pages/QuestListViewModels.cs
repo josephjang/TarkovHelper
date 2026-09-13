@@ -89,20 +89,24 @@ namespace TarkovHelper.Pages
         /// The trader's name in the app's language, given the requirement row. Injected for the
         /// reason the badge injects it: this stays a pure function of its arguments.
         /// </param>
+        /// <param name="brushes">
+        /// The met and unmet colours, as one value (see <see cref="RequirementLineBrushes"/>).
+        /// Injected for the same reason as the resolver, and so a case can hand in two sentinels
+        /// and assert by reference which colour a line got.
+        /// </param>
         internal static List<RequirementLineViewModel> BuildFor(
             TarkovTask task,
             ProfileSettingsSnapshot settings,
             LocalizationService loc,
             Func<QuestTraderRequirement, string> traderDisplayName,
-            Brush metBrush,
-            Brush unmetBrush)
+            RequirementLineBrushes brushes)
         {
             var lines = new List<RequirementLineViewModel>();
 
             void Add(string text, bool isMet) => lines.Add(new RequirementLineViewModel
             {
                 DisplayText = text,
-                Foreground = isMet ? metBrush : unmetBrush,
+                Foreground = isMet ? brushes.Met : brushes.Unmet,
             });
 
             if (task.RequiredLevel.HasValue && task.RequiredLevel.Value > 0)

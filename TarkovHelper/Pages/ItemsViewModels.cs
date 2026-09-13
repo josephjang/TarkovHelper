@@ -1,178 +1,30 @@
-using System.ComponentModel;
 using System.Windows;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using TarkovHelper.Models;
 
 namespace TarkovHelper.Pages
 {
     /// <summary>
-    /// Aggregated item view model for display with inventory tracking
+    /// One row in the Items page's item list: an item something in the game wants, and how much
+    /// of it the player still has to find.
+    /// <para>
+    /// Everything a row shows lives on <see cref="ItemRowViewModel"/>, which the Collector page's
+    /// rows share. What this page adds is the second source it aggregates: the hideout modules,
+    /// counted alongside the quests into the row's totals, plus the categories its filters group
+    /// rows by.
+    /// </para>
     /// </summary>
-    public class AggregatedItemViewModel : INotifyPropertyChanged
+    public sealed class AggregatedItemViewModel : ItemRowViewModel
     {
-        public string ItemId { get; set; } = string.Empty;
-        public string ItemNormalizedName { get; set; } = string.Empty;
-        public string DisplayName { get; set; } = string.Empty;
-        public string SubtitleName { get; set; } = string.Empty;
-        public Visibility SubtitleVisibility { get; set; } = Visibility.Collapsed;
         public string? Category { get; set; }
         public string ParentCategory { get; set; } = "Other";
-        public int QuestCount { get; set; }
-        public int QuestFIRCount { get; set; }
+
+        // The hideout half of the row's totals. TotalCount is QuestCount + HideoutCount and
+        // TotalFIRCount the same sum of the FIR halves, which is why a row can want more units
+        // in all than it wants Found In Raid (see ItemRowViewModel.FulfillmentStatus).
         public int HideoutCount { get; set; }
         public int HideoutFIRCount { get; set; }
-        public int TotalCount { get; set; }
-        public int TotalFIRCount { get; set; }
-        public bool FoundInRaid { get; set; }
-        public Visibility FirVisibility => FoundInRaid ? Visibility.Visible : Visibility.Collapsed;
 
-        private BitmapImage? _iconSource;
-        public BitmapImage? IconSource
-        {
-            get => _iconSource;
-            set
-            {
-                if (_iconSource != value)
-                {
-                    _iconSource = value;
-                    OnPropertyChanged(nameof(IconSource));
-                }
-            }
-        }
-        public string? IconLink { get; set; }
-        public string? WikiLink { get; set; }
-
-        // Inventory quantities (user's owned items)
-        private int _ownedFirQuantity;
-        private int _ownedNonFirQuantity;
-
-        public int OwnedFirQuantity
-        {
-            get => _ownedFirQuantity;
-            set
-            {
-                if (_ownedFirQuantity != value)
-                {
-                    _ownedFirQuantity = value;
-                    OnPropertyChanged(nameof(OwnedFirQuantity));
-                    OnPropertyChanged(nameof(OwnedTotalQuantity));
-                    OnPropertyChanged(nameof(FulfillmentStatus));
-                    OnPropertyChanged(nameof(ProgressPercent));
-                    OnPropertyChanged(nameof(IsFulfilled));
-                    OnPropertyChanged(nameof(FulfilledVisibility));
-                    OnPropertyChanged(nameof(ItemOpacity));
-                    OnPropertyChanged(nameof(NameTextDecorations));
-                    OnPropertyChanged(nameof(OwnedDisplay));
-                }
-            }
-        }
-
-        public int OwnedNonFirQuantity
-        {
-            get => _ownedNonFirQuantity;
-            set
-            {
-                if (_ownedNonFirQuantity != value)
-                {
-                    _ownedNonFirQuantity = value;
-                    OnPropertyChanged(nameof(OwnedNonFirQuantity));
-                    OnPropertyChanged(nameof(OwnedTotalQuantity));
-                    OnPropertyChanged(nameof(FulfillmentStatus));
-                    OnPropertyChanged(nameof(ProgressPercent));
-                    OnPropertyChanged(nameof(IsFulfilled));
-                    OnPropertyChanged(nameof(FulfilledVisibility));
-                    OnPropertyChanged(nameof(ItemOpacity));
-                    OnPropertyChanged(nameof(NameTextDecorations));
-                    OnPropertyChanged(nameof(OwnedDisplay));
-                }
-            }
-        }
-
-        public int OwnedTotalQuantity => OwnedFirQuantity + OwnedNonFirQuantity;
-
-        // Fulfillment calculation
-        public ItemFulfillmentStatus FulfillmentStatus
-        {
-            get
-            {
-                if (TotalFIRCount > 0)
-                {
-                    // FIR is required
-                    if (OwnedFirQuantity >= TotalFIRCount)
-                        return ItemFulfillmentStatus.Fulfilled;
-                    if (OwnedTotalQuantity > 0)
-                        return ItemFulfillmentStatus.PartiallyFulfilled;
-                    return ItemFulfillmentStatus.NotStarted;
-                }
-                else
-                {
-                    // Non-FIR OK
-                    if (OwnedTotalQuantity >= TotalCount)
-                        return ItemFulfillmentStatus.Fulfilled;
-                    if (OwnedTotalQuantity > 0)
-                        return ItemFulfillmentStatus.PartiallyFulfilled;
-                    return ItemFulfillmentStatus.NotStarted;
-                }
-            }
-        }
-
-        public double ProgressPercent
-        {
-            get
-            {
-                if (TotalCount == 0) return 100;
-
-                if (TotalFIRCount > 0)
-                {
-                    return Math.Min(100, (double)OwnedFirQuantity / TotalFIRCount * 100);
-                }
-                else
-                {
-                    return Math.Min(100, (double)OwnedTotalQuantity / TotalCount * 100);
-                }
-            }
-        }
-
-        public bool IsFulfilled => FulfillmentStatus == ItemFulfillmentStatus.Fulfilled;
-        public Visibility FulfilledVisibility => IsFulfilled ? Visibility.Visible : Visibility.Collapsed;
-        public double ItemOpacity => IsFulfilled ? 0.5 : 1.0;
-        public TextDecorationCollection? NameTextDecorations => IsFulfilled ? TextDecorations.Strikethrough : null;
-
-        // Owned display string
-        public string OwnedDisplay
-        {
-            get
-            {
-                if (OwnedTotalQuantity == 0)
-                    return "0";
-                if (OwnedNonFirQuantity == 0)
-                    return $"{OwnedFirQuantity}F";
-                if (OwnedFirQuantity == 0)
-                    return OwnedNonFirQuantity.ToString();
-                return $"{OwnedFirQuantity}F+{OwnedNonFirQuantity}";
-            }
-        }
-
-        // Display strings for UI - shows FIR/non-FIR breakdown
-        public string QuestDisplay => QuestCount > 0 ? FormatCountDisplay(QuestCount, QuestFIRCount) : "0";
-        public string HideoutDisplay => HideoutCount > 0 ? FormatCountDisplay(HideoutCount, HideoutFIRCount) : "0";
-        public string TotalDisplay => FormatCountDisplay(TotalCount, TotalFIRCount);
-
-        private static string FormatCountDisplay(int total, int firCount)
-        {
-            if (firCount == 0)
-                return total.ToString();
-            if (firCount == total)
-                return $"{total} (FIR)";
-            // Mixed: show both FIR and non-FIR counts
-            var nonFirCount = total - firCount;
-            return $"{firCount}F+{nonFirCount}";
-        }
-
-        public event PropertyChangedEventHandler? PropertyChanged;
-        protected void OnPropertyChanged(string propertyName) =>
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        public string HideoutDisplay => ItemCountDisplay.Required(HideoutCount, HideoutFIRCount);
     }
 
     /// <summary>

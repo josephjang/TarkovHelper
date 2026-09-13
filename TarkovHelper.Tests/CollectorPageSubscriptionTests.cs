@@ -52,9 +52,10 @@ public sealed class CollectorPageSubscriptionTests
         string eventName, string handler)
     {
         // An expression-bodied one-liner over the coalescer. A handler that rebuilt inline would
-        // repaint once per event of a burst (nine times for a seven-trader profile switch), and
-        // one that reloaded the items would re-aggregate 44 rows for a value that cannot change
-        // the list's scope.
+        // repaint once per event of a burst: for a seven-trader profile switch that is the level,
+        // the rep, seven loyalty events and the reload, so 1 + 1 + 7 + 1 = ten repaints. And one
+        // that reloaded the items would re-aggregate 44 rows for a value that cannot change the
+        // list's scope.
         var declaration = Regex.Match(
             Source, $@"private void {handler}\(object\? sender, \w+ e\)\s*=>\s*(?<body>[^;]+);");
 
@@ -65,10 +66,17 @@ public sealed class CollectorPageSubscriptionTests
     [Fact]
     public void The_events_Collector_cannot_change_on_are_not_subscribed()
     {
-        // TD4: Collector carries no edition, prestige, DSP or faction gate and the item list reads
-        // none of those values, so a handler for any of them could never observe a change. Four
-        // handlers that can never fire is what "subscribe to all eight for symmetry" would have
-        // added; a publish that changes the data arrives through DataRefreshed instead.
+        // TD4: no quest in Collector's prerequisite closure carries an edition, prestige, DSP or
+        // faction gate, so none of these five events can change anything the page shows. Not
+        // because the page ignores those values: the item list reads them transitively, dropping
+        // a quest whose status is Unavailable, which is what an unmet edition, prestige or
+        // faction gate produces (QuestStatusLoyaltyTests.An_edition_gate_still_wins_over_loyalty).
+        // It is the published data that puts no such gate in that closure, and
+        // PublishedDataContentTests
+        //   .The_quests_Collector_depends_on_carry_no_edition_prestige_or_faction_gate
+        // is what keeps that true. Five handlers that can never fire is what "subscribe to all
+        // eight for symmetry" would have added; a publish that changes the data arrives through
+        // DataRefreshed instead.
         var subscribe = Body("private void SubscribeServiceEvents()");
 
         foreach (var never in new[]
@@ -102,32 +110,23 @@ public sealed class CollectorPageSubscriptionTests
         // The panel, against a fresh pass; not the item list, whose scope none of the four
         // events can change.
         Assert.Contains(
-            "RebuildUnlockPanel(RenderPass.Capture(_questProgressService));", refresh, StringComparison.Ordinal);
-        Assert.DoesNotContain("LoadItemsAsync", refresh, StringComparison.Ordinal);
+            "RebuildUnlockPanel(RenderPass.Capture(_questProgressService, _questGraphService));",
+            refresh, StringComparison.Ordinal);
+        Assert.DoesNotContain("LoadItems", refresh, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReloadItems", refresh, StringComparison.Ordinal);
     }
 
     [Fact]
     public void The_item_load_hands_its_one_pass_to_the_aggregation_and_the_panel()
     {
         // The list and the panel above it describe one profile: one capture per load, threaded to
-        // both, never a second live reading for the panel.
-        var load = Body("private Task LoadItemsAsync()");
+        // both, never a second live reading for the panel. The aggregation is handed the scope
+        // captured FROM that pass (see ListScope), so it cannot read a status from another.
+        var load = Body("private void LoadItems()");
 
         Assert.Single(Regex.Matches(load, @"RenderPass\.Capture\("));
-        Assert.Contains("GetCollectorItemRequirements(pass,", load, StringComparison.Ordinal);
+        Assert.Contains("CaptureListScope(pass)", load, StringComparison.Ordinal);
+        Assert.Contains("GetCollectorItemRequirements(scope)", load, StringComparison.Ordinal);
         Assert.Contains("RebuildUnlockPanel(pass);", load, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Every_status_the_page_reads_comes_through_the_pass_adapter()
-    {
-        // The page used to call GetStatus(task) live per quest against the singletons in two
-        // places (the item aggregation and the detail panel's quest sources). The one call left
-        // is the adapter over the pass; everything else goes through StatusIn(pass, task).
-        Assert.Single(Regex.Matches(Source, @"_questProgressService\.GetStatus\("));
-        Assert.Contains(
-            "_questProgressService.GetStatus(task, pass.Progress, pass.Settings, out var gate)",
-            Body("private (QuestStatus Status, QuestGate Gate) StatusIn(RenderPass pass, TarkovTask task)"),
-            StringComparison.Ordinal);
     }
 }

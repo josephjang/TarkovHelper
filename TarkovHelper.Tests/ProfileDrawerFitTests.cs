@@ -1,5 +1,4 @@
 using System.IO;
-using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Markup;
@@ -207,7 +206,7 @@ public sealed class ProfileDrawerFitTests
     // ---- Arranging the real drawer ------------------------------------------------------
 
     private static DrawerMeasurement MeasureDrawer(double baseFontSize) =>
-        OnStaThread(() =>
+        StaThread.Run(() =>
         {
             var root = (Grid)XamlReader.Parse(ComposeDrawerDocument());
 
@@ -489,43 +488,5 @@ public sealed class ProfileDrawerFitTests
             if (node is ScrollViewer scroller) return scroller;
         }
         return null;
-    }
-
-    /// <summary>
-    /// Runs <paramref name="body"/> on an STA thread, as WPF element construction and layout
-    /// require, and rethrows whatever it threw on the caller's thread with its stack intact.
-    /// </summary>
-    private static T OnStaThread<T>(Func<T> body)
-    {
-        var result = default(T);
-        ExceptionDispatchInfo? failure = null;
-
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                result = body();
-            }
-            catch (Exception ex)
-            {
-                failure = ExceptionDispatchInfo.Capture(ex);
-            }
-            finally
-            {
-                // Element construction spins up a dispatcher for this thread; without this it
-                // outlives the thread and every case leaks one.
-                System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
-            }
-        })
-        {
-            IsBackground = true,
-            Name = nameof(ProfileDrawerFitTests),
-        };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-
-        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "the layout thread never finished");
-        failure?.Throw();
-        return result!;
     }
 }

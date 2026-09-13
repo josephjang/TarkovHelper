@@ -63,6 +63,36 @@ public sealed class PublishedDataContentTests
         Assert.All(rows, r => Assert.Equal("1", r[2]));
     }
 
+    [Fact]
+    public void The_quests_Collector_depends_on_carry_no_edition_prestige_or_faction_gate()
+    {
+        // What TD4 rests on, as a guard. The Collector page does not subscribe to the edition,
+        // prestige, DSP or faction settings events, and its item list drops a quest whose status
+        // is Unavailable - which is what QuestProgressService.GetStatus returns for an unmet
+        // edition, prestige or faction gate, for every quest in the scope and not only for
+        // Collector. So the page is correct because of this file and not because of its code: a
+        // publish that gates one of these thirteen has to be answered with those subscriptions
+        // and a reload of the items, and this case is what says so.
+        const string Closure =
+            @"WITH RECURSIVE closure(Id) AS (
+                  SELECT Id FROM Quests WHERE Name = 'Collector'
+                  UNION
+                  SELECT r.RequiredQuestId FROM QuestRequirements r JOIN closure c ON r.QuestId = c.Id
+              )";
+
+        // Collector plus its twelve, so a walk that broke cannot make the check below vacuous.
+        Assert.Equal(13, Count($"{Closure} SELECT COUNT(*) FROM closure"));
+
+        var gated = Query(
+            $@"{Closure}
+               SELECT q.Name, q.Faction, q.RequiredEdition, q.ExcludedEdition, q.RequiredPrestigeLevel
+               FROM Quests q JOIN closure c ON q.Id = c.Id
+               WHERE q.Faction IS NOT NULL OR q.RequiredEdition IS NOT NULL
+                  OR q.ExcludedEdition IS NOT NULL OR q.RequiredPrestigeLevel IS NOT NULL");
+
+        Assert.Empty(gated);
+    }
+
     #endregion
 
     #region The rows patch 1.1 made fragile

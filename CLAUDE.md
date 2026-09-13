@@ -167,9 +167,17 @@ DatabaseUpdateService (startup, then hourly)
   → Read data/v<N>/manifest.json (version, sha256, size)
   → Download if the version differs, verify the hash, then swap
   → DatabaseUpdated event
-  → Services reload data
-  → UI refreshes
+  → Each *DbService reloads its own tables and raises DataRefreshed
+  → MainWindow.OnQuestDataRefreshed republishes the new task set to the services that
+    are handed their tasks (QuestProgressService.PublishTasks, QuestGraphService.Initialize)
+  → UI pages reload from it
 ```
+Only the `*DbService` caches reload themselves. `QuestProgressService` and `QuestGraphService`
+are handed their tasks, so MainWindow republishes them from the quest reload; the republish
+carries tasks only, never a re-read of recorded progress. `HideoutProgressService`'s module
+list is the known exception: it is still only built at startup, so a publish that changes
+hideout modules needs a restart.
+
 Each build polls the endpoint for the data format it was built to read, pinned by
 `<TarkovDataFormatVersion>` in `TarkovHelper.csproj` (which also selects the bundled seed
 database). See `docs/database-update-mechanism.md` for the channel layout and

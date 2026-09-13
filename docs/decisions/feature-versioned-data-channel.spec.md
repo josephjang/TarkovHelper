@@ -552,3 +552,52 @@ nothing else in the tool was checking that what it ships is one.
   never notice, and an inert `data/` directory harms nothing. Within-format data
   rollback is unchanged: republish older content under a new token and every
   build follows it.
+
+## Appended 2026-09-13: what actually reloads when a publish lands
+
+A factual correction to the Current Behavior bullet above that reads "`MainWindow`
+consumes only the app-update service's completion event and subscribes to
+`DatabaseUpdated` solely for logging (services reload themselves)". No decision
+here is reversed: the channel design, the endpoints, the manifest and the
+verification are all unchanged. The survey line was simply incomplete about which
+caches "services reload themselves" covers, and the append-only rule for these
+documents means the correction goes here rather than over the original line.
+
+What is true:
+
+- The `*DbService` caches do reload themselves. Each subscribes to
+  `DatabaseUpdated`, re-reads its tables and raises its own `DataRefreshed`.
+- Two services do NOT, because they are HANDED their task set rather than reading
+  it: `QuestProgressService` and `QuestGraphService`. Before this correction's
+  change nothing republished them after a publish, so every quest surface (they
+  all render `QuestProgressService.AllTasks`) and the Kappa denominator stayed on
+  the publish the session started with until restart, beside a freshly reloaded
+  item table. On the Collector page the two could visibly mix: a requirement row
+  whose item had vanished from the new item table was silently skipped while its
+  quest still counted it.
+- `MainWindow.OnQuestDataRefreshed` now republishes that task set
+  (`QuestProgressService.PublishTasks`, then `QuestGraphService.Initialize`)
+  before rebuilding the loyalty roster, on `QuestDbService.DataRefreshed`. It runs
+  inline on the dispatcher, and the three pages queue their reloads, so the
+  republish always completes first whatever order the subscribers run in.
+- The republish deliberately carries tasks only. A publish changes which quests
+  exist, never which rows the player recorded, and the progress snapshot is keyed
+  by Id/NormalizedName rather than by task instance, so `PublishTasks` exists
+  precisely so the refresh does not take `Initialize`'s path: that one blocks the
+  dispatcher on the user-DB read and re-runs the startup-only "which profile is
+  selected" read.
+
+Known remaining gap: `HideoutProgressService`'s module list is still only built at
+startup, so a publish that adds, removes or retiers a hideout module is not
+reflected until restart. It was left out on purpose. `HideoutDbService` reloads on
+its own `DatabaseUpdated` subscription and announces it with a `BeginInvoke`d
+`DataRefreshed`, so republishing modules from the QUEST refresh would race that
+reload and could publish the old module list; and `HideoutProgressService.Initialize`
+has no progress-free half to call, so it would do exactly the blocking user-DB read
+the quest republish avoids. Closing it needs its own handler on
+`HideoutDbService.DataRefreshed` plus the same Initialize/PublishModules split.
+
+Also still true and unchanged: `DatabaseUpdateService.UpdateCheckCompleted` has no
+consumer, and a data publish is silent in the UI. With the republish in place a
+background publish now changes the quest list, the chips and the Kappa total under
+the user with no notice.

@@ -112,10 +112,12 @@ public partial class MainWindow : Window
         _settingsService.TraderLoyaltyChanged += OnTraderLoyaltyChanged;
         _settingsService.ProfileSettingsReloaded += OnProfileSettingsReloaded;
 
-        // The drawer's loyalty roster is data: it has to be rebuilt whenever the quest rows are,
-        // because a publish that starts gating on a new trader must grow the drawer without an
-        // app change. QuestDbService raises this on the UI thread after every reload.
-        QuestDbService.Instance.DataRefreshed += OnQuestDataRefreshedForLoyalty;
+        // A quest reload is a new task set: the services that are HANDED their tasks
+        // (QuestProgressService, QuestGraphService) have to be republished from it, and the
+        // drawer's loyalty roster rebuilt, because a publish that starts gating on a new trader
+        // must grow the drawer without an app change. QuestDbService raises this on the UI thread
+        // after every reload.
+        QuestDbService.Instance.DataRefreshed += OnQuestDataRefreshed;
 
         _profileTransitionCueTimer = new DispatcherTimer
         {
@@ -1414,15 +1416,48 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Rebuild the loyalty inputs after the quest data reloaded, which is when the roster can
-    /// have changed. Raised on the UI thread by the service, but dispatched anyway for the same
-    /// belt-and-braces reason the other handlers here are. Not routed through
-    /// <see cref="_loyaltyRefresh"/>: that one coalesces repaints of the existing controls, while
-    /// this rebuilds them, and a data reload arrives on its own rather than in a burst.
+    /// Republish a data publish's quest rows to the services that hold a task set, then rebuild
+    /// the loyalty inputs from them. Both are owned here because
+    /// <see cref="QuestProgressService"/> and <see cref="QuestGraphService"/> are the only two
+    /// caches that do NOT reload themselves on a publish: they are handed their tasks, and
+    /// without this a background publish would leave every quest surface (which all render
+    /// <c>QuestProgressService.AllTasks</c>) and the Kappa denominator on the previous publish
+    /// until restart, beside a freshly reloaded item table.
+    /// <para>
+    /// <see cref="QuestProgressService.PublishTasks"/>, not <c>Initialize</c>: the republish must
+    /// not re-read progress. A publish changes which quests exist, never which rows the player
+    /// recorded, and <c>Initialize</c>'s store read would block the dispatcher and re-run its
+    /// startup-only "which profile is selected" read.
+    /// </para>
+    /// <para>
+    /// <see cref="Dispatcher"/>.Invoke, not a posted callback: it runs INLINE, and the three
+    /// pages queue their own reload with BeginInvoke/InvokeAsync, so the republish always
+    /// completes before any page repaints, whatever order the subscribers run in.
+    /// </para>
+    /// <para>
+    /// Not routed through <see cref="_loyaltyRefresh"/>: that one coalesces repaints of the
+    /// existing controls, while this rebuilds them, and a data reload arrives on its own rather
+    /// than in a burst. Hideout modules deliberately stay out (see
+    /// <c>feature-versioned-data-channel.spec.md</c>): HideoutDbService reloads on its own
+    /// event, so republishing them from here would race its async reload, and
+    /// <c>HideoutProgressService.Initialize</c> has no progress-free half to call.
+    /// </para>
     /// </summary>
-    private void OnQuestDataRefreshedForLoyalty(object? sender, EventArgs e)
+    private void OnQuestDataRefreshed(object? sender, EventArgs e)
     {
-        Dispatcher.Invoke(BuildLoyaltyGroup);
+        Dispatcher.Invoke(() =>
+        {
+            var tasks = QuestDbService.Instance.AllQuests.ToList();
+            // An empty reload is a failed load, not a publish that removed every quest: keep the
+            // task set that is on screen rather than blanking every quest surface.
+            if (tasks.Count > 0)
+            {
+                QuestProgressService.Instance.PublishTasks(tasks);
+                QuestGraphService.Instance.Initialize(tasks);
+            }
+
+            BuildLoyaltyGroup();
+        });
     }
 
     #endregion
@@ -3063,9 +3098,9 @@ public partial class MainWindow : Window
         DatabaseUpdateService.Instance.DatabaseUpdated -= OnDatabaseUpdated;
         DatabaseUpdateService.Instance.UpdateCheckCompleted -= OnDatabaseCheckCompleted;
         // Raised off the same hourly background update, one service further along: the quest
-        // reload that follows a downloaded database is what rebuilds the drawer's loyalty
-        // roster, and it must not do that against a closed window.
-        QuestDbService.Instance.DataRefreshed -= OnQuestDataRefreshedForLoyalty;
+        // reload that follows a downloaded database is what republishes the task set and rebuilds
+        // the drawer's loyalty roster, and it must not do that against a closed window.
+        QuestDbService.Instance.DataRefreshed -= OnQuestDataRefreshed;
 
         // WPF does not guarantee Unloaded at shutdown, so the map page's view
         // state (map/zoom/pan) gets its close-time save here as a backstop.
