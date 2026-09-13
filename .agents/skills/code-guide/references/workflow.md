@@ -15,16 +15,18 @@ The series so far is indexed in `docs/README.md`. These three set the format:
 
 1. Identify the change set: the PR number or branch the user names (default:
    the current branch's open PR). Gather the full diff
-   (`git diff main...<branch>` or `gh pr diff <N>`), the decision docs it
-   implements (`docs/decisions/<name>.md` and `.spec.md`), and any assessment
-   findings it resolves (`docs/assessments/`).
+   (`git diff main...<branch>` or `gh pr diff <N>`), the change proposal it
+   implements (`docs/decisions/<date>-<slug>.requirements.md` and `.design.md`,
+   or an older `<name>.md` and `.spec.md` pair), and any assessment findings it
+   resolves (`docs/assessments/`).
 2. Extract, in writing, before designing the page:
    - the whole change in one sentence;
    - 4 to 8 chapter-sized ideas, ordered background first, defect second,
      design third (the reader must be able to judge the design before seeing
      it);
    - the invariants and boundary decisions (the "not after" comparisons, the
-     null policies, the capture moments), plus what the PRD rejected and why;
+     null policies, the capture moments), plus what the Product Requirements
+     rejected and why;
    - which C# tests pin each behaviour, by name.
 3. Pick 2 to 4 lab candidates. A good lab is decision logic reimplementable in
    a small amount of vanilla JS with visible consequences: a resolver, a race,
@@ -62,7 +64,7 @@ In order:
    that fills as quiz answers land.
 2. Hero: eyebrow `PR #N &middot; Code guide`, an h1 that states the promise of
    the change (not a label), a lede framing the page as a curriculum, and a
-   second lede naming the companion decision docs.
+   second lede naming the companion change proposal.
 3. A gold `note` callout headed "The whole change". Say it in as few sentences
    as the 25-word limit in section 4 allows, and never pad it back out to one
    long sentence: the summary is the callout's job, the single sentence was
@@ -81,7 +83,7 @@ In order:
    `why` that teaches; at 8/8 the gate unlocks a reviewer checklist and an
    approval snippet naming the PR and this guide file. Questions test
    reasoning, never vocabulary: a reader who only skimmed must get them wrong.
-7. Footer: sources (the decision docs, assessments), the sentence that the
+7. Footer: sources (the change proposal, assessments), the sentence that the
    labs illustrate rather than ship, and the tests that pin the shipped
    behaviour.
 
@@ -133,7 +135,7 @@ which format point you bent.
   lab text should point at the boundary case (put it within reach of the
   controls, e.g. a slider step that lands exactly on an event).
 - Do not overstate: where the design accepts a hole (DST fold, clock skew),
-  the guide says so in the same terms the spec does.
+  the guide says so in the same terms the Technical Design does.
 
 ## 5. Verify before committing
 

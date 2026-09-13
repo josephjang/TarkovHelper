@@ -10,6 +10,16 @@
 > Product Decisions statement that the folder keeps its `docs/PRDs/` name is
 > reversed; the folder is now `docs/decisions/`. Every other decision stands.
 
+> Superseded in part by `2026-09-13-adopt-change-proposal.md` (2026-09-13): the
+> umbrella term is now Change Proposal, with a Unified form (one document) and a
+> Split form (Product Requirements plus Technical Design, the two roles PRD and
+> spec named); the trigger (R5's PRD, spec, both, or nothing) is replaced by
+> "does the change alter observable behavior"; new documents take dated names
+> instead of `name.md` and `name.spec.md`; and "Documents are append-only" (R2)
+> now applies from a change's last merge, a draft being revised while its change
+> is open. The born-final model, the same-PR rule, the pairing by filename, the
+> PR-body naming rule, and the supersede rule stand.
+
 ## Summary
 
 The documentation process is rebuilt around three rules:

@@ -16,17 +16,18 @@ means stopping.
 
 Temporary working document. It is never committed (`/PLAN-*.md` is gitignored,
 and the commit workflow stages by explicit path) and it is deleted at the end of
-the wrap-up. The decisions live in `docs/decisions/[name].md` and its spec; this
-file only sequences the work and records what each step needs.
+the wrap-up. The decisions live in the proposal,
+`docs/decisions/[date]-[slug].requirements.md` and its `.design.md`; this file
+only sequences the work and records what each step needs.
 
 ## Starting state ([date])
 
 - Worktree `[path]`, branch `[branch]` at `[sha]` = `main` (`[sha]`) plus
   [what else]. Release in the field: `[version]`. Published data: `[version]`.
-- The spec's "Files touched" is the implementation checklist and its
-  "Verification" section holds the commands. Facts already verified
-  ([what: row counts, bounds, live probes]) are in the spec's Current Behavior;
-  do not re-derive them.
+- The Technical Design's "Files touched" is the implementation checklist, its
+  "Test Strategy" holds the planned checks and commands, and its "Verification"
+  records what actually ran. Facts already verified ([what: row counts, bounds,
+  live probes]) are in its Context; do not re-derive them.
 - **Baseline, measured before the first edit:** build [N] warnings / [N] errors,
   non-E2E suite [N] passed, E2E [N] passed / [N] skipped.
 - Six steps, up to two PRs and two guides:
@@ -63,9 +64,10 @@ file only sequences the work and records what each step needs.
 ## Step 1. Implementation
 
 Branch: `git switch -c [feature-branch]` from `[base]`, in this worktree, so the
-decision docs merge with the work (PR A carries them).
+proposal merges with the work (PR A carries both documents).
 
-Work in the spec's Design order; each slice is one commit with its tests.
+Work in the Technical Design's Design order; each slice is one commit with its
+tests.
 
 1. **[Slice name]** (`[type](scope): [subject]`): [what changes]. Tests:
    [which, new or extended]. [Anything the compiler will find for you.]
@@ -84,8 +86,10 @@ Exit criteria before step 2:
 - [ ] self-review of the whole diff against the global checklist (removed
       behaviour, ripple, footguns, wrappers, duplication), reading each edited
       function whole
-- [ ] the spec's "Files touched" matches the diff; a divergence is appended to
-      the spec's Technical Decisions, not left silent
+- [ ] the Technical Design's "Files touched" matches the diff; a divergence is
+      recorded in its Technical Decisions, not left silent
+- [ ] the Technical Design's "Verification" records which checks ran on this
+      branch, what was observed, and what was not checked and why
 - [ ] working tree clean, every slice committed
 - [ ] PR A open as a draft, so step 2 has a number to cite:
       `gh pr create --draft --base [base] --head [feature-branch] --title "..."
@@ -94,8 +98,8 @@ Exit criteria before step 2:
 ## Step 2. Code guide
 
 `/code-guide [branch or PR number]`. Inputs to study: the branch diff against
-`main`, both decision docs, [the previous guide in the series], and the newest
-guide for the CSS tokens.
+`main`, both documents of the proposal, [the previous guide in the series], and
+the newest guide for the CSS tokens.
 
 Chapter candidates (background, defect, design): [list]
 
@@ -120,10 +124,10 @@ Verification, all required:
 
 Body checklist:
 
-- [ ] first paragraph names both decision docs
+- [ ] first paragraph names both documents of the proposal
 - [ ] Why (in numbers), What changed (one bullet per slice), divergences from
-      the spec, Tests (before/after and the fail-first evidence), Verification
-      (exact commands), Residuals
+      the Technical Design, Tests (before/after and the fail-first evidence),
+      Verification (exact commands), Residuals
 - [ ] names the guide file from step 2, with its checker commands under
       Verification
 - [ ] no attribution footer
@@ -151,7 +155,8 @@ After the report:
 - [ ] read the production diff yourself before committing it
 - [ ] build, both suites, and any guide checkers and lab drivers the review's
       edits could have broken
-- [ ] a fix that reverses a recorded decision appends to the spec
+- [ ] a fix that reverses a recorded decision is recorded in the Technical
+      Design's Technical Decisions, and its Verification covers the fix branch
 - [ ] commit (the repo's precedent is one fix commit, clusters in the body)
 - [ ] keep the report for step 5 and the PR B body
 - [ ] no production fixes at all: skip steps 5 and 6, put the review's outcome
@@ -185,7 +190,7 @@ Body checklist:
       lands where it does, which test now pins it
 - [ ] Tests, Verification, Residuals carried forward, and a "read closely" note
       for anything reconstructed or unverifiable
-- [ ] names the guide file and both decision docs
+- [ ] names the guide file and both documents of the proposal
 - [ ] no attribution footer
 
 Merge order: PR A first; confirm PR B's base reads `main` before merging it.

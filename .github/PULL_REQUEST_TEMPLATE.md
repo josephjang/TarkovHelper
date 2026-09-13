@@ -2,7 +2,8 @@
 
 <!-- What changes and why. -->
 
-## Decision docs
+## Change proposal
 
-- [ ] Names the decision doc(s) this PR implements, or states none needed
-      (trigger rules: root `CLAUDE.md` → "Documentation & Decision Docs")
+- [ ] Names the change proposal this PR implements, or states that the change alters no
+      observable behavior and how that was checked
+      (trigger: root `CLAUDE.md` → "Documentation & Change Proposals")
