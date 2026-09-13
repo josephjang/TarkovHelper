@@ -37,11 +37,13 @@ Therapist, Skier, Peacekeeper, Mechanic, Ragman and Jaeger. The app knows all
 of that today. The quest tab shows Collector locked with a badge naming the
 first unmet condition, and the quest's detail pane lists every condition
 against the profile's values. The Collector tab shows none of it: it lists
-Collector's 44 found-in-raid items and their inventory counts, and a player
-who has finished the twelve quests keeps ticking items off there while the
-quest tab, one click away, says `Prapor LL4`. The loyalty phase recorded this
-gap as an accepted risk "until phase 5" (`feature-quest-loyalty-gating.md`,
-Risks); this is phase 5.
+Collector's found-in-raid items and their inventory counts (43 of the quest's
+44 hand-overs, because one published row carries no item to link and so never
+reaches the list, which this phase does not change), and a player who has
+finished the twelve quests keeps ticking items off there while the quest tab,
+one click away, says `Prapor LL4`. The loyalty phase recorded this gap as an
+accepted risk "until phase 5" (`feature-quest-loyalty-gating.md`, Risks);
+this is phase 5.
 
 The Kappa numbers the app shows are right but mislabeled. The quest tab's
 gauge counts the thirteen quests the data flags as required for Kappa,
@@ -160,10 +162,10 @@ that achievement, but it still carries two unused code paths named after it
   Collector.
 - **PD3: The Collector page keeps listing Collector's items while Collector is
   locked, and explains the lock above them.** Hiding the list until Collector
-  unlocks was rejected: players gather Collector's 44 items over months, long
-  before level 42 or the seventh trader at 4, and the item checklist is the
-  page's purpose. The status and conditions go above the list so the player
-  sees both.
+  unlocks was rejected: players gather Collector's 44 hand-overs over months,
+  long before level 42 or the seventh trader at 4, and the item checklist is
+  the page's purpose. The status and conditions go above the list so the
+  player sees both.
 - **PD4: The wording pass covers what 1.1 made wrong and what this phase
   adds, and nothing else.** A broader "Kappa" audit was considered and found
   only two wrong texts (the "Prerequisites" count and the "Kappa Quests Only"

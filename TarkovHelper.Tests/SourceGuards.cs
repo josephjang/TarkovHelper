@@ -1,4 +1,5 @@
 using System.IO;
+using System.Runtime.ExceptionServices;
 
 namespace TarkovHelper.Tests;
 
@@ -16,6 +17,19 @@ namespace TarkovHelper.Tests;
 /// </summary>
 internal static class SourceGuards
 {
+    /// <summary>
+    /// Every .cs file under a directory below the repo root, as (path relative to that directory,
+    /// text). What a guard over a WHOLE directory is written against, so the rule it pins holds
+    /// for the files nobody thought of as well as the ones it names.
+    /// </summary>
+    internal static IEnumerable<(string Name, string Text)> ReadTree(params string[] relativeParts)
+    {
+        var root = Path.Combine(TestRepo.Root(), Path.Combine(relativeParts));
+        Assert.True(Directory.Exists(root), $"Source directory not found: {root}");
+        return Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Select(path => (Path.GetRelativePath(root, path), File.ReadAllText(path)));
+    }
+
     /// <summary>The text of a source file under the repo root, failing loudly when it moved.</summary>
     internal static string Read(params string[] relativeParts)
     {
@@ -45,5 +59,56 @@ internal static class SourceGuards
         }
 
         throw new InvalidOperationException($"Unbalanced braces after '{signature}'.");
+    }
+}
+
+/// <summary>
+/// Runs a body on an STA thread, as constructing a WPF element or window requires, and rethrows
+/// whatever it threw on the caller's thread with its stack intact. One helper rather than a copy
+/// per suite: the drawer layout cases, the Kappa window's placement case and the requirement
+/// palette all need the same thread.
+/// <para>
+/// A class that calls this JOINS a thread, so it must declare
+/// <c>[Collection(SchedulingSensitiveCollection.Name)]</c>. The marker scan in
+/// SchedulingSensitiveCollection.cs recognises such a caller by the <c>StaThread.Run(</c>
+/// marker, so the calling class is classified as scheduling-sensitive: when the attribute
+/// is missing, the scan reports that class as a violation and its guard fails, rather than
+/// waving the call through unseen.
+/// </para>
+/// </summary>
+internal static class StaThread
+{
+    internal static T Run<T>(Func<T> body)
+    {
+        var result = default(T);
+        ExceptionDispatchInfo? failure = null;
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                result = body();
+            }
+            catch (Exception ex)
+            {
+                failure = ExceptionDispatchInfo.Capture(ex);
+            }
+            finally
+            {
+                // Element construction spins up a dispatcher for this thread; without this it
+                // outlives the thread and every case leaks one.
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = nameof(StaThread),
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "the STA thread never finished");
+        failure?.Throw();
+        return result!;
     }
 }

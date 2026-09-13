@@ -123,6 +123,21 @@ namespace TarkovHelper.Services
         /// </summary>
         internal IQuestProgressStore Store { get; set; } = UserDataDbService.Instance;
 
+        private QuestGraphService? _graph;
+
+        /// <summary>
+        /// The quest dependency graph the Started plan walks, behind a settable seam for the same
+        /// reason <see cref="Store"/> is: a test that installed its own graph into the
+        /// process-global <see cref="QuestGraphService.Instance"/> would leave it there for every
+        /// later test in the assembly. Lazily defaulted rather than field-initialized because
+        /// <c>GetUninitializedObject</c> skips field initializers.
+        /// </summary>
+        internal QuestGraphService Graph
+        {
+            get => _graph ??= QuestGraphService.Instance;
+            set => _graph = value;
+        }
+
         private Dictionary<string, TarkovTask> _tasksByNormalizedName = new();
         private Dictionary<string, TarkovTask> _tasksByBsgId = new();
         private Dictionary<string, TarkovTask> _tasksById = new();
@@ -210,16 +225,12 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Initialize service with task data
+        /// Initialize service with task data: publish the task set, then load the selected
+        /// profile's recorded rows for it.
         /// </summary>
         public void Initialize(List<TarkovTask> tasks)
         {
-            _allTasks = tasks;
-
-            var indexes = BuildTaskIndexes(tasks);
-            _tasksByNormalizedName = indexes.ByNormalizedName;
-            _tasksByBsgId = indexes.ByBsgId;
-            _tasksById = indexes.ById;
+            PublishTasks(tasks);
 
             // One call loads both quest and objective rows: they are two halves of one snapshot
             // and must be published together (they used to be two independent loads that each
@@ -227,7 +238,28 @@ namespace TarkovHelper.Services
             LoadProgress();
         }
 
-        /// <summary>The three lookups <see cref="Initialize"/> publishes.</summary>
+        /// <summary>
+        /// Republishes the task set a data publish replaced, WITHOUT re-reading progress: a
+        /// publish changes which quests exist, never which rows the player recorded, and the
+        /// snapshot is keyed by Id/NormalizedName rather than by task instance.
+        /// <para>
+        /// Split out of <see cref="Initialize"/> so a mid-session publish (MainWindow's
+        /// QuestDbService.DataRefreshed handler) neither blocks the dispatcher on the user-DB read
+        /// <see cref="LoadProgress"/> does, nor re-runs that load's one allowed "which profile is
+        /// selected" read, nor claims a revision on an in-flight profile transition.
+        /// </para>
+        /// </summary>
+        public void PublishTasks(List<TarkovTask> tasks)
+        {
+            _allTasks = tasks;
+
+            var indexes = BuildTaskIndexes(tasks);
+            _tasksByNormalizedName = indexes.ByNormalizedName;
+            _tasksByBsgId = indexes.ByBsgId;
+            _tasksById = indexes.ById;
+        }
+
+        /// <summary>The three lookups <see cref="PublishTasks"/> publishes.</summary>
         internal sealed record TaskIndexes(
             Dictionary<string, TarkovTask> ByNormalizedName,
             Dictionary<string, TarkovTask> ByBsgId,
@@ -244,9 +276,9 @@ namespace TarkovHelper.Services
         /// because a name is its key.
         /// </para>
         /// <para>
-        /// Extracted from Initialize so the id set is assertable without running the whole
-        /// initialize, which loads progress from the store and asks ProfileService which profile
-        /// is selected.
+        /// Extracted from the publish path so the id set is assertable without running the whole
+        /// <see cref="Initialize"/>, which loads progress from the store and asks ProfileService
+        /// which profile is selected.
         /// </para>
         /// </summary>
         internal static TaskIndexes BuildTaskIndexes(IEnumerable<TarkovTask> tasks)
@@ -1723,14 +1755,11 @@ namespace TarkovHelper.Services
                     // started, not which of two mutually exclusive predecessors was taken.
                     if (string.IsNullOrEmpty(task.NormalizedName)) return new();
 
-                    // The walk answers the STARTED quest itself as its last entry (see
-                    // QuestGraphService.CollectPrerequisites), and the batch planner marks every
-                    // entry it is given Done. Left in, every quest the live sync saw a player
-                    // start was recorded as finished; QuestStartedEventTests pins the exclusion.
-                    var prerequisites = QuestGraphService.Instance
-                        .GetAllPrerequisites(task.NormalizedName)
-                        .Where(prerequisite => !string.Equals(
-                            prerequisite.NormalizedName, task.NormalizedName, StringComparison.OrdinalIgnoreCase));
+                    // The prerequisites only: GetAllPrerequisites excludes the target, and the
+                    // batch planner marks every entry it is given Done. While the walk answered
+                    // the started quest itself, every quest the live sync saw a player START was
+                    // recorded as finished; QuestStartedEventTests pins the exclusion.
+                    var prerequisites = Graph.GetAllPrerequisites(task.NormalizedName);
                     return PlanBatchCompletion(snapshot, prerequisites);
                 }
 
@@ -1843,37 +1872,6 @@ namespace TarkovHelper.Services
             if (cleared)
             {
                 ProgressChanged?.Invoke(this, EventArgs.Empty);
-            }
-        }
-
-        /// <summary>
-        /// Get prerequisite quest chain for a task
-        /// </summary>
-        public List<TarkovTask> GetPrerequisiteChain(TarkovTask task)
-        {
-            var chain = new List<TarkovTask>();
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            CollectPrerequisites(task, chain, visited);
-
-            return chain;
-        }
-
-        private void CollectPrerequisites(TarkovTask task, List<TarkovTask> chain, HashSet<string> visited)
-        {
-            if (task.Previous == null) return;
-
-            foreach (var prevName in task.Previous)
-            {
-                if (visited.Contains(prevName)) continue;
-                visited.Add(prevName);
-
-                var prevTask = GetTask(prevName);
-                if (prevTask != null)
-                {
-                    CollectPrerequisites(prevTask, chain, visited);
-                    chain.Add(prevTask);
-                }
             }
         }
 

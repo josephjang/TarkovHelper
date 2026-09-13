@@ -27,6 +27,18 @@ namespace TarkovHelper.Pages
         private string? _pendingItemSelection = null;
 
         /// <summary>
+        /// The pass the current rows were aggregated under, so the detail pane's quest sources
+        /// name exactly the quests the list counted (see <see cref="RenderPass"/>). Captured once
+        /// per load and remembered, never re-read live: a fresh pass could name quests the list
+        /// was not built from. Null until the first load.
+        /// <para>
+        /// It cannot go stale behind the rows: every event that can change the list runs a full
+        /// <see cref="LoadItemsAsync"/>, which captures a new pass.
+        /// </para>
+        /// </summary>
+        private RenderPass? _listPass;
+
+        /// <summary>
         /// Collapses the profile-scoped settings burst into one rebuild. SettingsService raises all
         /// seven of its changed events on every published reload (profile switch, profile reset,
         /// self-heal), five of which this page consumes, and each one used to run the full
@@ -494,11 +506,16 @@ namespace TarkovHelper.Pages
         // signature so the awaiting callers stay untouched if it grows real awaits later.
         private Task LoadItemsAsync()
         {
+            // One pass for the item aggregation and the detail pane's quest sources under it, so
+            // the rows and the pane describe one profile (see RenderPass).
+            var pass = RenderPass.Capture(_questProgressService);
+            _listPass = pass;
+
             // Get hideout requirements
             var hideoutItems = _hideoutProgressService.GetAllRemainingItemRequirements();
 
             // Get quest requirements
-            var questItems = GetQuestItemRequirements();
+            var questItems = GetQuestItemRequirements(pass);
 
             // Merge both sources
             var mergedItems = new Dictionary<string, AggregatedItemViewModel>(StringComparer.OrdinalIgnoreCase);
@@ -799,14 +816,19 @@ namespace TarkovHelper.Pages
             _scrollDebounceTimer.Start();
         }
 
-        private Dictionary<string, QuestItemAggregate> GetQuestItemRequirements()
+        /// <summary>
+        /// The remaining quest item requirements, with every quest's status read from
+        /// <paramref name="pass"/> rather than live, so a profile publish landing mid-walk cannot
+        /// leave the rows mixing two profiles.
+        /// </summary>
+        private Dictionary<string, QuestItemAggregate> GetQuestItemRequirements(RenderPass pass)
         {
             var result = new Dictionary<string, QuestItemAggregate>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var task in _questProgressService.AllTasks)
             {
                 // Skip completed, failed, or unavailable quests (includes faction-restricted quests)
-                var status = _questProgressService.GetStatus(task);
+                var status = pass.StatusOf(task).Status;
                 if (status == QuestStatus.Done || status == QuestStatus.Failed || status == QuestStatus.Unavailable)
                     continue;
 
@@ -1095,7 +1117,9 @@ namespace TarkovHelper.Pages
         }
 
         /// <summary>
-        /// Show detail panel for a specific item (used by navigation)
+        /// Show detail panel for a specific item (used by navigation).
+        /// A second writer of the pane <see cref="UpdateDetailPanel"/> already writes, to be
+        /// collapsed into it: https://github.com/josephjang/TarkovHelper/issues/61
         /// </summary>
         private void ShowItemDetail(AggregatedItemViewModel itemVm)
         {
@@ -1137,7 +1161,9 @@ namespace TarkovHelper.Pages
             TxtDetailOwnedFir.Text = itemVm.OwnedFirQuantity.ToString();
             TxtDetailOwnedNonFir.Text = itemVm.OwnedNonFirQuantity.ToString();
 
-            // Update fulfillment status display
+            // Update fulfillment status display. The label and the brush are two switches over
+            // one status, here and in the other pane writer; the Collector page reads both from
+            // a single FulfillmentDisplay(status): https://github.com/josephjang/TarkovHelper/issues/61
             var status = itemVm.FulfillmentStatus;
             var statusText = status switch
             {
@@ -1209,6 +1235,11 @@ namespace TarkovHelper.Pages
             UpdateDetailPanel();
         }
 
+        /// <summary>
+        /// Writes the detail pane for the current selection. <see cref="ShowItemDetail"/> is a
+        /// second writer of the same pane; the Collector page keeps only this one:
+        /// https://github.com/josephjang/TarkovHelper/issues/61
+        /// </summary>
         private void UpdateDetailPanel()
         {
             // If there was a previously selected item, try to find it again after language change
@@ -1266,14 +1297,20 @@ namespace TarkovHelper.Pages
             HideoutSection.Visibility = hideoutSources.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
+        /// <summary>
+        /// The quests that ask for <paramref name="itemNormalizedName"/>, within the pass the
+        /// listed items were aggregated under, so the detail pane names exactly the quests the
+        /// list counted. Empty before the first load.
+        /// </summary>
         private List<QuestItemSourceViewModel> GetQuestSources(string itemNormalizedName)
         {
             var sources = new List<QuestItemSourceViewModel>();
+            if (_listPass is not { } pass) return sources;
 
             foreach (var task in _questProgressService.AllTasks)
             {
                 // Skip completed, failed, or unavailable quests (includes faction-restricted quests)
-                var status = _questProgressService.GetStatus(task);
+                var status = pass.StatusOf(task).Status;
                 if (status == QuestStatus.Done || status == QuestStatus.Failed || status == QuestStatus.Unavailable)
                     continue;
 
@@ -1425,118 +1462,78 @@ namespace TarkovHelper.Pages
 
         #region Inventory Quantity Controls
 
-        private void BtnFirMinus5_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustFirQuantity(sender, -5);
-        }
+        // One control per kind per delta, each an expression-bodied one-liner naming the half it
+        // edits, so the kind is data at the boundary (see FirKind) and never a flag a caller can
+        // get wrong. Everything below them is written once instead of once per kind.
+        private void BtnFirMinus5_Click(object sender, RoutedEventArgs e) =>
+            AdjustRowQuantity(sender, FirKind.Fir, -5);
 
-        private void BtnFirMinus1_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustFirQuantity(sender, -1);
-        }
+        private void BtnFirMinus1_Click(object sender, RoutedEventArgs e) =>
+            AdjustRowQuantity(sender, FirKind.Fir, -1);
 
-        private void BtnFirPlus1_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustFirQuantity(sender, 1);
-        }
+        private void BtnFirPlus1_Click(object sender, RoutedEventArgs e) =>
+            AdjustRowQuantity(sender, FirKind.Fir, 1);
 
-        private void BtnFirPlus5_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustFirQuantity(sender, 5);
-        }
+        private void BtnFirPlus5_Click(object sender, RoutedEventArgs e) =>
+            AdjustRowQuantity(sender, FirKind.Fir, 5);
 
-        private void BtnNonFirMinus5_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustNonFirQuantity(sender, -5);
-        }
+        private void BtnNonFirMinus5_Click(object sender, RoutedEventArgs e) =>
+            AdjustRowQuantity(sender, FirKind.NonFir, -5);
 
-        private void BtnNonFirMinus1_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustNonFirQuantity(sender, -1);
-        }
+        private void BtnNonFirMinus1_Click(object sender, RoutedEventArgs e) =>
+            AdjustRowQuantity(sender, FirKind.NonFir, -1);
 
-        private void BtnNonFirPlus1_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustNonFirQuantity(sender, 1);
-        }
+        private void BtnNonFirPlus1_Click(object sender, RoutedEventArgs e) =>
+            AdjustRowQuantity(sender, FirKind.NonFir, 1);
 
-        private void BtnNonFirPlus5_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustNonFirQuantity(sender, 5);
-        }
+        private void BtnNonFirPlus5_Click(object sender, RoutedEventArgs e) =>
+            AdjustRowQuantity(sender, FirKind.NonFir, 5);
 
-        private void AdjustFirQuantity(object sender, int delta)
+        /// <summary>
+        /// Nudges one half of the quantity on the row whose spinner was clicked, then reads the
+        /// service back instead of computing the new number here: the service clamps at zero, so
+        /// it is the only one that knows what was actually stored.
+        /// </summary>
+        private void AdjustRowQuantity(object sender, FirKind kind, int delta)
         {
             if (sender is Button btn && btn.DataContext is AggregatedItemViewModel vm)
             {
-                _inventoryService.AdjustFirQuantity(vm.ItemNormalizedName, delta);
-                vm.OwnedFirQuantity = _inventoryService.GetFirQuantity(vm.ItemNormalizedName);
-            }
-        }
-
-        private void AdjustNonFirQuantity(object sender, int delta)
-        {
-            if (sender is Button btn && btn.DataContext is AggregatedItemViewModel vm)
-            {
-                _inventoryService.AdjustNonFirQuantity(vm.ItemNormalizedName, delta);
-                vm.OwnedNonFirQuantity = _inventoryService.GetNonFirQuantity(vm.ItemNormalizedName);
+                _inventoryService.AdjustQuantity(vm.ItemNormalizedName, kind, delta);
+                vm.SetOwned(kind, _inventoryService.GetQuantity(vm.ItemNormalizedName, kind));
             }
         }
 
         // Detail panel inventory adjustments (uses selected item)
-        private void BtnDetailFirMinus5_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustDetailFirQuantity(-5);
-        }
+        private void BtnDetailFirMinus5_Click(object sender, RoutedEventArgs e) =>
+            AdjustDetailQuantity(FirKind.Fir, -5);
 
-        private void BtnDetailFirMinus1_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustDetailFirQuantity(-1);
-        }
+        private void BtnDetailFirMinus1_Click(object sender, RoutedEventArgs e) =>
+            AdjustDetailQuantity(FirKind.Fir, -1);
 
-        private void BtnDetailFirPlus1_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustDetailFirQuantity(1);
-        }
+        private void BtnDetailFirPlus1_Click(object sender, RoutedEventArgs e) =>
+            AdjustDetailQuantity(FirKind.Fir, 1);
 
-        private void BtnDetailFirPlus5_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustDetailFirQuantity(5);
-        }
+        private void BtnDetailFirPlus5_Click(object sender, RoutedEventArgs e) =>
+            AdjustDetailQuantity(FirKind.Fir, 5);
 
-        private void BtnDetailNonFirMinus5_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustDetailNonFirQuantity(-5);
-        }
+        private void BtnDetailNonFirMinus5_Click(object sender, RoutedEventArgs e) =>
+            AdjustDetailQuantity(FirKind.NonFir, -5);
 
-        private void BtnDetailNonFirMinus1_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustDetailNonFirQuantity(-1);
-        }
+        private void BtnDetailNonFirMinus1_Click(object sender, RoutedEventArgs e) =>
+            AdjustDetailQuantity(FirKind.NonFir, -1);
 
-        private void BtnDetailNonFirPlus1_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustDetailNonFirQuantity(1);
-        }
+        private void BtnDetailNonFirPlus1_Click(object sender, RoutedEventArgs e) =>
+            AdjustDetailQuantity(FirKind.NonFir, 1);
 
-        private void BtnDetailNonFirPlus5_Click(object sender, RoutedEventArgs e)
-        {
-            AdjustDetailNonFirQuantity(5);
-        }
+        private void BtnDetailNonFirPlus5_Click(object sender, RoutedEventArgs e) =>
+            AdjustDetailQuantity(FirKind.NonFir, 5);
 
-        private void AdjustDetailFirQuantity(int delta)
+        /// <summary>The same nudge from the detail pane, which edits the selected row.</summary>
+        private void AdjustDetailQuantity(FirKind kind, int delta)
         {
             if (_selectedItem == null) return;
-            _inventoryService.AdjustFirQuantity(_selectedItem.ItemNormalizedName, delta);
-            _selectedItem.OwnedFirQuantity = _inventoryService.GetFirQuantity(_selectedItem.ItemNormalizedName);
-            UpdateDetailInventoryDisplay();
-        }
-
-        private void AdjustDetailNonFirQuantity(int delta)
-        {
-            if (_selectedItem == null) return;
-            _inventoryService.AdjustNonFirQuantity(_selectedItem.ItemNormalizedName, delta);
-            _selectedItem.OwnedNonFirQuantity = _inventoryService.GetNonFirQuantity(_selectedItem.ItemNormalizedName);
+            _inventoryService.AdjustQuantity(_selectedItem.ItemNormalizedName, kind, delta);
+            _selectedItem.SetOwned(kind, _inventoryService.GetQuantity(_selectedItem.ItemNormalizedName, kind));
             UpdateDetailInventoryDisplay();
         }
 
@@ -1547,7 +1544,9 @@ namespace TarkovHelper.Pages
             TxtDetailOwnedFir.Text = _selectedItem.OwnedFirQuantity.ToString();
             TxtDetailOwnedNonFir.Text = _selectedItem.OwnedNonFirQuantity.ToString();
 
-            // Update fulfillment status display
+            // Update fulfillment status display. The label and the brush are two switches over
+            // one status, here and in the other pane writer; the Collector page reads both from
+            // a single FulfillmentDisplay(status): https://github.com/josephjang/TarkovHelper/issues/61
             var status = _selectedItem.FulfillmentStatus;
             var statusText = status switch
             {
@@ -1577,82 +1576,62 @@ namespace TarkovHelper.Pages
         }
 
         /// <summary>
-        /// Apply FIR quantity when losing focus
+        /// Apply the edited quantity when a quantity box loses focus. Both boxes raise this one
+        /// handler, as they already shared TxtDetailOwned_PreviewTextInput: which half is being
+        /// edited follows from which box raised the event.
         /// </summary>
-        private void TxtDetailOwnedFir_LostFocus(object sender, RoutedEventArgs e)
+        private void TxtDetailOwned_LostFocus(object sender, RoutedEventArgs e)
         {
-            ApplyFirQuantityFromTextBox();
+            ApplyQuantityFromSender(sender);
         }
 
         /// <summary>
-        /// Apply FIR quantity when pressing Enter
+        /// Apply the edited quantity when Enter is pressed in either quantity box.
         /// </summary>
-        private void TxtDetailOwnedFir_KeyDown(object sender, KeyEventArgs e)
+        private void TxtDetailOwned_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Enter)
             {
-                ApplyFirQuantityFromTextBox();
+                ApplyQuantityFromSender(sender);
                 Keyboard.ClearFocus();
             }
         }
 
         /// <summary>
-        /// Apply Non-FIR quantity when losing focus
+        /// Applies the edit from whichever of the two quantity boxes raised the event. A sender
+        /// that is neither is not one of ours and is left alone.
         /// </summary>
-        private void TxtDetailOwnedNonFir_LostFocus(object sender, RoutedEventArgs e)
+        private void ApplyQuantityFromSender(object sender)
         {
-            ApplyNonFirQuantityFromTextBox();
-        }
-
-        /// <summary>
-        /// Apply Non-FIR quantity when pressing Enter
-        /// </summary>
-        private void TxtDetailOwnedNonFir_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.Key == Key.Enter)
+            if (ReferenceEquals(sender, TxtDetailOwnedFir))
             {
-                ApplyNonFirQuantityFromTextBox();
-                Keyboard.ClearFocus();
+                ApplyQuantityFromTextBox(TxtDetailOwnedFir, FirKind.Fir);
+            }
+            else if (ReferenceEquals(sender, TxtDetailOwnedNonFir))
+            {
+                ApplyQuantityFromTextBox(TxtDetailOwnedNonFir, FirKind.NonFir);
             }
         }
 
         /// <summary>
-        /// Parse and apply FIR quantity from TextBox input
+        /// Reads one half of the quantity out of its box and stores it, clamped at zero. Text
+        /// that is not a number is not an edit: the box is put back to the quantity the row
+        /// actually holds rather than the store being written with a guess.
         /// </summary>
-        private void ApplyFirQuantityFromTextBox()
+        private void ApplyQuantityFromTextBox(TextBox box, FirKind kind)
         {
             if (_selectedItem == null) return;
 
-            if (int.TryParse(TxtDetailOwnedFir.Text, out var quantity))
+            if (int.TryParse(box.Text, out var quantity))
             {
                 quantity = Math.Max(0, quantity);
-                _inventoryService.SetFirQuantity(_selectedItem.ItemNormalizedName, quantity);
-                _selectedItem.OwnedFirQuantity = quantity;
+                _inventoryService.SetQuantity(_selectedItem.ItemNormalizedName, kind, quantity);
+                _selectedItem.SetOwned(kind, quantity);
                 UpdateDetailInventoryDisplay();
             }
             else
             {
-                TxtDetailOwnedFir.Text = _selectedItem.OwnedFirQuantity.ToString();
-            }
-        }
-
-        /// <summary>
-        /// Parse and apply Non-FIR quantity from TextBox input
-        /// </summary>
-        private void ApplyNonFirQuantityFromTextBox()
-        {
-            if (_selectedItem == null) return;
-
-            if (int.TryParse(TxtDetailOwnedNonFir.Text, out var quantity))
-            {
-                quantity = Math.Max(0, quantity);
-                _inventoryService.SetNonFirQuantity(_selectedItem.ItemNormalizedName, quantity);
-                _selectedItem.OwnedNonFirQuantity = quantity;
-                UpdateDetailInventoryDisplay();
-            }
-            else
-            {
-                TxtDetailOwnedNonFir.Text = _selectedItem.OwnedNonFirQuantity.ToString();
+                box.Text = _selectedItem.Owned(kind).ToString();
             }
         }
 

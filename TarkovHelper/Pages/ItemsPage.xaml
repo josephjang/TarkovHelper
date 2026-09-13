@@ -462,8 +462,8 @@
                                                          MinWidth="30"
                                                          VerticalContentAlignment="Center"
                                                          PreviewTextInput="TxtDetailOwned_PreviewTextInput"
-                                                         LostFocus="TxtDetailOwnedFir_LostFocus"
-                                                         KeyDown="TxtDetailOwnedFir_KeyDown"/>
+                                                         LostFocus="TxtDetailOwned_LostFocus"
+                                                         KeyDown="TxtDetailOwned_KeyDown"/>
                                             </Border>
                                             <Button Content="+1" Style="{StaticResource QuantityButtonStyle}"
                                                     Click="BtnDetailFirPlus1_Click"/>
@@ -501,8 +501,8 @@
                                                          MinWidth="30"
                                                          VerticalContentAlignment="Center"
                                                          PreviewTextInput="TxtDetailOwned_PreviewTextInput"
-                                                         LostFocus="TxtDetailOwnedNonFir_LostFocus"
-                                                         KeyDown="TxtDetailOwnedNonFir_KeyDown"/>
+                                                         LostFocus="TxtDetailOwned_LostFocus"
+                                                         KeyDown="TxtDetailOwned_KeyDown"/>
                                             </Border>
                                             <Button Content="+1" Style="{StaticResource QuantityButtonStyle}"
                                                     Click="BtnDetailNonFirPlus1_Click"/>

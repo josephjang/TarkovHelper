@@ -466,6 +466,34 @@ public sealed class LogSyncAttributionTests : IDisposable
     }
 
     /// <summary>
+    /// The selection group a logged quest forms for ITSELF. CollectAlternativeQuestGroups walks
+    /// the prerequisite CLOSURE, not just the prerequisites, and that inclusion is the only way a
+    /// logged quest with mutually exclusive siblings reaches a group: it is its own only walk
+    /// entry. Fails if that call site is ever made exclusive.
+    /// </summary>
+    [Fact]
+    public async Task A_logged_quest_with_mutually_exclusive_siblings_forms_its_own_group()
+    {
+        WriteSession("log_2026.08.10_10-00-00_1.1.0", "Pve", PveQuestId, DateTime.Now.AddHours(-1));
+
+        var logged = TestTasks.Quest(PveQuestId, "pve-quest");
+        var sibling = TestTasks.Quest(OrphanQuestId, "other-branch");
+        logged.AlternativeQuests = new List<string> { sibling.NormalizedName! };
+        sibling.AlternativeQuests = new List<string> { logged.NormalizedName! };
+
+        var result = await SyncAsync(daysRange: 0, logged, sibling);
+
+        var group = Assert.Single(result.AlternativeQuestGroups);
+        Assert.True(group.IsRequired);
+        Assert.Equal(AppProfile.PveZone, group.OwnerProfile);
+        Assert.Equal(
+            new[] { "other-branch", "pve-quest" },
+            group.Choices
+                .Select(choice => choice.Task.NormalizedName)
+                .OrderBy(name => name, StringComparer.Ordinal));
+    }
+
+    /// <summary>
     /// Runs the watcher's own handler for one notification log. Private because nothing outside
     /// the file watcher calls it, and reached by reflection here because the alternative - a real
     /// FileSystemWatcher - would make the test a timing exercise.

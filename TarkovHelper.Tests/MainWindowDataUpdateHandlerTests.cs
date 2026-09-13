@@ -66,6 +66,43 @@ public class MainWindowDataUpdateHandlerTests
     }
 
     /// <summary>
+    /// The defect this pins: a data publish swaps the database under a running session, and
+    /// QuestDbService reloads NEW task objects, but the two services that are HANDED their tasks
+    /// (QuestProgressService, QuestGraphService) do not reload themselves. Without a republish
+    /// here, every quest surface (they all render <c>QuestProgressService.AllTasks</c>) and the
+    /// Kappa denominator stay on the previous publish until restart, beside a freshly reloaded
+    /// item table. Behaviourally untestable without a real window, so the shape is pinned in
+    /// source the way the posting handlers above are.
+    /// <para>
+    /// <c>QuestProgressService.Initialize</c> is forbidden rather than merely unused: it ends in
+    /// the store read that blocks the dispatcher and re-runs the startup-only "which profile is
+    /// selected" read ProfileAttributionSourceTests allows exactly once.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void The_quest_data_refresh_republishes_the_task_set_before_rebuilding_the_roster()
+    {
+        var body = MemberSource("private void OnQuestDataRefreshed(");
+
+        var publish = body.IndexOf("QuestProgressService.Instance.PublishTasks(", StringComparison.Ordinal);
+        var graph = body.IndexOf("QuestGraphService.Instance.Initialize(", StringComparison.Ordinal);
+        var roster = body.IndexOf("BuildLoyaltyGroup()", StringComparison.Ordinal);
+
+        Assert.True(publish >= 0, "The refreshed task set must be republished to QuestProgressService.");
+        Assert.True(graph >= 0, "The refreshed task set must be republished to QuestGraphService.");
+        Assert.True(roster > publish && roster > graph,
+            "The roster is built FROM the republished tasks, so both republishes must precede it.");
+
+        Assert.DoesNotContain("QuestProgressService.Instance.Initialize(", body, StringComparison.Ordinal);
+
+        // Inline, not posted: the three pages queue their own reload with BeginInvoke/InvokeAsync,
+        // so running the republish inline is what makes it win regardless of subscriber order.
+        Assert.Contains("Dispatcher.Invoke(", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Dispatcher.BeginInvoke(", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Dispatcher.InvokeAsync(", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The one rule both posting handlers owe: the UI work runs inside the posted lambda,
     /// a statement-position try opens before it, and a catch logs whatever it raises.
     /// </summary>

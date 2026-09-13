@@ -23,9 +23,11 @@ namespace TarkovHelper.Tests;
 public sealed class QuestRequirementLinesTests
 {
     // Two brushes that are only ever compared by reference, so a case says "met" or "unmet"
-    // without depending on the theme's actual colours.
+    // without depending on the theme's actual colours. The palette the page builds from App.xaml
+    // is RequirementLineBrushes.FromResources; these stand in for it.
     private static readonly Brush Met = new SolidColorBrush(Colors.White);
     private static readonly Brush Unmet = new SolidColorBrush(Colors.Red);
+    private static readonly RequirementLineBrushes Palette = new(Met, Unmet);
 
     private static readonly LocalizationService English =
         TestLocalization.WithLanguage(AppLanguage.EN);
@@ -33,7 +35,7 @@ public sealed class QuestRequirementLinesTests
     private static List<RequirementLineViewModel> LinesFor(
         TarkovTask task, ProfileSettingsSnapshot settings)
         => RequirementLineViewModel.BuildFor(
-            task, settings, English, requirement => requirement.TraderName, Met, Unmet);
+            task, settings, English, requirement => requirement.TraderName, Palette);
 
     private static string[] TextsFor(TarkovTask task, ProfileSettingsSnapshot settings)
         => LinesFor(task, settings).Select(line => line.DisplayText).ToArray();
@@ -160,7 +162,7 @@ public sealed class QuestRequirementLinesTests
         // name on the line as well as on the badge.
         var lines = RequirementLineViewModel.BuildFor(
             Quest("Prapor", (Prapor, "Prapor", 2)), Settings(),
-            TestLocalization.WithLanguage(AppLanguage.KO), _ => "프라파", Met, Unmet);
+            TestLocalization.WithLanguage(AppLanguage.KO), _ => "프라파", Palette);
 
         Assert.Equal("프라파 LL2 (현재: 1)", lines.Single().DisplayText);
     }
