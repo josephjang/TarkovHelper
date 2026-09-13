@@ -116,7 +116,7 @@
                         <TextBlock Text="Quests" FontSize="{DynamicResource FontSizeTiny}"
                                    Foreground="{StaticResource TextSecondaryBrush}"
                                    HorizontalAlignment="Center"/>
-                        <TextBlock Text="{Binding QuestCountDisplay}" FontSize="{DynamicResource FontSizeSmall}"
+                        <TextBlock Text="{Binding QuestDisplay}" FontSize="{DynamicResource FontSizeSmall}"
                                    Foreground="{StaticResource TextPrimaryBrush}"
                                    HorizontalAlignment="Center" FontWeight="SemiBold"/>
                     </StackPanel>
@@ -244,8 +244,10 @@
                 <!-- Filter Toggles -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal">
                     <!-- Include prerequisites checkbox. Its label and tooltip are written from
-                         LocalizationService in ApplyLocalizedTexts; the element name stays as
-                         the e2e suites address it. -->
+                         LocalizationService in ApplyLocalizedTexts, so nothing here sets Content.
+                         The element name keeps the old label's wording by the recorded decision
+                         (feature-kappa-collector-1-1.spec.md, Strings: "the element names
+                         ChkIncludePreQuest and TxtStats stay"); no test addresses it by name. -->
                     <CheckBox x:Name="ChkIncludePreQuest"
                               Foreground="{StaticResource TextPrimaryBrush}"
                               VerticalContentAlignment="Center"
@@ -476,8 +478,8 @@
                                                          MinWidth="30"
                                                          VerticalContentAlignment="Center"
                                                          PreviewTextInput="TxtDetailOwned_PreviewTextInput"
-                                                         LostFocus="TxtDetailOwnedFir_LostFocus"
-                                                         KeyDown="TxtDetailOwnedFir_KeyDown"/>
+                                                         LostFocus="TxtDetailOwned_LostFocus"
+                                                         KeyDown="TxtDetailOwned_KeyDown"/>
                                             </Border>
                                             <Button Content="+1" Style="{StaticResource QuantityButtonStyle}"
                                                     Click="BtnDetailFirPlus1_Click"/>
@@ -515,8 +517,8 @@
                                                          MinWidth="30"
                                                          VerticalContentAlignment="Center"
                                                          PreviewTextInput="TxtDetailOwned_PreviewTextInput"
-                                                         LostFocus="TxtDetailOwnedNonFir_LostFocus"
-                                                         KeyDown="TxtDetailOwnedNonFir_KeyDown"/>
+                                                         LostFocus="TxtDetailOwned_LostFocus"
+                                                         KeyDown="TxtDetailOwned_KeyDown"/>
                                             </Border>
                                             <Button Content="+1" Style="{StaticResource QuantityButtonStyle}"
                                                     Click="BtnDetailNonFirPlus1_Click"/>

@@ -1492,8 +1492,10 @@ namespace TarkovHelper.Services
                 var normalizedName = kvp.Key;
                 var task = kvp.Value.Task;
 
-                // Get all prerequisites
-                var prereqs = graphService.GetAllPrerequisites(normalizedName);
+                // The CLOSURE, not just the prerequisites: a logged quest that itself has
+                // mutually exclusive siblings forms its own selection group only by appearing in
+                // its own walk.
+                var prereqs = graphService.GetPrerequisiteClosure(normalizedName);
 
                 foreach (var prereq in prereqs)
                 {

@@ -1110,7 +1110,7 @@
       <a href="#ch6"><span class="n">06</span><span>Words that name their sets</span></a>
       <a href="#ch7"><span class="n">07</span><span>The window and the brushes</span></a>
       <a href="#ch8"><span class="n">08</span><span>What the walk's comment hid</span></a>
-      <a href="#lab-d" class="is-lab"><span class="n">LAB</span><span>What a started quest writes</span></a>
+      <a href="#lab-d" class="is-lab"><span class="n">LAB</span><span>Two members, two consumers</span></a>
       <a href="#quiz"><span class="n">09</span><span>Comprehension gate</span></a>
       <div class="rail-gate">
         <strong id="railGateLabel">Gate locked</strong>
@@ -1221,7 +1221,8 @@
           "Include Pre-Quest".
         </p>
         <p>
-          And the page said nothing about Collector. It listed the 44 items and their counts. A
+          And the page said nothing about Collector. It listed the hand-over items and their
+          counts, 43 of Collector's 44 published rows. A
           player who had finished the twelve kept ticking items off there, while the quest tab
           one click away said <code>Prapor LL4</code>. The loyalty phase recorded that gap as an
           accepted risk until this phase.
@@ -1292,32 +1293,81 @@
         </p>
 
         <div class="note">
-          <p class="note-label">The gauge counts from the rows' cached pass</p>
+          <p class="note-label">The gauge counts within the pass the rows were built from</p>
           <p>
             The spec said the gauge counts "from the pass ApplyFilters already captured".
-            <code>ApplyFilters</code> captures no pass. The chips beside the gauge count from the
-            <code>Status</code> each row cached when the last pass ran. So the gauge now counts
-            from that same cache, and that is what makes it agree with the chips. This is TD8 in
-            the spec, appended by the implementation.
+            <code>ApplyFilters</code> captures no pass. The two methods that do build the row
+            statuses, <code>LoadQuests</code> and <code>RefreshQuestStatuses</code>, capture
+            through one seam, <code>CaptureRowPass</code>, which remembers the pass in
+            <code>_rowPass</code>. The gauge counts inside that remembered pass, through the same
+            <code>pass.KappaProgress()</code> reading the detail pane and the list window ask for.
+            So it is one reading of one profile, and the gauge has no done-source of its own. This
+            is TD8 in the spec.
+          </p>
+          <p>
+            Counting the statuses cached on the row view models was tried first and rejected. It
+            answered for the flagged quests that happen to have a row, not for the flagged set.
+            And an <code>ApplyFilters</code> that ran before the first <code>LoadQuests</code>
+            read an empty row list as "none done". That profile had done some of the thirteen.
+            <code>KappaGaugeSourceTests</code> pins both.
           </p>
         </div>
 
         <div class="code">
           <div class="code-head"><span>TarkovHelper/Pages/QuestListPage.xaml.cs</span><span>UpdateKappaGauge, after</span></div>
-          <pre><span class="add">+   var doneInThisPass = _allQuestViewModels</span>
-<span class="add">+       .Where(vm =&gt; vm.Status == QuestStatus.Done &amp;&amp; !string.IsNullOrEmpty(vm.Task.NormalizedName))</span>
-<span class="add">+       .Select(vm =&gt; vm.Task.NormalizedName!)</span>
-<span class="add">+       .ToHashSet(StringComparer.OrdinalIgnoreCase);</span>
-<span class="add">+   var (completed, total, percentage) = graphService.GetKappaProgress(</span>
-<span class="add">+       task =&gt; doneInThisPass.Contains(task.NormalizedName!));</span></pre>
+          <pre><span class="add">+   if (_rowPass is not { } pass || pass.KappaProgress() is not { } kappa)</span>
+<span class="add">+   {</span>
+<span class="add">+       TxtKappaGauge.Text = string.Empty;   </span><span class="cmt">// no pass and no reading are one "no data yet"</span>
+<span class="add">+       KappaGaugeBar.Width = 0;</span>
+<span class="add">+       return;</span>
+<span class="add">+   }</span>
+
+<span class="add">+   var (completed, total, percentage) = kappa;</span>
+    TxtKappaGauge.Text = $"{completed}/{total}";
+<span class="add">+   KappaGaugeBar.Width = (percentage / 100.0) * KappaGaugeWidth;</span></pre>
         </div>
 
         <p>
           <code>RenderPass</code> moved out of the quest page into a file of its own, with a
-          static <code>Capture</code>. Two pages capture one now. The reason is written in that
-          file, because nothing enforces it by structure: a page that reads a status captures a
-          pass first, and never calls <code>GetStatus(task)</code> live per quest.
+          static <code>Capture</code>. Three pages capture one now: the quest page, the Collector
+          page and the Items page.
         </p>
+        <p>
+          The Items page is the third, and it joined at the review. Its item list and its detail
+          pane each read a live status per quest, against two snapshots that background work
+          republishes together. A publish landing mid-walk left the list mixing two profiles, and
+          the pane naming quests the listed rows had not counted. The page captures one pass per
+          load now, in <code>_listPass</code>, and both halves answer from it
+          (<code>ItemsPageRenderPassTests</code>, TD22).
+        </p>
+
+        <div class="note">
+          <p class="note-label">The pass answers the readings, so no page can forget the guard</p>
+          <p>
+            The implementation left each surface to spell its own reads over the pass: a private
+            <code>StatusIn(pass, task)</code>, and a private
+            <code>KappaProgressIn</code>/<code>KappaQuestsIn</code> pair carrying the
+            <code>IsInitialized</code> check. That came to four copies of the Kappa pair across
+            two pages. Nothing stopped a fifth from forgetting the check. A forgotten check paints
+            "0/0" over a graph that is not built yet, which is the one thing the check exists for.
+          </p>
+          <p>
+            The reads live on the pass now: <code>StatusOf</code>, <code>IsDone</code>, and the
+            nullable <code>KappaProgress()</code> and <code>KappaQuests()</code> with the guard
+            inside them. Null means "no reading", and never a zero. The graph they are answered
+            from is a private field, set at the capture. A surface holding a pass cannot reach
+            past it for a live one.
+          </p>
+          <p>
+            That also made the pass a sealed class rather than the
+            <code>readonly record struct</code> it started as. With two services in it, the pass is
+            a read context and not a value. Equality over service references would mean nothing,
+            and <code>default(RenderPass)</code> stops being spellable. This is TD17 in the spec,
+            and <code>RenderPassStatusGuardTests</code> now names the only files under
+            <code>Pages/</code> allowed to ask the service for a status. A new page that reads one
+            live fails a test instead of passing review.
+          </p>
+        </div>
       </section>
 
       <!-- ===================== LAB A ===================== -->
@@ -1420,27 +1470,72 @@
 
         <div class="code">
           <div class="code-head"><span>TarkovHelper/Pages/CollectorViewModels.cs</span><span>CollectorUnlockViewModel.BuildFor</span></div>
-          <pre><span class="add">+   internal static CollectorUnlockViewModel? BuildFor(</span>
-<span class="add">+       TarkovTask? collector, QuestStatus status, QuestGate gate, ProfileSettingsSnapshot settings,</span>
+          <pre><span class="add">+   internal static CollectorUnlockViewModel BuildFor(</span>
+<span class="add">+       TarkovTask collector, QuestStatus status, QuestGate gate, ProfileSettingsSnapshot settings,</span>
 <span class="add">+       LocalizationService loc, Func&lt;QuestTraderRequirement, string&gt; traderDisplayName,</span>
-<span class="add">+       int kappaDone, int kappaTotal, Brush metBrush, Brush unmetBrush)</span>
+<span class="add">+       (int Completed, int Total)? kappa, RequirementLineBrushes brushes)</span>
 <span class="add">+   {</span>
-<span class="add">+       if (collector == null) return null;</span>
 <span class="add">+       return new CollectorUnlockViewModel(</span>
 <span class="add">+           QuestRequirementBadge.StatusText(status, gate, collector, settings, traderDisplayName),</span>
 <span class="add">+           status,</span>
-<span class="add">+           RequirementLineViewModel.BuildFor(collector, settings, loc, traderDisplayName, metBrush, unmetBrush),</span>
-<span class="add">+           string.Format(loc.KappaCountFormat, kappaDone, kappaTotal));</span>
+<span class="add">+           RequirementLineViewModel.BuildFor(collector, settings, loc, traderDisplayName, brushes),</span>
+<span class="add">+           kappa is { } k ? string.Format(loc.KappaCountFormat, k.Completed, k.Total) : string.Empty);</span>
 <span class="add">+   }</span></pre>
         </div>
 
         <p>
+          Non-nullable in and out, with one exception on purpose. "The loaded data has no
+          Collector quest" is the page's case, not the builder's.
+          <code>RebuildUnlockPanel</code> collapses the panel and returns before it asks for a
+          view model. So there is always a panel to build. The nullable return the builder carried
+          was a second guard behind that one, and unreachable. The page discarded it with a
+          <code>!</code> anyway.
+        </p>
+        <p>
+          The count is the exception, and it is an option rather than two ints. Null is what
+          <code>pass.KappaProgress()</code> answers when the graph is not built. The panel then
+          writes no count, and hides the button that would open an empty list. "0 of 0" is a
+          reading the page does not have, and it would read as "nothing is flagged" (TD17).
+        </p>
+        <p>
           The page captures one pass per load and hands it to three consumers: the item
           aggregation, the detail panel's quest sources, and the panel. So the list and the panel
-          above it describe one profile. The two near-identical "quests in scope" computations
-          became one <code>QuestsInScope</code> over that pass, with the same three exclusions
-          as before: Done, Failed and Unavailable.
+          above it describe one profile.
         </p>
+        <p>
+          The two near-identical "quests in scope" computations
+          became one <code>CollectorScope.QuestsInScope</code>, with the same three exclusions
+          as before: Done, Failed and Unavailable. It takes the status as a delegate, which the
+          page answers from its pass. So the rule cannot reach past that pass for a live reading.
+        </p>
+        <p>
+          That scope answer is walked once per load, not once per selection. The load keeps it in
+          a <code>ListScope</code> record, with the pass and the "include prerequisites" option.
+          The quest sources and the stats line's scope word read that stored scope. Neither reads
+          the live checkbox again (TD13).
+        </p>
+
+        <div class="note">
+          <p class="note-label">Rules the unit suite could not run</p>
+          <p>
+            Five rules decide what this list holds: the quests in scope, their listed rows, the
+            currency items, the totals, and the aggregate they fill. All five were private members
+            of a WPF control, and nothing ran them. The page
+            cannot be constructed in the unit suite, because its markup resolves App.xaml's brushes
+            and its field initializers open the databases. What covered them was indirect: a guard
+            reading the page's own source, and e2e flows that assert a rendered list.
+          </p>
+          <p>
+            They read no service and touch no control, so they moved to
+            <code>Services/CollectorScope.cs</code>, with the per-item aggregate they fill to
+            <code>Models/CollectorQuestItemAggregate.cs</code>. The page keeps what is genuinely
+            its own: <code>ListScope</code>, <code>CaptureListScope</code>, which is the one place
+            the checkbox is read, <code>FindCollector</code>, and two one-line wrappers that supply
+            its own inputs. Behaviour did not change, which is why the twenty cases of
+            <code>CollectorScopeTests</code> could be written against it: they are the first to run
+            these rules at all. That is TD18.
+          </p>
+        </div>
 
         <div class="note">
           <p class="note-label">Shown, never counted</p>
@@ -1541,9 +1636,26 @@
         <p>
           The quest page consumes eight settings events. The Collector page consumes four:
           the player level, the Scav Rep, a trader loyalty change, and the profile settings
-          reload. Collector carries no edition, prestige, DSP or faction gate in the data, and
-          the item list reads none of those values. A handler for any of them could never observe
-          a change. That is TD4.
+          reload. The five it skips are the two edition events, the prestige level, the DSP
+          decode count and the faction. That is TD4.
+        </p>
+        <p>
+          The reason is not that the page ignores those values. The item list reads three of them
+          transitively. Its scope drops a quest whose status is <code>Unavailable</code>, and that
+          is what an unmet edition, prestige or faction gate produces. It reads them for every
+          quest in the scope, and not only for Collector.
+        </p>
+        <p>
+          What keeps the list insensitive is the published data: no quest in Collector's
+          prerequisite closure carries one of those gates. The DSP count cannot matter either
+          way, since its gate reads <code>Locked</code>, and <code>Locked</code> stays in scope.
+        </p>
+        <p>
+          So the decision rests on a data fact, and the review gave that fact a guard:
+          <code>PublishedDataContentTests.The_quests_Collector_depends_on_carry_no_edition_prestige_or_faction_gate</code>.
+          It walks the closure in the published file and asserts that no row in it is gated. When
+          that case fails, this page needs those five events, and its settings refresh has to
+          reload the items rather than the panel alone.
         </p>
         <p>
           The reload is not redundant with the other three. A profile that has entered no
@@ -1561,13 +1673,14 @@
 <span class="add">+   private void RefreshUnlockPanelForSettingsChange()</span>
 <span class="add">+   {</span>
 <span class="add">+       if (_isUnloaded || !_isDataLoaded) return;</span>
-<span class="add">+       RebuildUnlockPanel(RenderPass.Capture(_questProgressService));</span>
+<span class="add">+       RebuildUnlockPanel(RenderPass.Capture(_questProgressService, _questGraphService));</span>
 <span class="add">+   }</span></pre>
         </div>
 
         <p>
           A published profile announces the level, the rep, one loyalty event per stored entry,
-          and then the reload. A seven-trader profile switch is nine events over one snapshot.
+          and then the reload. For a seven-trader profile that is 1 + 1 + 7 + 1 = ten events
+          this page listens to, over one snapshot.
           <code>RefreshCoalescer</code> turns that burst into one rebuild. The first request books
           a refresh on the dispatcher at background priority, and the rest of the burst joins it.
           The pending flag is cleared before the refresh runs, so a change landing during it books
@@ -1585,8 +1698,11 @@
           </p>
           <p>
             It pins which four events are subscribed. It pins that each handler is a one-liner
-            over the coalescer, and that every status the page reads goes through the pass
-            adapter. The burst rule itself is <code>RefreshCoalescerTests</code>. That is TD11.
+            over the coalescer. It pins that one load captures one pass, and threads it to the
+            scope and to the panel. "Every status comes
+            from a pass" outgrew this page and is a guard over the whole
+            <code>Pages/</code> directory now (<code>RenderPassStatusGuardTests</code>, TD17).
+            The burst rule itself is <code>RefreshCoalescerTests</code>. That is TD11.
           </p>
         </div>
       </section>
@@ -1709,7 +1825,7 @@
           <div>
             <h2>The window and the brushes</h2>
             <p class="kicker">
-              Two small moves, so two pages can share what one page owned.
+              Three small moves, so two pages can share what one page owned.
             </p>
           </div>
         </div>
@@ -1717,17 +1833,31 @@
         <p>
           The Kappa quest list was a window built inline in a click handler on the quest page.
           The Collector page opens the same list, so the window moved to
-          <code>KappaQuestListWindow</code> with one static entry point. It takes the rows, the
-          count, a name resolver and the strings. Each button hands it its own pass, so the list
-          is the same list from either place (TD5).
+          <code>KappaQuestListWindow</code> with one static entry point. It takes the owner, the
+          rows and the strings source, and nothing else. Each button hands it its own pass, so
+          the list is the same list from either place (TD5).
         </p>
 
         <div class="code">
           <div class="code-head"><span>TarkovHelper/Pages/Components/KappaQuestListWindow.cs</span><span>Show</span></div>
           <pre><span class="add">+   internal static void Show(</span>
 <span class="add">+       Window? owner, IReadOnlyList&lt;(TarkovTask Quest, bool IsDone)&gt; quests,</span>
-<span class="add">+       int completed, int total, Func&lt;TarkovTask, string&gt; displayName, LocalizationService loc)</span></pre>
+<span class="add">+       LocalizationService loc)</span></pre>
         </div>
+
+        <p>
+          The count and the name resolver are gone on purpose. The header's pair is counted from
+          the rows the window was handed (<code>HeaderText</code>). Each row's name comes from
+          <code>loc.GetQuestName</code>. So no caller can hand the window a number or a name
+          from another list. And neither click handler walks the flagged quests a second time
+          for one.
+        </p>
+        <p>
+          A null owner is allowed, for a caller with no window, and the window then centres on
+          the screen. WPF's <code>CenterOwner</code> is not owner-null tolerant, and leaves an
+          ownerless window where the OS cascades it. <code>KappaWindowListTests</code> pins the
+          header, the names, the placement rule, and the count neither page asks for again.
+        </p>
 
         <p>
           The six status brushes moved out of the quest page into <code>QuestStatusBrushes</code>.
@@ -1736,6 +1866,19 @@
           the first page to touch the class does not tie the brushes to its own dispatcher.
           <code>QuestStatusBrushesTests</code> pins one distinct frozen brush per status and the
           Gray fallback (TD10).
+        </p>
+        <p>
+          The condition lines have two colours of their own. Both builders took them as a
+          <code>metBrush</code>/<code>unmetBrush</code> pair, spelled at each call site. That is
+          how two pages came to name one resource key twice. They travel together now, as
+          <code>RequirementLineBrushes</code> with a <code>FromResources(owner)</code> that reads
+          the theme's text colour and the badge's own locked orange.
+        </p>
+        <p>
+          It is read from an element, rather than kept beside the frozen brushes, and that is on
+          purpose. "TextPrimaryBrush" is an App.xaml resource, so resolving it needs a live element
+          and a dispatcher. The builders still take the pair as an argument. A test can then hand
+          in two sentinels, and assert which one a line got.
         </p>
       </section>
 
@@ -1746,7 +1889,7 @@
           <div>
             <h2>What the walk's comment hid</h2>
             <p class="kicker">
-              Two dead methods, one wrong comment, and the defect the comment had covered.
+              A whole dead file, one wrong comment, and the defect the comment had covered.
             </p>
           </div>
         </div>
@@ -1759,24 +1902,64 @@
           was rejected: a planner is a new change with its own proposal (TD6).
         </p>
         <p>
+          The review found three more dead members on one chain.
+          <code>ItemRequirementService.GetItemsForQuestPath</code> has no caller at all. It was
+          the only caller of <code>QuestGraphService.GetOptimalPath</code>, which was the only
+          caller of the private <code>TopologicalSort</code>. The spec had recorded
+          <code>TopologicalSort</code> as staying, on a count of direct references. Following the
+          chain end to end shows every one of those references to be dead too, so all three go.
+        </p>
+        <p>
+          Widening the sweep one step further took the rest of that file with them. Nothing in the
+          solution names <code>ItemRequirementService</code> outside its own 352 lines: no code, no
+          XAML, no <code>nameof</code>, no source guard that reads a file by path, and nothing in
+          <code>tools/DataDiff</code>. Nothing constructs the singleton or calls its
+          <code>Initialize</code>. Its four result types have no user either, so no remaining
+          member needs them.
+        </p>
+        <p>
+          The file is deleted whole rather than two members of it, and the
+          build and the green suite are what validate that. No test asserts a deleted type is
+          absent, because that assertion holds whatever the code does.
+        </p>
+        <p>
           Deleting them meant reading the prerequisite walk they used. Its last line carried a
           comment: <code>Add the task itself only if it's a prerequisite (not the target)</code>.
-          The code under it adds the task unconditionally. The target quest has always been the last entry
-          of <code>GetAllPrerequisites</code>. The comment was corrected, and every caller was
-          read.
+          The code under it adds the task unconditionally. The target quest has always been the
+          last entry of that walk. The comment was corrected, and every caller was read.
+        </p>
+        <p>
+          At the review the contract moved into the name (TD16). The walk is two members now.
+          <code>GetPrerequisiteClosure</code> answers the closure, and the target is its last
+          entry. <code>GetAllPrerequisites</code> answers what its name promises, which is the
+          same walk without the target. Each caller reads the member it meant, so no call site
+          has to compensate.
         </p>
 
         <div class="code">
           <div class="code-head"><span>TarkovHelper/Services/QuestGraphService.cs</span><span>CollectPrerequisites</span></div>
           <pre><span class="del">-   // Add the task itself only if it's a prerequisite (not the target)</span>
 <span class="add">+   // Added after its own prerequisites, so the list reads earliest first. The TARGET</span>
-<span class="add">+   // quest is added too, as the last entry: a caller that wants strictly the</span>
-<span class="add">+   // prerequisites drops it. The previous comment claimed the target was excluded;</span>
-<span class="add">+   // it never was.</span>
+<span class="add">+   // quest is added too, as the last entry: that is why the public walk this backs is</span>
+<span class="add">+   // named GetPrerequisiteClosure. GetAllPrerequisites is the same walk with the target</span>
+<span class="add">+   // dropped, and is what callers who only want the prerequisites call.</span>
     if (task != null)
     {
         result.Add(task);
     }</pre>
+        </div>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/QuestGraphService.cs</span><span>the two members</span></div>
+          <pre>/// The full prerequisite closure of a quest, INCLUDING the quest itself as the last entry.
+public List&lt;TarkovTask&gt; GetPrerequisiteClosure(string questNormalizedName) { ... }
+
+/// The full prerequisite chain, WITHOUT the quest itself: what the name promises.
+public List&lt;TarkovTask&gt; GetAllPrerequisites(string questNormalizedName)
+    =&gt; GetPrerequisiteClosure(questNormalizedName)
+        .Where(t =&gt; !string.Equals(
+            t.NormalizedName, questNormalizedName, StringComparison.OrdinalIgnoreCase))
+        .ToList();</pre>
         </div>
 
         <div class="note is-wrong">
@@ -1784,9 +1967,9 @@
           <p>
             A "quest started" log event plans a batch completion over that walk. The plan's own
             comment says the started quest stays Active and only its prerequisites are recorded.
-            The batch planner marks every entry it is given Done, and the walk's last entry is the
-            started quest. So every quest the live log sync saw a player start was recorded as
-            finished. The main window routes every event type through this path, and nothing
+            The batch planner marks every entry it is given Done, and the walk it was handed
+            ended with the started quest. So every quest the live log sync saw a player start was
+            recorded as finished. The main window routes every event type through this path, and nothing
             had covered the Started path.
           </p>
         </div>
@@ -1797,10 +1980,9 @@
 {
     if (string.IsNullOrEmpty(task.NormalizedName)) return new();
 <span class="del">-   var prerequisites = QuestGraphService.Instance.GetAllPrerequisites(task.NormalizedName);</span>
-<span class="add">+   var prerequisites = QuestGraphService.Instance</span>
-<span class="add">+       .GetAllPrerequisites(task.NormalizedName)</span>
-<span class="add">+       .Where(prerequisite =&gt; !string.Equals(</span>
-<span class="add">+           prerequisite.NormalizedName, task.NormalizedName, StringComparison.OrdinalIgnoreCase));</span>
+<span class="add">+   // The prerequisites only: GetAllPrerequisites excludes the target, and the</span>
+<span class="add">+   // batch planner marks every entry it is given Done.</span>
+<span class="add">+   var prerequisites = Graph.GetAllPrerequisites(task.NormalizedName);</span>
     return PlanBatchCompletion(snapshot, prerequisites);
 }</pre>
         </div>
@@ -1811,16 +1993,55 @@
           was recorded instead of left Active". The Completed and Failed paths keep the cover they
           had.
         </p>
+        <p>
+          That first fix dropped the target here, with a <code>Where</code> clause over the
+          answer. The review replaced the clause with the rename, so the call site asks for the
+          prerequisites and gets them. <code>Graph</code> is the seam the tests set, and it
+          defaults to the singleton. <code>PrerequisiteWalkTests</code> pins both members, and
+          Lab D below drives the two consumers that need opposite answers.
+        </p>
+
+        <div class="note">
+          <p class="note-label">The denominator that stopped at startup</p>
+          <p>
+            Reading the Kappa count end to end turned up a second defect off this theme. The count
+            is read from <code>QuestGraphService</code>. That service and
+            <code>QuestProgressService</code> are the only two caches that do not reload themselves
+            on a data publish. They are handed their tasks once, at startup. So an hourly
+            publish left every quest surface and the Kappa denominator on the previous publish
+            until restart, beside a freshly reloaded item table.
+          </p>
+          <p>
+            MainWindow's <code>QuestDbService.DataRefreshed</code> handler owns the republish now.
+            It calls <code>QuestProgressService.PublishTasks(tasks)</code> and
+            <code>QuestGraphService.Instance.Initialize(tasks)</code> before it rebuilds the
+            loyalty roster from them. <code>PublishTasks</code> is a new split out of
+            <code>Initialize</code>, and it indexes the tasks and nothing else. A publish changes
+            which quests exist, never which rows the player recorded. The rows are keyed by id and
+            normalized name, not by task instance, so re-reading progress here would block the
+            dispatcher for no gain.
+          </p>
+          <p>
+            An empty reload is a failed load, and keeps the task set that is on screen. Hideout
+            modules stay out on purpose, and that gap is recorded where the publish channel is
+            designed. That is TD19, pinned by <code>PublishTasksTests</code> and by a source guard
+            over the handler's order.
+          </p>
+        </div>
 
         <div class="note">
           <p class="note-label">What this leaves open</p>
           <p>
             The manual check at the 600 pixel minimum window found the panel wrapping onto three
             rows with nothing clipped. The badge showed in the app's own orange. It also found the
-            list showing 43 items, not the 44 the spec's context names. The row for the LM KC-130
-            model aircraft has no item id. The aggregation skips a row it cannot resolve rather
-            than listing it by name. That is a data gap for a data publish, unchanged by this
-            phase, and the spec's sentence about it was wrong.
+            list showing 43 items, of Collector's 44 published rows.
+          </p>
+          <p>
+            The row for the LM KC-130 model aircraft carries no item id.
+            <code>QuestDbService.LoadQuestRequiredItemsAsync</code> drops such a row at load,
+            since it cannot be matched to the <code>Items</code> table. So it never reaches the
+            aggregation, and is invisible rather than listed by name. That is a data gap for a
+            data publish, unchanged by this phase, and the spec's Context says so.
           </p>
         </div>
       </section>
@@ -1829,19 +2050,21 @@
       <div class="lab" id="lab-d">
         <div class="lab-head">
           <span class="lab-tag">Lab D</span>
-          <h3>What a started quest writes</h3>
+          <h3>Two members, two consumers</h3>
           <p class="sub">
-            The shipped rules are <code>QuestGraphService.GetAllPrerequisites</code>,
+            The shipped rules are <code>QuestGraphService.GetPrerequisiteClosure</code>, its
+            exclusive twin <code>GetAllPrerequisites</code>,
             <code>QuestProgressService.PlanLogEvent</code> and
-            <code>PlanBatchCompletion</code>, pinned by
-            <code>A_started_quest_stays_active_and_only_its_prerequisites_are_recorded</code>
-            and <code>A_started_quest_with_no_prerequisites_writes_nothing</code> in
-            <code>QuestStartedEventTests</code>.
+            <code>LogSyncService.CollectAlternativeQuestGroups</code>. They are pinned by
+            <code>PrerequisiteWalkTests</code>, <code>QuestStartedEventTests</code> and
+            <code>A_logged_quest_with_mutually_exclusive_siblings_forms_its_own_group</code> in
+            <code>LogSyncAttributionTests</code>.
           </p>
           <p class="sub">
-            The log says a quest started. Choose how long its prerequisite chain is, then compare
-            the rows the plan writes before and after the fix. No row is Done yet, and no quest
-            has an alternative, so the planner skips nothing.
+            The log says a quest started. Choose the chain length, whether that quest has
+            mutually exclusive siblings, and which member both consumers read. One consumer plans
+            the batch completion. The other collects the selection groups. No row is Done yet,
+            and no prerequisite has a sibling.
           </p>
         </div>
         <div class="lab-body">
@@ -1851,22 +2074,40 @@
               <input type="range" id="labDChain" min="0" max="3" step="1" value="2" aria-label="Prerequisites in the chain">
               <span class="slider-read" id="labDChainRead">2</span>
             </div>
-            <span class="ctl-label">The Started plan</span>
+            <span class="ctl-label">The started quest has siblings</span>
+            <div class="seg" id="labDSiblings">
+              <button type="button" data-d-siblings="no" aria-pressed="true">no</button>
+              <button type="button" data-d-siblings="yes">yes</button>
+            </div>
+            <span class="ctl-label">The member both consumers read</span>
             <div class="seg" id="labDWorld">
-              <button type="button" data-d-world="before" data-tone="bad" aria-pressed="true">before the fix</button>
-              <button type="button" data-d-world="after" data-tone="good">after the fix</button>
+              <button type="button" data-d-world="closure" aria-pressed="true">GetPrerequisiteClosure</button>
+              <button type="button" data-d-world="prerequisites">GetAllPrerequisites</button>
             </div>
           </div>
 
-          <p class="lane-note">The walk's answer, earliest first. The last chip is the target.</p>
+          <p class="lane-note">
+            The closure, earliest first. The last chip is the target, and it is dim when the
+            chosen member drops it.
+          </p>
           <div class="steps" id="labDWalk"></div>
 
+          <p class="lane-note">
+            Consumer one: the Started plan, which hands every entry to
+            <code>PlanBatchCompletion</code>. The planner skips a quest that has siblings,
+            because the player has to choose between them.
+          </p>
           <div class="tbl">
             <table>
               <thead><tr><th>Row written</th><th>Status</th><th>Should it be written</th></tr></thead>
               <tbody id="labDRows"></tbody>
             </table>
           </div>
+
+          <p class="lane-note">
+            Consumer two: <code>CollectAlternativeQuestGroups</code>, which forms a selection
+            group from every entry that has mutually exclusive siblings.
+          </p>
 
           <div class="state-grid" style="margin-top:14px;">
             <div class="stat">
@@ -1876,6 +2117,10 @@
             <div class="stat">
               <p class="k">The started quest afterwards</p>
               <p class="v" id="labDStarted">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Its own selection group</p>
+              <p class="v" id="labDGroup">-</p>
             </div>
           </div>
 
@@ -1921,8 +2166,9 @@
         <p>
           Sources. The product decision is
           <code>docs/decisions/feature-kappa-collector-1-1.md</code>. The technical design is
-          <code>docs/decisions/feature-kappa-collector-1-1.spec.md</code>, which this PR extends
-          with seven appended decisions and a Verification record. The loyalty gate the panel
+          <code>docs/decisions/feature-kappa-collector-1-1.spec.md</code>, which this PR and its
+          deep review extend with eight appended decisions and a Verification record. The
+          loyalty gate the panel
           reads is <code>docs/2026-09-quest-loyalty-gating-code-guide.html</code> and its deep
           review, and the data is <code>docs/2026-08-quest-data-1-1-refresh-code-guide.html</code>.
         </p>
@@ -1930,7 +2176,9 @@
           The labs obey the same decision logic as the code, and they use the numbers of the
           published 1.1.0 database. But they are examples, and they are not the released code.
           The released behaviour is pinned by <code>KappaProgressTests</code>,
+          <code>KappaGaugeSourceTests</code>, <code>KappaWindowListTests</code>,
           <code>CollectorUnlockViewModelTests</code>, <code>CollectorPageSubscriptionTests</code>,
+          <code>CollectorPageFixSelectionTests</code>, <code>CollectorIdentityTests</code>,
           <code>RefreshCoalescerTests</code>, <code>QuestStatusBrushesTests</code>,
           <code>LocalizationHeaderStringsTests</code>, <code>E2EQuestDataTests</code>,
           <code>QuestStartedEventTests</code> and, end to end,
@@ -2310,11 +2558,12 @@
     renderLabC();
 
     /* ============================================================
-       LAB D. GetAllPrerequisites answers the target last; PlanLogEvent's
-       Started case plans a batch completion over that answer.
+       LAB D. One walk, two members: GetPrerequisiteClosure answers the target
+       as its last entry, GetAllPrerequisites drops it. Two consumers read that
+       walk and need opposite answers, which is why both members exist.
        ============================================================ */
 
-    var labD = { chain: 2, world: "before" };
+    var labD = { chain: 2, member: "closure", siblings: "no" };
 
     var labDChainInput = document.getElementById("labDChain");
     var labDChainRead = document.getElementById("labDChainRead");
@@ -2322,36 +2571,51 @@
     var labDRows = document.getElementById("labDRows");
     var labDWritten = document.getElementById("labDWritten");
     var labDStarted = document.getElementById("labDStarted");
+    var labDGroup = document.getElementById("labDGroup");
     var labDVerdict = document.getElementById("labDVerdict");
 
-    /* QuestGraphService.GetAllPrerequisites: prerequisites earliest first, the target last. */
-    function allPrerequisites(chain) {
+    /* QuestGraphService.GetPrerequisiteClosure: prerequisites earliest first, the target last. */
+    function prerequisiteClosure(chain) {
       var walk = [];
       for (var i = chain; i >= 1; i--) walk.push("prerequisite-" + i);
       walk.push("started");
       return walk;
     }
 
-    /* PlanLogEvent, Started: the walk (after the fix, without the target), then
-       PlanBatchCompletion marks each entry Done. No row is Done yet and nothing has an
-       alternative, so nothing is skipped. */
-    function planStarted(world, walk) {
-      var entries = world === "after"
-        ? walk.filter(function (name) { return name !== "started"; })
-        : walk;
-      return entries.map(function (name) { return { key: name, status: "Done" }; });
+    /* QuestGraphService.GetAllPrerequisites: the same walk with the target dropped. */
+    function allPrerequisites(chain) {
+      return prerequisiteClosure(chain).filter(function (name) { return name !== "started"; });
+    }
+
+    function answerOf(member, chain) {
+      return member === "closure" ? prerequisiteClosure(chain) : allPrerequisites(chain);
+    }
+
+    /* PlanLogEvent, Started: PlanBatchCompletion marks every entry it is given Done, except one
+       that has alternatives, which the player has to choose between. No row is Done yet, and
+       only the started quest carries siblings here. */
+    function planStarted(entries, hasSiblings) {
+      return entries
+        .filter(function (name) { return !(hasSiblings && name === "started"); })
+        .map(function (name) { return { key: name, status: "Done" }; });
     }
 
     function renderLabD() {
-      var walk = allPrerequisites(labD.chain);
-      var rows = planStarted(labD.world, walk);
+      var closure = prerequisiteClosure(labD.chain);
+      var answer = answerOf(labD.member, labD.chain);
+      var hasSiblings = labD.siblings === "yes";
+      var rows = planStarted(answer, hasSiblings);
       var startedWritten = rows.some(function (r) { return r.key === "started"; });
+      /* CollectAlternativeQuestGroups groups every entry that has alternatives, so the logged
+         quest reaches a group of its own only when the answer includes it. */
+      var ownGroup = hasSiblings && answer.indexOf("started") !== -1;
 
       labDChainRead.textContent = String(labD.chain);
       labDWalk.innerHTML = "";
-      walk.forEach(function (name) {
+      closure.forEach(function (name) {
         var chip = el("span", "step", name);
-        chip.classList.add(name === "started" ? (startedWritten ? "is-kill" : "is-win") : "is-done");
+        if (name !== "started") chip.classList.add("is-done");
+        else if (ownGroup) chip.classList.add("is-now");
         labDWalk.appendChild(chip);
       });
 
@@ -2377,21 +2641,30 @@
       labDWritten.textContent = String(rows.length);
       labDStarted.textContent = startedWritten ? "Done" : "Active";
       setTone(labDStarted, "data-tone", startedWritten ? "bad" : "good");
+      labDGroup.textContent = !hasSiblings ? "no siblings" : (ownGroup ? "formed" : "missed");
+      setTone(labDGroup, "data-tone", !hasSiblings ? "" : (ownGroup ? "good" : "bad"));
 
-      if (startedWritten) {
+      if (labD.member === "closure" && !hasSiblings) {
         say(labDVerdict, "bad", "The started quest is recorded Done. ",
-          "The walk answered it as its last entry, and the batch planner marks every entry it is given. The player started the quest, and the app shows it finished.");
+          "The closure answers it as the last entry, and the planner has no reason to skip a quest without siblings. The player started the quest, and the app shows it finished.");
+      } else if (labD.member === "closure") {
+        say(labDVerdict, "good", "The group forms, and nothing wrong is written. ",
+          "This is the consumer the closure exists for: the logged quest reaches a group of its own only by appearing in its own walk. The planner skips it here, because the player has to choose between the siblings.");
+      } else if (hasSiblings) {
+        say(labDVerdict, "bad", "No group is formed. ",
+          "GetAllPrerequisites drops the target, so CollectAlternativeQuestGroups never sees the logged quest. Its siblings are never offered. That call site reads the closure for exactly this reason.");
       } else if (rows.length === 0) {
-        say(labDVerdict, "good", "Nothing is written. ",
+        say(labDVerdict, "good", "Nothing is written, and there is no group to form. ",
           "A quest with no prerequisites proves nothing by starting. The row that used to be written here was the started quest itself.");
       } else {
         say(labDVerdict, "good", rows.length + " prerequisite row" + (rows.length === 1 ? "" : "s") + ", and the started quest stays Active. ",
-          "The Started plan drops the target from the walk's answer before the planner sees it. What the start proves is recorded, and nothing else.");
+          "This is the member the Started plan calls. CollectAlternativeQuestGroups calls the closure instead, because it needs the entry this member drops. Neither answer serves both consumers.");
       }
     }
 
     labDChainInput.addEventListener("input", function () { labD.chain = Number(labDChainInput.value); renderLabD(); });
-    bindSegment(document.getElementById("labDWorld"), "data-d-world", function (v) { labD.world = v; renderLabD(); });
+    bindSegment(document.getElementById("labDWorld"), "data-d-world", function (v) { labD.member = v; renderLabD(); });
+    bindSegment(document.getElementById("labDSiblings"), "data-d-siblings", function (v) { labD.siblings = v; renderLabD(); });
 
     renderLabD();
 
@@ -2416,11 +2689,11 @@
         options: [
           "A fresh pass captured at the top of ApplyFilters, so the number is as new as possible",
           "The live snapshot, because the gauge must be exact at all times",
-          "The Status each row cached when the last pass ran, because that is what the chips beside it count from",
-          "The detail pane's pass, because Collector's pane shows the same number"
+          "The pass the row statuses were built from, remembered in _rowPass, because that is the reading the chips beside it show",
+          "The Status each row cached, because a flagged quest without a row should not be counted"
         ],
         answer: 2,
-        why: "ApplyFilters captures no pass. The chips count from the cached row statuses, so a gauge counted from anything else could disagree with them during a switch. This is TD8, appended to the spec."
+        why: "ApplyFilters captures no pass, so the two methods that build the row statuses capture through CaptureRowPass and the gauge counts inside that remembered pass. Counting the cached row statuses instead was tried and rejected: it answers for the flagged quests that happen to have a row, and an empty row list read as \"none done\". This is TD8, appended to the spec."
       },
       {
         q: "The Collector page shows \"Prapor LL4\" with the level and karma lines met. Which component decided that Prapor is the trader to name?",
@@ -2448,17 +2721,17 @@
         q: "The Collector page subscribes to four settings events, and the quest page to eight. Why not eight for symmetry?",
         options: [
           "Four handlers are cheaper to write",
-          "The other four cannot change anything the page shows, and a data publish that could arrives through DataRefreshed",
-          "The other four are raised too often",
+          "The other five cannot change anything the page shows, and a data publish that could arrives through DataRefreshed",
+          "The other five are raised too often",
           "The Collector page has no coalescer for them"
         ],
         answer: 1,
-        why: "Collector carries no edition, prestige, DSP or faction gate, and the item list reads none of those values. A handler that can never observe a change is four handlers that can never fire (TD4)."
+        why: "No quest in Collector's prerequisite closure carries an edition, prestige, DSP or faction gate. The item list does read those values transitively, by dropping an Unavailable quest. So it is the data, and not the page, that makes the five skipped handlers unable to fire (TD4). PublishedDataContentTests pins it."
       },
       {
         q: "A profile with seven stored loyalty entries is switched to. How many times is the unlock panel rebuilt, and what makes it so?",
         options: [
-          "Nine, once per announced event the page consumes",
+          "Ten, once per announced event the page consumes",
           "Once, because the first request books a refresh at background priority and the rest of the burst joins it",
           "Twice, once for the values and once for the reload",
           "Seven, once per loyalty entry"
@@ -2486,19 +2759,20 @@
           "That the dead Kappa Path code was still reachable"
         ],
         answer: 2,
-        why: "The Started plan handed the whole walk to PlanBatchCompletion, and the walk ends with the target. Nothing had covered the Started path. The fix drops the target, in its own commit with QuestStartedEventTests."
+        why: "The Started plan handed the whole walk to PlanBatchCompletion, and that walk ends with the target. Nothing had covered the Started path. The fix drops the target, in its own commit with QuestStartedEventTests. The review then split the walk in two, so the name carries the contract: GetPrerequisiteClosure includes the target, GetAllPrerequisites does not."
       }
     ];
 
     var CHECKLIST = [
-      "GetKappaProgress and GetKappaQuestsWithStatus take a predicate over the task, and every caller answers it from a captured RenderPass.",
-      "The quest tab's gauge counts from the row view models' cached statuses, and the list button captures one pass for its header and its rows.",
+      "GetKappaProgress and GetKappaQuestsWithStatus take a predicate over the task, and the RenderPass answers it: StatusOf, IsDone and the two nullable Kappa readings live on the pass, with the built-yet guard inside them.",
+      "The quest tab's gauge counts within the remembered row pass, and the list button captures one pass at the click. The window counts its own header from those rows.",
       "CollectorUnlockViewModel.BuildFor composes the badge, the lines and the count, and contains no comparison of its own.",
-      "The Collector page captures one pass per load for the item aggregation, the quest sources and the panel; QuestsInScope keeps the three exclusions.",
+      "The Collector page captures one pass and one ListScope per load, for the aggregation, the quest sources and the panel. CollectorScope.QuestsInScope keeps the three exclusions, and answers status through the pass.",
       "The page subscribes to exactly four settings events, each handler is a one-liner over the coalescer, and the coalescer is built in the constructor body.",
       "The Kappa count strings never say \"prerequisites\", the scope strings never say \"Kappa\", and the three texts 1.1 left true are byte-equal.",
-      "The list window is opened from both pages with each page's own pass, and the six status brushes are frozen in QuestStatusBrushes.",
-      "The Started plan drops the target from the walk's answer, and QuestStartedEventTests pins it; the walk's comment now says the target is included."
+      "The list window is opened from both pages with each page's own pass, and takes no count and no name resolver. The six status brushes are frozen in QuestStatusBrushes.",
+      "The Started plan calls GetAllPrerequisites, which excludes the target, and CollectAlternativeQuestGroups calls GetPrerequisiteClosure, which includes it. PrerequisiteWalkTests pins both answers.",
+      "A mid-session data publish republishes the task set to both hand-fed services, through PublishTasks and not Initialize, before the roster is rebuilt."
     ];
 
     var answered = {};
@@ -2584,15 +2858,16 @@
           "Guide: docs/2026-09-kappa-collector-1-1-code-guide.html\n" +
           "Comprehension gate: 8/8\n" +
           "Checklist items examined:\n" +
-          "1. The predicate over the task, answered from a pass.\n" +
-          "2. The gauge from the rows' cache, and the list button's own pass.\n" +
+          "1. The predicate over the task, answered by the pass itself.\n" +
+          "2. The gauge within the remembered row pass, and the list button's own pass.\n" +
           "3. BuildFor as composition, with no comparison of its own.\n" +
-          "4. One pass per load on the Collector page, and QuestsInScope.\n" +
+          "4. One pass and one scope per load on the Collector page, and CollectorScope.\n" +
           "5. Four events, one-liner handlers, the coalescer built in the constructor.\n" +
           "6. The two string sets, held apart by the localization guard.\n" +
           "7. The shared window, and the frozen brushes.\n" +
           "8. The Started plan without its target, and the corrected comment.\n" +
-          "Read closely: the Started fix is outside the phase and rests on two new tests.");
+          "9. The mid-session republish, before the roster and without a progress re-read.\n" +
+          "Read closely: the Started fix and the republish are outside the phase, each with its own tests.");
         gateBody.appendChild(pre);
       } else {
         railLabel.textContent = "Gate locked";

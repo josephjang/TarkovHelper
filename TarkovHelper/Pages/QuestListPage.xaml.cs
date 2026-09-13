@@ -40,6 +40,15 @@ namespace TarkovHelper.Pages
         private List<GuideImage>? _pendingGuideImages = null;
         private bool _guideImagesLoaded = false;
         private TarkovTask? _currentDetailTask = null;
+        /// <summary>
+        /// The pass the statuses cached on the rows were produced under - captured by
+        /// <see cref="CaptureRowPass"/> in <see cref="LoadQuests"/> and
+        /// <see cref="RefreshQuestStatuses"/>, the only two places that produce them. Null until
+        /// the first load. Read by the readings that must agree with the rows rather than take a
+        /// fresh one of their own (the Kappa gauge, run at the end of every
+        /// <see cref="ApplyFilters"/>, which captures no pass itself).
+        /// </summary>
+        private RenderPass? _rowPass;
         // Debounces per-keystroke search filtering (see TxtSearch_TextChanged); any
         // explicit ApplyFilters cancels a pending tick.
         private DispatcherTimer? _searchDebounceTimer;
@@ -67,6 +76,12 @@ namespace TarkovHelper.Pages
         /// ColumnDefinition — the space the detail panel must leave for the list.
         /// </summary>
         private const double QuestListMinWidth = 300;
+
+        /// <summary>
+        /// The Kappa gauge's full width, mirroring the Width of the Grid that holds
+        /// KappaGaugeBar in QuestListPage.xaml - the width the filled bar is a percentage of.
+        /// </summary>
+        private const double KappaGaugeWidth = 120;
 
         /// <summary>The Tag of CmbTrader's "All Traders" entry (QuestListPage.xaml).</summary>
         private const string AllTradersTag = "";
@@ -661,8 +676,9 @@ namespace TarkovHelper.Pages
             var tasks = _progressService.AllTasks;
 
             // One progress snapshot and one settings snapshot for the whole build, so every row
-            // is derived from the same profile: see RenderPass.
-            var pass = CapturePass();
+            // is derived from the same profile: see RenderPass. Remembered as the row pass, so
+            // the gauge beside the chips counts within it too (see CaptureRowPass).
+            var pass = CaptureRowPass();
             _allQuestViewModels = tasks.Select(t => CreateQuestViewModel(t, pass)).ToList();
             _traders = tasks.Select(t => t.Trader).Where(t => !string.IsNullOrEmpty(t)).Distinct().OrderBy(t => t).ToList();
             _maps = tasks.Where(t => t.Maps != null).SelectMany(t => t.Maps!).Distinct().OrderBy(m => m).ToList();
@@ -700,30 +716,23 @@ namespace TarkovHelper.Pages
         private RenderPass CapturePass() => RenderPass.Capture(_progressService);
 
         /// <summary>
-        /// The status of one quest within a pass, against that pass's snapshots, together with
-        /// the gate the walk stopped at - the requirement the badge names. Both come from the one
-        /// call, so no pane can name a gate other than the one that produced the status it shows.
+        /// The pass for a build of the row statuses: captured AND remembered as
+        /// <see cref="_rowPass"/>. The two producers of those statuses
+        /// (<see cref="LoadQuests"/>, <see cref="RefreshQuestStatuses"/>) capture through here
+        /// rather than through <see cref="CapturePass"/>, so the stored pass cannot fall behind
+        /// the statuses the rows carry. Passes that render something else (the detail pane, the
+        /// Kappa quest window) are their own fresh reading and must NOT be stored here.
         /// </summary>
-        private (QuestStatus Status, QuestGate Gate) StatusIn(RenderPass pass, TarkovTask task)
+        private RenderPass CaptureRowPass()
         {
-            var status = _progressService.GetStatus(task, pass.Progress, pass.Settings, out var gate);
-            return (status, gate);
+            var pass = CapturePass();
+            _rowPass = pass;
+            return pass;
         }
-
-        /// <summary>Whether <paramref name="task"/> is Done within <paramref name="pass"/>.</summary>
-        private bool IsDoneIn(RenderPass pass, TarkovTask task)
-            => StatusIn(pass, task).Status == QuestStatus.Done;
-
-        /// <summary>
-        /// The Kappa count within one pass: the flagged quests, Collector included, against the
-        /// pass's snapshots (see <see cref="QuestGraphService.GetKappaProgress"/>).
-        /// </summary>
-        private (int Completed, int Total, int Percentage) KappaProgressIn(RenderPass pass)
-            => QuestGraphService.Instance.GetKappaProgress(task => IsDoneIn(pass, task));
 
         private QuestViewModel CreateQuestViewModel(TarkovTask task, RenderPass pass)
         {
-            var (status, gate) = StatusIn(pass, task);
+            var (status, gate) = pass.StatusOf(task);
             var (displayName, subtitle, showSubtitle) = GetLocalizedNames(task);
 
             return new QuestViewModel
@@ -752,23 +761,15 @@ namespace TarkovHelper.Pages
         }
 
         /// <summary>
-        /// A loyalty requirement's trader in the app's language, falling back to the nickname the
-        /// row itself carries. The one resolver the badge and the Requirements lines share.
-        /// </summary>
-        private string TraderDisplayName(QuestTraderRequirement requirement)
-            => _loc.GetTraderDisplayName(requirement.TraderId, requirement.TraderName);
-
-        /// <summary>
         /// The detail pane's Requirements lines for one quest within a pass. The rule itself is
         /// <see cref="RequirementLineViewModel.BuildFor"/>, a pure function of the quest and the
-        /// pass's settings; all this adds is the two theme brushes and the page's own resolvers.
+        /// pass's settings; all this adds is the page's own palette and name resolver.
         /// </summary>
         private List<RequirementLineViewModel> BuildRequirementLines(
             TarkovTask task, RenderPass pass)
             => RequirementLineViewModel.BuildFor(
-                task, pass.Settings, _loc, TraderDisplayName,
-                metBrush: (Brush)FindResource("TextPrimaryBrush"),
-                unmetBrush: QuestStatusBrushes.LevelLocked);
+                task, pass.Settings, _loc, _loc.GetTraderDisplayName,
+                RequirementLineBrushes.FromResources(this));
 
         /// <summary>
         /// The badge text for one quest within a pass. A thin adapter over
@@ -780,14 +781,14 @@ namespace TarkovHelper.Pages
         /// row that named the actual gate. A caller can no longer make that mistake silently.
         /// </para>
         /// <para>
-        /// The gate comes from the same <see cref="StatusIn"/> call as the status, never from a
+        /// The gate comes from the same <see cref="RenderPass.StatusOf"/> call as the status, not from a
         /// second walk here: which requirement is holding a quest is the status engine's answer.
         /// </para>
         /// </summary>
         private string GetStatusText(
             QuestStatus status, QuestGate gate, TarkovTask task, RenderPass pass)
             => QuestRequirementBadge.StatusText(
-                status, gate, task, pass.Settings, TraderDisplayName);
+                status, gate, task, pass.Settings, _loc.GetTraderDisplayName);
 
         private void RefreshQuestDisplayNames()
         {
@@ -803,11 +804,12 @@ namespace TarkovHelper.Pages
         private void RefreshQuestStatuses()
         {
             // One pass, one profile: the status and the badge under it are read from the same
-            // snapshots for every row, not re-read per row and per string.
-            var pass = CapturePass();
+            // snapshots for every row, not re-read per row and per string. Remembered as the row
+            // pass, so the gauge beside the chips counts within it too (see CaptureRowPass).
+            var pass = CaptureRowPass();
             foreach (var vm in _allQuestViewModels)
             {
-                var (status, gate) = StatusIn(pass, vm.Task);
+                var (status, gate) = pass.StatusOf(vm.Task);
                 vm.Status = status;
                 vm.StatusText = GetStatusText(status, gate, vm.Task, pass);
                 vm.StatusBackground = QuestStatusBrushes.For(status);
@@ -1147,35 +1149,38 @@ namespace TarkovHelper.Pages
         }
 
         /// <summary>
-        /// The Kappa gauge beside the status chips, counted from the SAME statuses the chips
-        /// count from: the ones cached on the row view models by the pass
-        /// <see cref="LoadQuests"/> or <see cref="RefreshQuestStatuses"/> captured. It used to
-        /// re-walk every flagged quest against the live singletons here, so during a profile
-        /// switch the gauge could describe one profile while the chips next to it described
-        /// another. Keyed by NormalizedName rather than by task instance, the same key the graph
-        /// service resolves quests under.
+        /// The Kappa gauge beside the status chips, counted within the SAME pass the chips count
+        /// from: the one <see cref="LoadQuests"/> or <see cref="RefreshQuestStatuses"/> last
+        /// captured for the row statuses (<see cref="_rowPass"/>). It used to re-walk every
+        /// flagged quest against the live singletons here, so during a profile switch the gauge
+        /// could describe one profile while the chips next to it described another; the stored
+        /// pass IS the chips' reading, so they cannot disagree, and every flagged quest is
+        /// counted whether or not the row list happens to carry it.
+        /// <para>
+        /// The gauge shows no number at all until there is one to show. Both preconditions are
+        /// the same "no data yet": no pass has been captured (a service event arriving ahead of
+        /// Loaded's <see cref="LoadQuests"/> - the page subscribes in its constructor and the
+        /// load sits behind an await), or the quest graph is not built. Painting a count there
+        /// would state a reading the page does not have: "0/0" reads as "nothing is flagged"
+        /// (the case <see cref="QuestGraphService.IsInitialized"/> exists to keep
+        /// distinguishable) and counting an empty row list read as "none of the thirteen are
+        /// done" for a profile that had done them. Loaded's own ApplyFilters draws the real
+        /// number a moment later.
+        /// </para>
         /// </summary>
         private void UpdateKappaGauge()
         {
-            var graphService = QuestGraphService.Instance;
-            if (!graphService.IsInitialized)
+            if (_rowPass is not { } pass || pass.KappaProgress() is not { } kappa)
             {
-                // A refresh before the graph is built (a service event ahead of Loaded) has
-                // nothing to count yet; Loaded's own ApplyFilters draws the real number.
-                TxtKappaGauge.Text = "0/0";
+                TxtKappaGauge.Text = string.Empty;
                 KappaGaugeBar.Width = 0;
                 return;
             }
 
-            var doneInThisPass = _allQuestViewModels
-                .Where(vm => vm.Status == QuestStatus.Done && !string.IsNullOrEmpty(vm.Task.NormalizedName))
-                .Select(vm => vm.Task.NormalizedName!)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var (completed, total, percentage) = graphService.GetKappaProgress(
-                task => doneInThisPass.Contains(task.NormalizedName!));
+            var (completed, total, percentage) = kappa;
 
             TxtKappaGauge.Text = $"{completed}/{total}";
-            KappaGaugeBar.Width = (percentage / 100.0) * 120; // 120 is the gauge width
+            KappaGaugeBar.Width = (percentage / 100.0) * KappaGaugeWidth;
         }
 
         private void TxtSearch_TextChanged(object sender, TextChangedEventArgs e)
@@ -1361,7 +1366,7 @@ namespace TarkovHelper.Pages
             // the middle of one pass could paint a locked badge above a Requirements line showing
             // the same requirement met, in the met colour.
             var pass = CapturePass();
-            var (status, gate) = StatusIn(pass, task);
+            var (status, gate) = pass.StatusOf(task);
 
             // Show on Map button - hidden (Map feature removed)
             BtnShowOnMap.Visibility = Visibility.Collapsed;
@@ -1423,7 +1428,7 @@ namespace TarkovHelper.Pages
 
                     if (reqTask == null) continue;
 
-                    var (pStatus, pGate) = StatusIn(pass, reqTask);
+                    var (pStatus, pGate) = pass.StatusOf(reqTask);
                     var (pName, _, _) = GetLocalizedNames(reqTask);
 
                     prereqGroups.Add(new PrerequisiteGroupViewModel
@@ -1456,7 +1461,7 @@ namespace TarkovHelper.Pages
 
                         if (reqTask != null)
                         {
-                            var (pStatus, pGate) = StatusIn(pass, reqTask);
+                            var (pStatus, pGate) = pass.StatusOf(reqTask);
                             var (pName, _, _) = GetLocalizedNames(reqTask);
 
                             prereqGroups.Add(new PrerequisiteGroupViewModel
@@ -1492,7 +1497,7 @@ namespace TarkovHelper.Pages
 
                         if (reqTask == null) continue;
 
-                        var (pStatus, pGate) = StatusIn(pass, reqTask);
+                        var (pStatus, pGate) = pass.StatusOf(reqTask);
                         var (pName, _, _) = GetLocalizedNames(reqTask);
 
                         groupVm.Items.Add(new PrerequisiteItemViewModel
@@ -1527,7 +1532,7 @@ namespace TarkovHelper.Pages
             {
                 var altVms = alternativeQuests.Select(alt =>
                 {
-                    var (altStatus, altGate) = StatusIn(pass, alt);
+                    var (altStatus, altGate) = pass.StatusOf(alt);
                     var (displayName, _, _) = GetLocalizedNames(alt);
                     return new
                     {
@@ -1656,10 +1661,17 @@ namespace TarkovHelper.Pages
         /// </summary>
         private void UpdateKappaProgressSection(TarkovTask task, RenderPass pass)
         {
-            // Check if this is the Collector quest
-            var isCollector = task.NormalizedName?.Equals("collector", StringComparison.OrdinalIgnoreCase) == true;
+            // Shown for Collector only, and which quest that is belongs to the graph service:
+            // the Collector page asks the same rule for the row its whole item list hangs on.
+            if (!QuestGraphService.IsCollectorQuest(task))
+            {
+                KappaProgressSection.Visibility = Visibility.Collapsed;
+                return;
+            }
 
-            if (!isCollector)
+            // No reading to show is not a zero one either: the section is collapsed rather than
+            // headed "0/0 Kappa quests completed", which would read as "nothing is flagged".
+            if (pass.KappaProgress() is not { } kappa)
             {
                 KappaProgressSection.Visibility = Visibility.Collapsed;
                 return;
@@ -1667,8 +1679,7 @@ namespace TarkovHelper.Pages
 
             KappaProgressSection.Visibility = Visibility.Visible;
 
-            // Get Kappa progress
-            var (completed, total, percentage) = KappaProgressIn(pass);
+            var (completed, total, percentage) = kappa;
 
             // The section's texts, from the localization service on every rebuild so a language
             // switch (which rebuilds the pane) repaints them. "Kappa quests", never
@@ -1699,16 +1710,13 @@ namespace TarkovHelper.Pages
 
         private void BtnShowKappaQuests_Click(object sender, RoutedEventArgs e)
         {
-            // One pass for the header's count and the rows under it, captured at the click: the
-            // list is a fresh reading, and both of its numbers come from the same profile.
+            // One pass for the rows, captured at the click, so the list is a fresh reading of one
+            // profile. The window counts its own header from these rows and takes each name from
+            // the localization service, so there is nothing else to hand it.
             var pass = CapturePass();
-            var kappaQuests = QuestGraphService.Instance.GetKappaQuestsWithStatus(
-                task => IsDoneIn(pass, task));
-            var (completed, total, _) = KappaProgressIn(pass);
+            if (pass.KappaQuests() is not { } kappaQuests) return;
 
-            KappaQuestListWindow.Show(
-                Window.GetWindow(this), kappaQuests, completed, total,
-                quest => GetLocalizedNames(quest).DisplayName, _loc);
+            KappaQuestListWindow.Show(Window.GetWindow(this), kappaQuests, _loc);
         }
 
         #endregion

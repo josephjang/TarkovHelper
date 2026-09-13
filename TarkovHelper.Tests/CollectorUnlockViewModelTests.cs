@@ -25,8 +25,10 @@ namespace TarkovHelper.Tests;
 public sealed class CollectorUnlockViewModelTests
 {
     // Compared by reference only, so a case says "met" or "unmet" without the theme's colours.
+    // The page's own palette is RequirementLineBrushes.FromResources; this stands in for it.
     private static readonly Brush Met = new SolidColorBrush(Colors.White);
     private static readonly Brush Unmet = new SolidColorBrush(Colors.Red);
+    private static readonly RequirementLineBrushes Palette = new(Met, Unmet);
 
     private static readonly LocalizationService English =
         TestLocalization.WithLanguage(AppLanguage.EN);
@@ -120,12 +122,11 @@ public sealed class CollectorUnlockViewModelTests
 
         var panel = CollectorUnlockViewModel.BuildFor(
             shape.Collector, status, gate, settings, English, EnglishName,
-            kappaDone, KappaTotal, Met, Unmet);
+            kappa: (kappaDone, KappaTotal), Palette);
 
-        Assert.NotNull(panel);
         Assert.Equal(
             QuestRequirementBadge.StatusText(status, gate, shape.Collector, settings, EnglishName),
-            panel!.StatusText);
+            panel.StatusText);
         Assert.Equal(status, panel.Status);
         return panel;
     }
@@ -235,19 +236,65 @@ public sealed class CollectorUnlockViewModelTests
 
         var korean = CollectorUnlockViewModel.BuildFor(
             shape.Collector, status, gate, settings, TestLocalization.WithLanguage(AppLanguage.KO),
-            EnglishName, 12, KappaTotal, Met, Unmet);
+            EnglishName, kappa: (12, KappaTotal), Palette);
 
-        Assert.Equal("카파 퀘스트 12/13 완료", korean!.CountText);
+        Assert.Equal("카파 퀘스트 12/13 완료", korean.CountText);
         Assert.Equal("레벨 42 (현재: 15)", korean.Lines[0].DisplayText);
     }
 
     [Fact]
-    public void A_null_task_gives_a_null_panel()
+    public void With_no_count_to_show_the_panel_says_nothing_rather_than_zero_of_zero()
     {
-        // The loaded data has no Collector quest: the page collapses the panel rather than
-        // showing a badge for nothing.
-        Assert.Null(CollectorUnlockViewModel.BuildFor(
-            null, QuestStatus.Locked, QuestGate.None, Settings(), English, EnglishName,
-            0, 0, Met, Unmet));
+        // The graph is not built yet, so there is no count. The panel has to say nothing: "0/13"
+        // would be a reading, and "0/0 Kappa quests completed" reads as "nothing is flagged" -
+        // the case QuestGraphService.IsInitialized exists to keep apart, and the string the quest
+        // tab's gauge is forbidden to paint (KappaGaugeSourceTests). Before this, "no count" had
+        // no spelling at all: the page substituted (0, 0, 0) and printed it.
+        var shape = PublishedShape();
+        var settings = Settings();
+        var (status, gate) = Walk(shape, settings, prerequisitesDone: false, collectorDone: false);
+
+        var panel = CollectorUnlockViewModel.BuildFor(
+            shape.Collector, status, gate, settings, English, EnglishName,
+            kappa: null, Palette);
+
+        Assert.Equal(string.Empty, panel.CountText);
+        // A missing count hides no condition: the badge and the nine lines are unaffected.
+        Assert.Equal("Locked", panel.StatusText);
+        Assert.Equal(9, panel.Lines.Count);
+    }
+
+    /// <summary>
+    /// The panel builder takes a non-null quest, so "the loaded data has no Collector quest" is
+    /// the page's case to answer, and the only answer that makes sense is to collapse the panel:
+    /// there is no badge to show for a quest that is not there. The builder used to accept null
+    /// and answer null, which read as a second guard but was unreachable behind this one, and the
+    /// page discarded the nullable result with <c>!</c> anyway.
+    /// <para>
+    /// Pinned at the source because the page cannot be constructed in this suite (see
+    /// <see cref="SourceGuards"/>), and the defect would be the guard quietly going missing,
+    /// which nothing else here would notice.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void The_page_collapses_the_panel_when_the_data_has_no_Collector_quest()
+    {
+        var rebuild = SourceGuards.MemberBody(
+            SourceGuards.Read("TarkovHelper", "Pages", "CollectorPage.xaml.cs"),
+            "private void RebuildUnlockPanel(RenderPass pass)");
+
+        // The guard, and it comes before the build: the collapse returns.
+        var guard = rebuild.IndexOf("if (collector == null)", StringComparison.Ordinal);
+        var collapse = rebuild.IndexOf(
+            "UnlockPanel.Visibility = Visibility.Collapsed;", StringComparison.Ordinal);
+        var build = rebuild.IndexOf("CollectorUnlockViewModel.BuildFor(", StringComparison.Ordinal);
+
+        Assert.True(guard >= 0, "The page no longer guards against a missing Collector quest.");
+        Assert.InRange(collapse, guard, build);
+        Assert.Contains("return;", rebuild[collapse..build], StringComparison.Ordinal);
+
+        // And it does not paper over a nullable result any more: BuildFor answers a panel.
+        Assert.DoesNotContain(
+            "RequirementLineBrushes.FromResources(this))!", rebuild, StringComparison.Ordinal);
     }
 }

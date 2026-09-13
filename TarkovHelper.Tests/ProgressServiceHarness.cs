@@ -19,11 +19,31 @@ internal static class ProgressServiceHarness
         IQuestProgressStore store,
         AppProfile loadedProfile,
         params TarkovTask[] tasks)
-        => Create(store, ProgressSnapshot.Empty(ProfileService.GetProfileId(loadedProfile), 0), tasks);
+        => Create(store, loadedProfile, graph: null, tasks);
+
+    /// <summary>
+    /// The same service with the quest dependency graph its Started plan walks handed in, so a
+    /// test that needs a graph builds a private <see cref="QuestGraphService"/> instead of
+    /// initializing the process-global <see cref="QuestGraphService.Instance"/> that every other
+    /// test in the assembly shares.
+    /// </summary>
+    public static QuestProgressService Create(
+        IQuestProgressStore store,
+        AppProfile loadedProfile,
+        QuestGraphService? graph,
+        params TarkovTask[] tasks)
+        => Create(store, ProgressSnapshot.Empty(ProfileService.GetProfileId(loadedProfile), 0), graph, tasks);
 
     public static QuestProgressService Create(
         IQuestProgressStore store,
         ProgressSnapshot snapshot,
+        params TarkovTask[] tasks)
+        => Create(store, snapshot, graph: null, tasks);
+
+    public static QuestProgressService Create(
+        IQuestProgressStore store,
+        ProgressSnapshot snapshot,
+        QuestGraphService? graph,
         params TarkovTask[] tasks)
     {
         var service = TestReflection.Uninitialized<QuestProgressService>();
@@ -47,6 +67,9 @@ internal static class ProgressServiceHarness
 
         service.Store = store;
         service.Snapshot = snapshot;
+        // Left at its lazy default (the singleton) when no graph is asked for, so the many tests
+        // that never reach the graph keep working unchanged.
+        if (graph != null) service.Graph = graph;
         return service;
     }
 

@@ -41,6 +41,9 @@ public sealed class SchedulingSensitiveCollectionTests
     {
         "Thread.Sleep(",
         "new Thread(",
+        // The lifted STA helper in SourceGuards.cs: its caller joins a thread without spelling
+        // "new Thread(" of its own, so the call site needs a marker of its own too.
+        "StaThread.Run(",
         "Task.Run(",
         "Task.Delay(",
         "TaskCompletionSource",
@@ -99,6 +102,11 @@ public sealed class SchedulingSensitiveCollectionTests
         // wrong reason.
         Assert.Contains("ProgressStoreFakeTests.cs", members);
         Assert.Contains("RefreshCoalescerSchedulingTests.cs", members);
+
+        // The STA half of the same proof: this class joins a thread through StaThread.Run and
+        // spells no other marker, so it is in the list only if that marker is live. Without it
+        // the scan would wave every future STA caller through.
+        Assert.Contains("ProfileDrawerFitTests.cs", members);
 
         Assert.True(violations.Count == 0,
             "These test classes block, spin, sleep or measure time, but do not declare " +

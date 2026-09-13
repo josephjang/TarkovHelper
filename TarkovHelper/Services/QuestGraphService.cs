@@ -12,7 +12,7 @@ namespace TarkovHelper.Services
 {
     /// <summary>
     /// Service for managing quest dependency graph and traversal
-    /// Provides methods to find prerequisites, follow-ups, and optimal paths
+    /// Provides methods to find prerequisites, follow-ups, and the unlock order
     /// </summary>
     public class QuestGraphService
     {
@@ -104,11 +104,23 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Get all prerequisites for a quest recursively (full prerequisite chain)
+        /// The full prerequisite closure of a quest, INCLUDING the quest itself as the last
+        /// entry. The name says "closure" because the inclusion is the contract, not an accident:
+        /// callers that want strictly the prerequisites call
+        /// <see cref="GetAllPrerequisites"/> instead.
+        /// <para>
+        /// The one consumer of the inclusion is
+        /// <c>LogSyncService.CollectAlternativeQuestGroups</c>, where a logged quest that itself
+        /// has mutually exclusive siblings forms its own selection group only by appearing in its
+        /// own walk.
+        /// </para>
         /// </summary>
         /// <param name="questNormalizedName">Target quest normalized name</param>
-        /// <returns>List of all prerequisite quests in topological order (earliest first)</returns>
-        public List<TarkovTask> GetAllPrerequisites(string questNormalizedName)
+        /// <returns>
+        /// The target and all of its prerequisites in topological order (earliest first, target
+        /// last). Empty when the quest is unknown to the graph.
+        /// </returns>
+        public List<TarkovTask> GetPrerequisiteClosure(string questNormalizedName)
         {
             EnsureInitialized();
 
@@ -120,6 +132,21 @@ namespace TarkovHelper.Services
 
             return result;
         }
+
+        /// <summary>
+        /// Get all prerequisites for a quest recursively (full prerequisite chain), WITHOUT the
+        /// quest itself: what the name promises, and what every caller but one wants. The target
+        /// is compared case-insensitively because the lookup the walk reads is built with
+        /// <see cref="StringComparer.OrdinalIgnoreCase"/>, so the walk can answer a task whose
+        /// stored name differs in case from the name asked for.
+        /// </summary>
+        /// <param name="questNormalizedName">Target quest normalized name</param>
+        /// <returns>List of all prerequisite quests in topological order (earliest first)</returns>
+        public List<TarkovTask> GetAllPrerequisites(string questNormalizedName)
+            => GetPrerequisiteClosure(questNormalizedName)
+                .Where(t => !string.Equals(
+                    t.NormalizedName, questNormalizedName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
         private void CollectPrerequisites(string questName, HashSet<string> visited, HashSet<string> visiting, List<TarkovTask> result)
         {
@@ -141,10 +168,9 @@ namespace TarkovHelper.Services
             visited.Add(questName);
 
             // Added after its own prerequisites, so the list reads earliest first. The TARGET
-            // quest is added too, as the last entry: a caller that wants strictly the
-            // prerequisites drops it (the Collector page folds the result into a set where the
-            // target's presence is harmless). The previous comment claimed the target was
-            // excluded; it never was.
+            // quest is added too, as the last entry: that is why the public walk this backs is
+            // named GetPrerequisiteClosure. GetAllPrerequisites is the same walk with the target
+            // dropped, and is what callers who only want the prerequisites call.
             if (task != null)
             {
                 result.Add(task);
@@ -210,60 +236,6 @@ namespace TarkovHelper.Services
 
             visiting.Remove(questName);
             visited.Add(questName);
-        }
-
-        /// <summary>
-        /// Get the optimal path to complete a target quest
-        /// Returns quests in order they should be completed
-        /// </summary>
-        /// <param name="targetQuestNormalizedName">Target quest to complete</param>
-        /// <returns>List of quests in optimal completion order</returns>
-        public List<TarkovTask> GetOptimalPath(string targetQuestNormalizedName)
-        {
-            EnsureInitialized();
-
-            var target = GetTask(targetQuestNormalizedName);
-            if (target == null)
-                return new List<TarkovTask>();
-
-            var result = new List<TarkovTask>();
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var tempMark = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            TopologicalSort(targetQuestNormalizedName, visited, tempMark, result);
-
-            return result;
-        }
-
-        private void TopologicalSort(string questName, HashSet<string> visited, HashSet<string> tempMark, List<TarkovTask> result)
-        {
-            if (visited.Contains(questName))
-                return;
-
-            if (tempMark.Contains(questName))
-            {
-                // Circular dependency detected - skip to avoid infinite loop
-                return;
-            }
-
-            tempMark.Add(questName);
-
-            var task = GetTask(questName);
-            if (task?.Previous != null)
-            {
-                foreach (var prev in task.Previous)
-                {
-                    TopologicalSort(prev, visited, tempMark, result);
-                }
-            }
-
-            tempMark.Remove(questName);
-            visited.Add(questName);
-
-            if (task != null)
-            {
-                result.Add(task);
-            }
         }
 
         /// <summary>
@@ -430,11 +402,27 @@ namespace TarkovHelper.Services
         }
 
         /// <summary>
-        /// Check if a quest is the Collector quest
+        /// The published normalized name of the Collector quest: the one spelling of the quest's
+        /// identity in the app. It lives beside <see cref="KappaQuests"/> because the two rules
+        /// are the same kind of thing, the membership the Kappa surfaces are built on.
         /// </summary>
-        public bool IsCollectorQuest(TarkovTask task)
+        private const string CollectorNormalizedName = "collector";
+
+        /// <summary>
+        /// Whether <paramref name="task"/> IS the Collector quest, by its published normalized
+        /// name, case-insensitively (the data's own casing is not a contract). False for a quest
+        /// with no normalized name, which cannot be identified at all.
+        /// <para>
+        /// The ONE place the quest is identified: the Collector page's item scope and unlock
+        /// panel, and the quest tab's Kappa section in the detail pane, all ask this rather than
+        /// spelling the comparison a third and fourth time. Static because it is a rule about a
+        /// task and reads no graph state, so a caller with a task in hand needs no initialized
+        /// service to ask it.
+        /// </para>
+        /// </summary>
+        public static bool IsCollectorQuest(TarkovTask task)
         {
-            return task.NormalizedName?.Equals("collector", StringComparison.OrdinalIgnoreCase) == true;
+            return task.NormalizedName?.Equals(CollectorNormalizedName, StringComparison.OrdinalIgnoreCase) == true;
         }
 
         #region Unlock (Progression) Order

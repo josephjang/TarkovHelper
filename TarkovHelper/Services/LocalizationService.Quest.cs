@@ -512,6 +512,14 @@ public partial class LocalizationService
         return string.IsNullOrWhiteSpace(trader.Name) ? fallback : trader.Name;
     }
 
+    /// <summary>
+    /// A loyalty requirement's trader in the app's language, falling back to the nickname the row
+    /// itself carries. The one resolver the quest badge, the Requirements lines and the Collector
+    /// unlock panel share; the two pages each spelled this unwrapping themselves.
+    /// </summary>
+    public string GetTraderDisplayName(QuestTraderRequirement requirement)
+        => GetTraderDisplayName(requirement.TraderId, requirement.TraderName);
+
     #endregion
 
     #region Quest detail: Kappa section
