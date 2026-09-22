@@ -44,9 +44,12 @@ Requirements로 바꾼 뒤 같은 날짜와 slug의 `.design.md`를 추가합니
 `product-requirements.md`, `technical-design.md`. 섹션 이름과 순서는 고정이고
 `DecisionDocsTests`가 검사합니다. 할 말이 없는 섹션은 채우지 말고 지웁니다.
 
-Split proposal이 승인되면 `/deliver`(Codex에서는 `$deliver`)가 구현을 이어받습니다:
-계획 파일, 슬라이스, 코드 가이드, PR A, 스택 브랜치의 딥 리뷰, 그 가이드, PR B.
-Unified로 충분한 변경에는 그 워크플로가 필요 없습니다.
+proposal이 승인되면 형식과 관계없이 `/deliver`(Codex에서는 `$deliver`)가 구현을
+이어받을 수 있습니다: 계획 파일, 슬라이스, 코드 가이드, PR A, 스택 브랜치의 딥 리뷰,
+그 가이드, PR B. 그 리뷰 흔적이 필요한 변경에 쓰고, 형식이 그것을 정하지는 않습니다.
+Unified proposal에는 Files touched와 Test Strategy가 없으므로 계획 파일이 코드에서
+그것을 도출하고, 실제로 돌린 검사는 PR 본문의 Verification에 적습니다
+(`2026-09-22-deliver-unified-proposals.md`).
 
 ## 파일 이름과 위치
 
