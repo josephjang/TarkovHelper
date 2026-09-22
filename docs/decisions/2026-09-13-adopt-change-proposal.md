@@ -1,5 +1,9 @@
 # Change Proposal: Adopt the change-proposal practice
 
+> Superseded in part by `2026-09-22-deliver-unified-proposals.md`: D2's
+> sentence that the deliver workflow takes only the Split form. It now takes
+> either form.
+
 ## Summary
 
 This repository's decision docs become Change Proposals as the
