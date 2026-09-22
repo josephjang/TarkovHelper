@@ -1,7 +1,9 @@
 # Plan template
 
 Copy to `PLAN-<topic>.md` at the repo root, fill the bracketed parts, and
-delete the parts that do not apply. It is never committed: `/PLAN-*.md` is
+delete the parts that do not apply. Where the template offers a Split and a
+Unified alternative, keep the one that matches the proposal's form (the role
+table in step 0 of the workflow says what each form supplies). It is never committed: `/PLAN-*.md` is
 gitignored at the repo root, so the file stays out of `git status` while the run
 is in progress, and it is deleted at the end of the wrap-up.
 
@@ -17,17 +19,23 @@ means stopping.
 Temporary working document. It is never committed (`/PLAN-*.md` is gitignored,
 and the commit workflow stages by explicit path) and it is deleted at the end of
 the wrap-up. The decisions live in the proposal,
-`docs/decisions/[date]-[slug].requirements.md` and its `.design.md`; this file
-only sequences the work and records what each step needs.
+[Split: `docs/decisions/[date]-[slug].requirements.md` and its `.design.md`]
+[Unified: `docs/decisions/[date]-[slug].md`]; this file only sequences the
+work and records what each step needs.
 
 ## Starting state ([date])
 
 - Worktree `[path]`, branch `[branch]` at `[sha]` = `main` (`[sha]`) plus
   [what else]. Release in the field: `[version]`. Published data: `[version]`.
-- The Technical Design's "Files touched" is the implementation checklist, its
-  "Test Strategy" holds the planned checks and commands, and its "Verification"
-  records what actually ran. Facts already verified ([what: row counts, bounds,
-  live probes]) are in its Context; do not re-derive them.
+- [Split] The Technical Design's "Files touched" is the implementation
+  checklist, its "Test Strategy" holds the planned checks and commands, and its
+  "Verification" records what actually ran. Facts already verified ([what: row
+  counts, bounds, live probes]) are in its Context; do not re-derive them.
+- [Unified] The proposal's Requirements are the implementation checklist and
+  its Decisions the settled choices. The files touched and the test strategy
+  are below, derived from the code while planning; what actually ran goes to
+  PR A's Verification. Facts already verified ([what]) are in its Problem; do
+  not re-derive them.
 - **Baseline, measured before the first edit:** build [N] warnings / [N] errors,
   non-E2E suite [N] passed, E2E [N] passed / [N] skipped.
 - Six steps, up to two PRs and two guides:
@@ -41,6 +49,16 @@ only sequences the work and records what each step needs.
 
   Steps 5 and 6 exist only if step 4 produced fixes. A review that finds nothing
   ends the run at the wrap-up, with the outcome recorded in PR A's body.
+
+## Files touched and test strategy (Unified only)
+
+Derived from the code, because a Unified proposal does not carry them. Name
+every file edit, deletion and call site; "update related code" is not a list.
+Never paste this list into the proposal.
+
+- Files touched: [file: what changes, and which Requirement it serves]
+- Tests added, changed or deleted: [test: what it pins, or why it goes]
+- Checks and commands: [build, suites, e2e, manual check and its reachability]
 
 ## Rules that apply to every step
 
@@ -64,18 +82,20 @@ only sequences the work and records what each step needs.
 ## Step 1. Implementation
 
 Branch: `git switch -c [feature-branch]` from `[base]`, in this worktree, so the
-proposal merges with the work (PR A carries both documents).
+proposal merges with the work (PR A carries the proposal's documents).
 
-Work in the Technical Design's Design order; each slice is one commit with its
+Work in [Split: the Technical Design's Design order] [Unified: the order below,
+chosen so each slice builds and tests green]; each slice is one commit with its
 tests.
 
 1. **[Slice name]** (`[type](scope): [subject]`): [what changes]. Tests:
    [which, new or extended]. [Anything the compiler will find for you.]
 2. ...
 
-For the slice that closes the phase's defect: write and run the tests BEFORE
+For the slice that closes the change's defect: write and run the tests BEFORE
 the fix; they must fail for the expected reason. Put the red-then-green fact in
-the commit body.
+the commit body. [If there is no defect to reproduce, say here why no
+fail-first step applies.]
 
 Exit criteria before step 2:
 
@@ -86,10 +106,14 @@ Exit criteria before step 2:
 - [ ] self-review of the whole diff against the global checklist (removed
       behaviour, ripple, footguns, wrappers, duplication), reading each edited
       function whole
-- [ ] the Technical Design's "Files touched" matches the diff; a divergence is
-      recorded in its Technical Decisions, not left silent
-- [ ] the Technical Design's "Verification" records which checks ran on this
-      branch, what was observed, and what was not checked and why
+- [ ] [Split] the Technical Design's "Files touched" matches the diff; a
+      divergence is recorded in its Technical Decisions, not left silent
+- [ ] [Unified] every Requirement holds and the file list above matches the
+      diff; a divergence is recorded in the proposal's Decisions, not left
+      silent
+- [ ] which checks ran on this branch, what was observed, and what was not
+      checked and why, recorded [Split: in the Technical Design's
+      "Verification"] [Unified: here, for PR A's Verification section]
 - [ ] working tree clean, every slice committed
 - [ ] PR A open as a draft, so step 2 has a number to cite:
       `gh pr create --draft --base [base] --head [feature-branch] --title "..."
@@ -98,7 +122,7 @@ Exit criteria before step 2:
 ## Step 2. Code guide
 
 `/code-guide [branch or PR number]`. Inputs to study: the branch diff against
-`main`, both documents of the proposal, [the previous guide in the series], and
+`main`, the proposal's documents, [the previous guide in the series], and
 the newest guide for the CSS tokens.
 
 Chapter candidates (background, defect, design): [list]
@@ -124,10 +148,12 @@ Verification, all required:
 
 Body checklist:
 
-- [ ] first paragraph names both documents of the proposal
+- [ ] first paragraph names the proposal (both documents of a Split pair, or
+      the Unified document)
 - [ ] Why (in numbers), What changed (one bullet per slice), divergences from
-      the Technical Design, Tests (before/after and the fail-first evidence),
-      Verification (exact commands), Residuals
+      the proposal, Tests (before/after and the fail-first evidence, or why
+      none applied), Verification (exact commands; for Unified also what was
+      not checked and why), Residuals
 - [ ] names the guide file from step 2, with its checker commands under
       Verification
 - [ ] no attribution footer
@@ -155,8 +181,10 @@ After the report:
 - [ ] read the production diff yourself before committing it
 - [ ] build, both suites, and any guide checkers and lab drivers the review's
       edits could have broken
-- [ ] a fix that reverses a recorded decision is recorded in the Technical
-      Design's Technical Decisions, and its Verification covers the fix branch
+- [ ] a fix that reverses a recorded decision is recorded [Split: in the
+      Technical Design's Technical Decisions, and its Verification covers the
+      fix branch] [Unified: in the proposal's Decisions, and PR B's
+      Verification covers the fix branch]
 - [ ] commit (the repo's precedent is one fix commit, clusters in the body)
 - [ ] keep the report for step 5 and the PR B body
 - [ ] no production fixes at all: skip steps 5 and 6, put the review's outcome
@@ -190,7 +218,7 @@ Body checklist:
       lands where it does, which test now pins it
 - [ ] Tests, Verification, Residuals carried forward, and a "read closely" note
       for anything reconstructed or unverifiable
-- [ ] names the guide file and both documents of the proposal
+- [ ] names the guide file and the proposal's documents
 - [ ] no attribution footer
 
 Merge order: PR A first; confirm PR B's base reads `main` before merging it.

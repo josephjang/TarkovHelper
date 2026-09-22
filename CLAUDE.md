@@ -65,11 +65,11 @@ rather than fill it. What belongs in each section is explained once, upstream
 including how documents merged before 2026-09-13 (`feature-<name>.md` PRD plus
 `feature-<name>.spec.md` spec, the same two roles under older names) map to the forms.
 
-Once a Split proposal is approved, `/deliver` (or `$deliver` in Codex) sequences the
-work that implements it: a plan file, slices, a code guide, PR A, a deep review on a
-stacked branch, its guide, and PR B. It uses
-`.agents/skills/deliver/references/workflow.md`. A change small enough for the Unified
-form does not need it.
+Once a proposal is approved, in either form, `/deliver` (or `$deliver` in Codex) can
+sequence the work that implements it: a plan file, slices, a code guide, PR A, a deep
+review on a stacked branch, its guide, and PR B. It uses
+`.agents/skills/deliver/references/workflow.md`. Use it when the change wants that
+review trail; the form does not decide it.
 
 Documents are never moved or renamed: the filename is the permanent address, and other
 documents cite it by filename, never by path. A draft is revised while its change is

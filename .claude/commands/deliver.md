@@ -1,15 +1,16 @@
 ---
-description: Plan and execute the delivery of an approved Split change proposal end to end
+description: Plan and execute the delivery of an approved change proposal (Split or Unified) end to end
 ---
 
-Deliver the approved Split change proposal named by `$ARGUMENTS`.
+Deliver the approved change proposal, Split or Unified, named by `$ARGUMENTS`.
 
 Read `.agents/skills/deliver/references/workflow.md` completely and follow it as
 the required workflow. The plan file it produces is built from
 `.agents/skills/deliver/references/plan-template.md`.
 
-`$ARGUMENTS` names the proposal: a `docs/decisions/` file name, or the slug its
-Product Requirements and Technical Design share. If it is empty, ask which
+`$ARGUMENTS` names the proposal: a `docs/decisions/` file name, or its slug (the
+one a Split pair's Product Requirements and Technical Design share, or a
+Unified proposal's). If it is empty, ask which
 proposal this run implements before writing the plan file.
 
 The workflow makes no product decisions. If the proposal does not exist, or does

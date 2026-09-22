@@ -1,25 +1,49 @@
 # Deliver Workflow
 
-Take an approved Split change proposal, `docs/decisions/<date>-<slug>.requirements.md`
-and `<date>-<slug>.design.md` (or an older `<name>.md` and `<name>.spec.md` pair,
-whose spec has the same sections under older names), and land it: a plan, the
-work in reviewable slices, two guides, and two stacked PRs. A change small
-enough for the Unified form does not need this workflow.
+Take an approved change proposal in either form and land it: a plan, the work
+in reviewable slices, two guides, and two stacked PRs. The proposal is either
+
+- **Split**: `docs/decisions/<date>-<slug>.requirements.md` and
+  `<date>-<slug>.design.md` (or an older `<name>.md` and `<name>.spec.md` pair,
+  whose spec has the same sections under older names), or
+- **Unified**: a single `docs/decisions/<date>-<slug>.md` titled
+  `Change Proposal: <name>`.
+
+The steps are the same for both forms. What differs is where the run reads its
+checklist and where it records what a Technical Design would otherwise hold; the
+table in step 0 is the whole difference. Running this workflow is the choice of
+a review trail, not a consequence of the form: a change that wants neither a
+plan nor a deep review is implemented without it, whichever form its proposal
+takes.
 
 The shape came out of phase 4 of the EFT 1.1 roadmap (PRs #55 and #57, the
 `quest-loyalty-gating` pair). Where a rule below looks oddly specific, it is
-because something cost time there.
+because something cost time there. Unified support is recorded in
+`2026-09-22-deliver-unified-proposals.md`.
 
 ## 0. Preconditions and the plan file
 
-1. Confirm the pair exists and is approved. The Technical Design's **Files
-   touched** (the list that ends its Design section) is the implementation
-   checklist, its **Test Strategy** holds the planned checks and their commands,
-   and its **Verification** is where the checks that actually ran are recorded
-   before PR A is ready. Facts its **Context** already verified (row counts,
-   live probes, bounds) are not re-derived: they were checked once, with
-   evidence, and re-deriving them is how a plan drifts from the decision it
-   implements.
+1. Confirm the proposal exists and is approved: both documents of a Split pair,
+   or the one Unified document. A name that matches neither stops the run
+   before the plan file is written. Then read the roles below from the form you
+   have:
+
+   | Role in the run | Split: in the Technical Design | Unified |
+   |---|---|---|
+   | Implementation checklist | **Files touched** (the list that ends Design) | **Requirements**, plus the file list the plan derives from the code |
+   | Slice order | the **Design** order | the plan's own order, chosen so each slice builds and tests green |
+   | Planned checks and commands | **Test Strategy** | the plan's "Files touched and test strategy" section, derived while planning |
+   | Divergence from the proposal | **Technical Decisions** | **Decisions**, as a reversed or added decision |
+   | Checks that actually ran | **Verification** | **Verification** in PR A's body (PR B's for the fix branch) |
+   | Facts already verified | **Context** | **Problem** |
+
+   Facts the proposal already verified (row counts, live probes, bounds) are
+   not re-derived: they were checked once, with evidence, and re-deriving them
+   is how a plan drifts from the decision it implements. For a Unified
+   proposal, deriving the file list is the one piece of design the run does
+   itself: read the code until every file edit, deletion and call site is
+   named, and never paste that list into the proposal, whose sections are
+   fixed per form.
 2. Write `PLAN-<topic>.md` at the repo root from
    [plan-template.md](plan-template.md). It is **never committed**: `/PLAN-*.md`
    is gitignored at the repo root, so it stays out of `git status` and out of
@@ -34,7 +58,8 @@ because something cost time there.
 
    Write the pass count down. Every later count is reported as a delta from it.
 4. Branch: `<type>/<topic>` in kebab-case from wherever the proposal lives, so
-   its two documents merge in the same PR as the work.
+   its documents (both of a Split pair, or the one Unified document) merge in
+   the same PR as the work.
 
 Do not ask for approval between steps once the plan is written. Phase
 boundaries are checkpoints, not handoffs. Stop only for a genuine blocker:
@@ -43,16 +68,21 @@ settle, or a failing test that exposes a flaw the plan did not anticipate.
 
 ## 1. Implementation
 
-Work in the Technical Design's Design order. **One slice per commit, each with
+Work in the slice order from step 0: the Technical Design's Design order, or
+the plan's own order for a Unified proposal. **One slice per commit, each with
 its own tests**, so a review can bisect and the commit body can say why.
 
-For the defect the phase exists to remove:
+For the defect the change exists to remove:
 
 1. Write the tests first, naming the behaviour that is wrong today.
 2. Run them and **confirm they fail for the expected reason.** If they pass,
    they do not reproduce the defect: revise before continuing.
 3. Fix the root cause.
 4. Run them again, and put the red-then-green fact in the commit body.
+
+A change with no defect to reproduce (a pure removal, say) still writes the
+tests that pin its requirements, and says in the plan and in PR A's body that
+no fail-first step applied and why, rather than inventing a red run.
 
 Ripple discipline, which is where the real cost hides:
 
@@ -73,10 +103,15 @@ Ripple discipline, which is where the real cost hides:
   pre-existing (see Traps)
 - self-review of the whole diff against the global checklist, reading each
   edited function whole rather than each hunk
-- the Technical Design's Files touched matches the diff; any divergence is
-  **recorded in its Technical Decisions in this PR**, never left silent
-- the Technical Design's Verification records which checks from Test Strategy
-  ran against this branch, what was observed, and what was not checked and why
+- the checklist from step 0 matches the diff: for Split, the Technical
+  Design's Files touched; for Unified, every Requirement holds and the plan's
+  file list matches. Any divergence is **recorded in this PR** (the Technical
+  Design's Technical Decisions, or the Unified proposal's Decisions), never
+  left silent
+- the checks from the planned test strategy that ran against this branch, what
+  was observed, and what was not checked and why, are written down: in the
+  Technical Design's Verification for Split, in the plan (to become PR A's
+  Verification in step 3) for Unified
 - working tree clean, every slice committed
 - **PR A open as a draft**, so the guide in step 2 cites a real number instead
   of a guess or three later amendments:
@@ -97,7 +132,7 @@ this workflow rather than that one:
 - **The PR number is the draft opened at the end of step 1.** The guide cites it
   in three places: the eyebrow, the approval snippet and the `docs/README.md`
   entry. Never guess it. See Traps.
-- The guide is written against the branch diff, the proposal's two documents,
+- The guide is written against the branch diff, the proposal's documents,
   and the previous guide in the same series. Reference the earlier part in the
   lede.
 
@@ -111,13 +146,18 @@ gh pr ready <number>
 
 Body shape (the repo's model is PR #55, whose sections are exactly this list):
 
-- first paragraph names both documents of the proposal as what this PR
-  implements and merges, and says plainly if it publishes no data
+- first paragraph names the proposal as what this PR implements and merges
+  (both documents of a Split pair, or the Unified document), and says plainly
+  if it publishes no data
 - **Why**: the defect in numbers, not adjectives
 - **What changed**: one bullet per slice
-- **Divergences from the approved Technical Design**, each with what it fixes
-- **Tests**: count before and after, and the fail-first evidence quoted
-- **Verification**: the exact commands and their output
+- **Divergences from the approved proposal** (its Technical Design, or a
+  Unified proposal's Requirements and Decisions), each with what it fixes
+- **Tests**: count before and after, and the fail-first evidence quoted, or why
+  no fail-first step applied
+- **Verification**: the exact commands and their output. For a Unified
+  proposal this section is the record of what ran, since the proposal has no
+  Verification of its own: say what was not checked and why here too
 - names the guide file from step 2, with its checker commands quoted under
   Verification, the same way step 6 names the part 2 guide
 - **Residuals**: what is knowingly left, including anything the manual check
@@ -151,10 +191,11 @@ After the report:
   summary on faith, especially where it rewrites code this session wrote
 - re-run build, both suites, and any guide checkers and lab drivers, since the
   review may have edited the guides
-- a fix that reverses a recorded decision is recorded in the Technical Design's
-  Technical Decisions in the same PR, and its Verification is brought up to
-  date with what ran on the fix branch: PR B is part of the same change, so the
-  proposal is still open to it
+- a fix that reverses a recorded decision is recorded in the same PR, in the
+  Technical Design's Technical Decisions or the Unified proposal's Decisions,
+  and the record of what ran is brought up to date for the fix branch (the
+  Technical Design's Verification, or PR B's Verification section for Unified):
+  PR B is part of the same change, so the proposal is still open to it
 - commit. The repo's precedent (PRs #57 and #51) is **one fix commit** plus the
   guide commit, with the clusters enumerated in the body. Splitting an
   interdependent refactor into per-cluster commits that do not build is worse
@@ -199,7 +240,7 @@ so the diff is only the fixes. Body shape (the repo's model is PR #57):
 - Tests, Verification, Residuals carried forward
 - a **read closely** note for anything reconstructed, judgement-called, or
   unverifiable
-- names the guide file and both documents of the proposal
+- names the guide file and the proposal's documents
 
 Merge order: PR A first. GitHub retargets PR B to `main` when the base branch
 is deleted; confirm the base reads `main` before merging PR B.
@@ -246,8 +287,7 @@ sentinel that never fires, and the run spends its budget on neither waiting nor
 working. Manage the cap from the session that dispatches, and resume the run as
 above.
 
-**Manual verification steps that cannot be reached.** A Technical Design's
-manual check may name a quest or a state that some other gate makes unreachable
+**Manual verification steps that cannot be reached.** A planned manual check may name a quest or a state that some other gate makes unreachable
 on a fresh profile. Verify the manual script against the data when writing the
-Test Strategy, and when one turns out to be unreachable, record that under
+test strategy, and when one turns out to be unreachable, record that under
 Verification as not checked, with the reason, rather than quietly skipping it.
