@@ -3,7 +3,9 @@
 Copy to `PLAN-<topic>.md` at the repo root, fill the bracketed parts, and
 delete the parts that do not apply. Where the template offers a Split and a
 Unified alternative, keep the one that matches the proposal's form (the role
-table in step 0 of the workflow says what each form supplies). It is never committed: `/PLAN-*.md` is
+table in step 0 of the workflow says what each form supplies). If a Unified
+proposal is split mid-run, rewrite the plan from the Split alternatives (see the
+blocker rule in step 0 of the workflow). It is never committed: `/PLAN-*.md` is
 gitignored at the repo root, so the file stays out of `git status` while the run
 is in progress, and it is deleted at the end of the wrap-up.
 
@@ -108,9 +110,10 @@ Exit criteria before step 2:
       function whole
 - [ ] [Split] the Technical Design's "Files touched" matches the diff; a
       divergence is recorded in its Technical Decisions, not left silent
-- [ ] [Unified] every Requirement holds and the file list above matches the
-      diff; a divergence is recorded in the proposal's Decisions, not left
-      silent
+- [ ] [Unified] every Requirement holds; a divergence from a Requirement or a
+      Decision is recorded in the proposal's Decisions, not left silent. The
+      file list above is corrected to match the diff here, and the correction
+      goes to PR A's "What changed", never into the proposal
 - [ ] which checks ran on this branch, what was observed, and what was not
       checked and why, recorded [Split: in the Technical Design's
       "Verification"] [Unified: here, for PR A's Verification section]
@@ -170,6 +173,9 @@ Preparation:
 - [ ] `git worktree add -b fix/[topic]-review-fixes ../[short-name]
       [feature-branch]` (long icon paths overflow with a long prefix)
 - [ ] **a fresh agent session in that worktree**, not this one
+- [ ] [Unified] this file's "Files touched and test strategy" section and PR
+      A's Verification pasted into that session with the command, since the
+      review worktree has no copy of this file
 
 Run `/deep-review main...[feature-branch]`. Answer its steering questions.
 If interrupted, re-invoke with the same arguments in the same worktree; it
@@ -182,9 +188,11 @@ After the report:
 - [ ] build, both suites, and any guide checkers and lab drivers the review's
       edits could have broken
 - [ ] a fix that reverses a recorded decision is recorded [Split: in the
-      Technical Design's Technical Decisions, and its Verification covers the
-      fix branch] [Unified: in the proposal's Decisions, and PR B's
-      Verification covers the fix branch]
+      Technical Design's Technical Decisions] [Unified: in the proposal's
+      Decisions]
+- [ ] whatever the fixes are, what ran on the fix branch and what was not
+      checked and why is recorded [Split: in the Technical Design's
+      Verification] [Unified: for PR B's Verification section]
 - [ ] commit (the repo's precedent is one fix commit, clusters in the body)
 - [ ] keep the report for step 5 and the PR B body
 - [ ] no production fixes at all: skip steps 5 and 6, put the review's outcome
@@ -216,8 +224,9 @@ Body checklist:
 - [ ] opens with "Stacked on #A. Base is `[feature-branch]`"
 - [ ] one section per defect cluster: what would have gone wrong, why the fix
       lands where it does, which test now pins it
-- [ ] Tests, Verification, Residuals carried forward, and a "read closely" note
-      for anything reconstructed or unverifiable
+- [ ] Tests, Verification (for Unified also what was not checked and why),
+      Residuals carried forward, and a "read closely" note for anything
+      reconstructed or unverifiable
 - [ ] names the guide file and the proposal's documents
 - [ ] no attribution footer
 

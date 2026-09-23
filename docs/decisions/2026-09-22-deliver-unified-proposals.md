@@ -19,8 +19,9 @@ file, two guides and two PRs.
 
 The second reason does not hold. The form records how much the technical side
 needs its own explanation, not how much the change needs a review trail.
-`2026-09-22-remove-quest-recommendations.md` is Unified because a removal has
-no design worth a separate document. It still deletes a service, a panel, a
+`2026-09-22-remove-quest-recommendations.md`, drafted on its own branch and not
+yet merged when this was written, is Unified because a removal has no design
+worth a separate document. It still deletes a service, a panel, a
 view model, a setting, seven strings in three languages, tests and comments in
 more than a dozen files, and it edits the refresh sequence that
 `feature-quest-chip-only-status-filter.spec.md` consolidated. That is the kind
@@ -53,7 +54,8 @@ section, and the rest can live in the plan file and the PR body.
   (D2).
 - Choosing which deep-review variant step 4 runs. The workflow keeps naming
   `/deep-review`.
-- Changing the code-guide, commit or release workflows.
+- Changing the code-guide, commit or release workflows, beyond teaching the
+  code-guide workflow, which step 2 invokes, to find a Unified proposal.
 
 ## Requirements
 
@@ -106,10 +108,12 @@ section, and the rest can live in the plan file and the PR body.
 ## Risks
 
 - The list of files a Unified delivery touches is written by the session that
-  implements it, not reviewed with the proposal beforehand, so a divergence has
-  nothing written to diverge from. Accepted: the Requirements are the reviewed
-  stopping condition, and the plan's list exists to make the work mechanical,
-  not to be approved.
+  implements it, not reviewed with the proposal beforehand, so a file it missed
+  is not a divergence from anything approved. Accepted: the Requirements are
+  the reviewed stopping condition, and the plan's list exists to make the work
+  mechanical, not to be approved. A correction to that list is carried to PR
+  A's body; only a Requirement or Decision that no longer holds goes to
+  Decisions.
 - The record of what was checked lives in a PR body instead of in the merged
   proposal. Accepted: that is where the practice puts it for the Unified form,
   and the PR body names the proposal, so the two are one search apart.
