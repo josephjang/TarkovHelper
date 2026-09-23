@@ -8,6 +8,12 @@
 > later change that reverses a decision here appends `Superseded by <doc>` below
 > this line, in the PR that reverses it.
 
+> Superseded in part by `2026-09-22-remove-quest-recommendations.md` (2026-09-22):
+> the recommendations panel is removed, so the quest recommendation service in
+> the list of status consumers and the recommendations panel named as the
+> precedent for the passive `TraderLoyaltyPanel` no longer exist. The panel
+> stays passive for its own reasons. Every other decision here stands.
+
 ## Summary
 
 Three ideas carry the design. First, loyalty flows through the shape every
