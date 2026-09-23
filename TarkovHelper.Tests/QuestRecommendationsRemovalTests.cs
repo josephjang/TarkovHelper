@@ -59,15 +59,14 @@ public sealed class QuestRecommendationsRemovalTests
         Assert.Null(property);
     }
 
-    /// <summary>R2 and D2: the setting is gone from the code; the stored row is left alone.</summary>
+    /// <summary>
+    /// R2: the setting's property is gone. Its key string is left to
+    /// <see cref="No_source_file_still_refers_to_the_panel"/>, which scans QuestListSettings.cs
+    /// with the rest of the source.
+    /// </summary>
     [Fact]
     public void The_expander_setting_is_gone()
-    {
-        Assert.Null(typeof(QuestListSettings).GetProperty("RecommendationsExpanded"));
-
-        var source = SourceGuards.Read("TarkovHelper", "Services", "Settings", "QuestListSettings.cs");
-        Assert.DoesNotContain("recommendationsExpanded", source, StringComparison.OrdinalIgnoreCase);
-    }
+        => Assert.Null(typeof(QuestListSettings).GetProperty("RecommendationsExpanded"));
 
     /// <summary>
     /// R1: the page's outer grid has one row per child and no more, so removing the panel's

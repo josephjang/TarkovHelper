@@ -21,9 +21,9 @@ namespace TarkovHelper.Pages;
 /// no reason to reach for the live per-quest overload and no way to read one by accident: this
 /// is the only file under Pages/ that names <c>GetStatus</c> at all, apart from the map page,
 /// and <c>RenderPassStatusGuardTests</c> keeps Pages/ that way rather than leaving it to review.
-/// The live overload stays for callers that are not rendering anything and are right to read
-/// the current state: the sync comparisons and the in-progress quest dialog
-/// (feature-kappa-collector-1-1.spec.md, Risks).
+/// The live overload stays for callers outside Pages/ that are not rendering from a pass and are
+/// right to read the current state (feature-kappa-collector-1-1.spec.md, Risks). They are not
+/// listed here: the guard does not look outside Pages/, so nothing would keep a list current.
 /// </para>
 /// <para>
 /// The Kappa readings (<see cref="KappaProgress"/>, <see cref="KappaQuests"/>) are here for the

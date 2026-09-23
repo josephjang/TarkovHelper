@@ -110,14 +110,16 @@ quest".
   the ones that cite it as the passive-panel precedent
   (`TraderLoyaltyPanel`), as a live-status caller (`RenderPass`), or as the
   screen area the debug toolbox obscured (`AppEnv`, `E2ETestHarness`).
-- R7: `README.md` and `README.ko.md` no longer list recommendations under the
-  Quests feature.
+- R7: No language variant of the root README (`README*.md`: today `README.md`,
+  `README.ko.md` and `README.ja.md`) lists recommendations under the Quests
+  feature.
 - R8: Each merged document whose recorded requirement or wording decision this
   change reverses carries a `Superseded in part by` note naming it:
   `feature-preserve-quest-filters-on-navigation.md` and its spec (R2 and the
   recommendation-click verification), `feature-quest-overview-filters.md` and
   its spec (R4's expander state, R6's recommendation-row tooltips),
-  `feature-quest-loyalty-gating.md` (R6's panel refresh),
+  `feature-quest-loyalty-gating.md` (R6's panel refresh) and its spec (the
+  status-consumer list and the passive-panel precedent),
   `feature-kappa-collector-1-1.md` and its spec (R7's Kappa priority text), and
   the archived `smart-quest-recommendations.md` (D3).
 - R9: A user database that still holds the old expander key opens and behaves

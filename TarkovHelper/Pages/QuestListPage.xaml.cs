@@ -459,9 +459,10 @@ namespace TarkovHelper.Pages
         /// those eight events itself and coalesces them (see <see cref="_settingsRefresh"/>).
         /// Runs the SAME sequence as the internal state-change handlers
         /// (<see cref="RefreshAllForStateChange"/>) rather than a shorter copy of it:
-        /// level and karma flip quests between LevelLocked and Active, which moves rows,
-        /// chip counts and the detail pane together, and a second copy of the
-        /// sequence is where a step goes missing on one path while the other still works.
+        /// completing a quest (from a log event or from the dialog's prerequisites) unlocks its
+        /// follow-up quests, which moves rows, chip counts and the detail pane together, and a
+        /// second copy of the sequence is where a step goes missing on one path while the other
+        /// still works.
         /// </summary>
         public void RefreshDisplay() => RefreshAllForStateChange();
 
