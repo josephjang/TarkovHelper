@@ -302,7 +302,6 @@ namespace TarkovHelper.Pages
             _isInitializing = false;
             _isDataLoaded = true;
             ApplyFilters();
-            UpdateRecommendations();
 
             // Process pending selection if any
             if (!string.IsNullOrEmpty(_pendingQuestSelection))
@@ -351,7 +350,6 @@ namespace TarkovHelper.Pages
             RefreshQuestStatuses();
             ApplyFilters();
             UpdateDetailPanel();
-            UpdateRecommendations();
         }
 
         private void OnProgressChanged(object? sender, EventArgs e)
@@ -374,7 +372,6 @@ namespace TarkovHelper.Pages
                 PopulateMapFilter();
                 ApplyFilters();
                 UpdateDetailPanel();
-                UpdateRecommendations();
             });
         }
 
@@ -462,10 +459,9 @@ namespace TarkovHelper.Pages
         /// those eight events itself and coalesces them (see <see cref="_settingsRefresh"/>).
         /// Runs the SAME sequence as the internal state-change handlers
         /// (<see cref="RefreshAllForStateChange"/>) rather than a shorter copy of it:
-        /// level and karma flip quests between LevelLocked and Active, and the
-        /// recommendations panel lists Active quests, so a sequence that skipped
-        /// UpdateRecommendations left that panel and its count badge stale after every
-        /// level edit.
+        /// level and karma flip quests between LevelLocked and Active, which moves rows,
+        /// chip counts and the detail pane together, and a second copy of the
+        /// sequence is where a step goes missing on one path while the other still works.
         /// </summary>
         public void RefreshDisplay() => RefreshAllForStateChange();
 
@@ -2156,22 +2152,6 @@ namespace TarkovHelper.Pages
                     e.Handled = true;
                 }
             }
-        }
-
-        #endregion
-
-        #region Quest Recommendations
-
-        private void UpdateRecommendations()
-        {
-            // Set up localization function for the recommendations panel
-            RecommendationsPanel.GetLocalizedNames = GetLocalizedNames;
-            RecommendationsPanel.UpdateRecommendations();
-        }
-
-        private void RecommendationsPanel_RecommendationClicked(object? sender, string questNormalizedName)
-        {
-            SelectQuestInternal(questNormalizedName);
         }
 
         #endregion

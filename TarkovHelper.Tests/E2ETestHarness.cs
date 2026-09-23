@@ -83,7 +83,7 @@ internal sealed class AppDriver : IDisposable
         psi.Environment["TARKOVHELPER_DISABLE_DB_UPDATE"] = "1";
         // Without this a Debug-build app opens the Topmost Debug Toolbox at the OS
         // cascade position (upper-left, drifting per launch), which steals focus on
-        // Show() and intermittently obscures the quest list / recommendations area.
+        // Show() and intermittently obscures the quest list and filter bar.
         // GetClickablePoint then throws on the obscured rows and synthetic clicks
         // land on the toolbox instead of the intended element.
         psi.Environment["TARKOVHELPER_DISABLE_DEBUG_TOOLBOX"] = "1";

@@ -178,21 +178,6 @@ namespace TarkovHelper.Pages
     }
 
     /// <summary>
-    /// Recommendation view model for display
-    /// </summary>
-    public class RecommendationViewModel
-    {
-        public QuestRecommendation Recommendation { get; set; } = null!;
-        public string QuestName { get; set; } = string.Empty;
-        public string Reason { get; set; } = string.Empty;
-        public string TypeText { get; set; } = string.Empty;
-        public Brush TypeBackground { get; set; } = Brushes.Gray;
-        public string TraderInitial { get; set; } = string.Empty;
-        public bool IsKappaRequired { get; set; }
-        public Visibility KappaBadgeVisibility => IsKappaRequired ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    /// <summary>
     /// Guide image view model with loading state
     /// </summary>
     public class GuideImageViewModel : System.ComponentModel.INotifyPropertyChanged

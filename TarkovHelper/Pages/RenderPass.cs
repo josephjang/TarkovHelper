@@ -22,8 +22,8 @@ namespace TarkovHelper.Pages;
 /// is the only file under Pages/ that names <c>GetStatus</c> at all, apart from the map page,
 /// and <c>RenderPassStatusGuardTests</c> keeps Pages/ that way rather than leaving it to review.
 /// The live overload stays for callers that are not rendering anything and are right to read
-/// the current state: the quest recommendation service, the sync comparisons, and the
-/// in-progress quest dialog (feature-kappa-collector-1-1.spec.md, Risks).
+/// the current state: the sync comparisons and the in-progress quest dialog
+/// (feature-kappa-collector-1-1.spec.md, Risks).
 /// </para>
 /// <para>
 /// The Kappa readings (<see cref="KappaProgress"/>, <see cref="KappaQuests"/>) are here for the
