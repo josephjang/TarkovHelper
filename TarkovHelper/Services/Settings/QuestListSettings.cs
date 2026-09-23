@@ -5,7 +5,7 @@ namespace TarkovHelper.Services.Settings;
 /// <summary>
 /// Quest-tab UI state persisted across app restarts (pattern: <see cref="MapSettings"/>):
 /// the filter bar (Kappa/Item-Req checkboxes, trader, map, status) and the detail-panel
-/// width. Search text is deliberately NOT persisted — it is a transient query, and
+/// width. Search text is deliberately NOT persisted: it is a transient query, and
 /// restoring it would surprise more than help (see feature-quest-overview-filters.md).
 ///
 /// First access must happen after UserDataDbService is initialized (the page touches

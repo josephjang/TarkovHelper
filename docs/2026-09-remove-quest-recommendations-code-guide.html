@@ -1137,9 +1137,9 @@
         it shows what the change deletes, what it keeps, and how the tests hold the result.
       </p>
       <p class="lede">
-        The decision is <code>docs/decisions/2026-09-22-remove-quest-recommendations.md</code>,
+        The decision is <code>2026-09-22-remove-quest-recommendations.md</code>,
         a Unified change proposal. The 1.1 data context is the subject of
-        <code>docs/2026-09-kappa-collector-1-1-code-guide.html</code> and the quest data
+        <code>2026-09-kappa-collector-1-1-code-guide.html</code> and the quest data
         refresh guides before it.
       </p>
 
@@ -1474,8 +1474,9 @@
         <p>
           The comment above <code>RefreshDisplay</code> used the panel as its reason. It said
           that a shorter copy once left the panel stale after a level edit. The rule stays, so
-          the comment now gives a reason that is still true. Level and karma move rows, chip
-          counts and the detail pane together, and a second copy is where one path loses a step.
+          the comment now gives a reason that is still true. A completed quest unlocks its
+          follow-up quests. That moves rows, chip counts and the detail pane together, and a
+          second copy is where one path loses a step.
         </p>
       </section>
 
@@ -1608,7 +1609,7 @@
             <tbody>
               <tr><td><code>The_recommendation_types_are_gone</code></td><td>R2, five types</td><td data-tone="bad">failed</td></tr>
               <tr><td><code>The_recommendation_strings_are_gone</code></td><td>R2, ten strings</td><td data-tone="bad">failed</td></tr>
-              <tr><td><code>The_expander_setting_is_gone</code></td><td>R2 and D2 in code</td><td data-tone="bad">failed</td></tr>
+              <tr><td><code>The_expander_setting_is_gone</code></td><td>R2, the setting property</td><td data-tone="bad">failed</td></tr>
               <tr><td><code>The_quest_page_grid_has_no_row_left_for_the_panel</code></td><td>R1, one row per child</td><td data-tone="bad">failed</td></tr>
               <tr><td><code>Each_refresh_path_keeps_its_remaining_steps_in_order</code></td><td>R3, three paths</td><td data-tone="good">passed</td></tr>
               <tr><td><code>RefreshDisplay_still_delegates_to_the_shared_sequence</code></td><td>R3 and the risk</td><td data-tone="good">passed</td></tr>
@@ -1675,10 +1676,10 @@
       <footer>
         <p>
           Sources. The decision is
-          <code>docs/decisions/2026-09-22-remove-quest-recommendations.md</code>, which this pull
+          <code>2026-09-22-remove-quest-recommendations.md</code>, which this pull
           request merges and corrects in D2. The panel was specified in
-          <code>docs/decisions/archive/2025-12/smart-quest-recommendations.md</code>. The 1.1
-          data context is in <code>docs/2026-09-kappa-collector-1-1-code-guide.html</code>.
+          <code>smart-quest-recommendations.md</code>. The 1.1
+          data context is in <code>2026-09-kappa-collector-1-1-code-guide.html</code>.
         </p>
         <p>
           The labs obey the same decision logic as the deleted code, but their pools are examples.
@@ -2072,7 +2073,7 @@
       "QuestListSettings no longer reads or writes the expander key, and no code deletes the stored row.",
       "The ten strings are gone in all three languages, including the three the plan found dead.",
       "The comments that cited the panel give reasons that are still true.",
-      "The READMEs and the eight superseded documents say the panel is gone.",
+      "The READMEs and the nine superseded documents say the panel is gone.",
       "D2 in the proposal no longer claims that the profile reset clears the row."
     ];
 
