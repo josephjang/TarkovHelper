@@ -12,6 +12,12 @@ Product Requirements: [feature-kappa-collector-1-1.md](feature-kappa-collector-1
 > A later change that reverses a decision here appends `Superseded by <doc>`
 > below this line, in the PR that reverses it.
 
+> Superseded in part by `2026-09-22-remove-quest-recommendations.md` (2026-09-22):
+> the recommendations panel is removed, so the wording inventory's recommendation
+> entries (the recommendation badge, `KappaPriority` and `GetKappaReason`) and the
+> quest recommendation service in the list of live status readers no longer exist.
+> Every other decision here stands.
+
 ## Summary
 
 Three small pieces, all in the app. First, the Kappa count becomes one

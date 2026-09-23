@@ -13,6 +13,12 @@
 > the `TxtStats` step of the data flow no longer hold; the chips own the status
 > state directly. Everything else here stands.
 
+> Superseded in part by `2026-09-22-remove-quest-recommendations.md` (2026-09-22):
+> the recommendations panel is removed: the `questList.recommendationsExpanded`
+> key, the `QuestRecommendationsPanel` tooltips and the note on the panel
+> restoring its expander in its own Loaded no longer hold. Every other decision
+> here stands.
+
 ## Summary
 
 A new `QuestListSettings` service (the `MapSettings` pattern over

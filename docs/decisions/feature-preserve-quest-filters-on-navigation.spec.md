@@ -8,6 +8,11 @@
 > later change that reverses a decision here appends `Superseded by <doc>` below
 > this line, in the PR that reverses it.
 
+> Superseded in part by `2026-09-22-remove-quest-recommendations.md` (2026-09-22):
+> the recommendations panel is removed, so `RecommendationsPanel_RecommendationClicked`
+> is no longer a navigation entry point, and the E2E check (5), clicking a
+> recommendation, is deleted with it. Every other decision here stands.
+
 ## Summary
 
 `QuestListPage.SelectQuestInternal` stops resetting filters. It rests on two ideas:
