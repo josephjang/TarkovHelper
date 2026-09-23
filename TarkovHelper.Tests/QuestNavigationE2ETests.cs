@@ -5,8 +5,8 @@ namespace TarkovHelper.Tests;
 /// <summary>
 /// End-to-end coverage for preserve-quest-filters-on-navigation (see
 /// feature-preserve-quest-filters-on-navigation.spec.md): navigating to a quest,
-/// via a prerequisite link, a recommendation, or a quest link on the Items/Collector
-/// tabs, must never change the quest-list filters. When the target is hidden by the
+/// via a prerequisite link or a quest link on the Items/Collector tabs, must never
+/// change the quest-list filters. When the target is hidden by the
 /// current filters, only the detail panel switches, the list selection clears, and
 /// a notice offers the explicit "show in list" reset.
 ///
@@ -186,61 +186,6 @@ public sealed class QuestNavigationE2ETests : E2ETestBase
             $"quest detail to show '{clicked}'");
         app.WaitForElementVisibility("BtnShowInList", visible: true);
         Assert.False(app.ListHasSelection("LstQuests"));
-    }
-
-    [E2EFact]
-    public void Recommendation_click_preserves_filters_when_target_is_filtered_out()
-    {
-        var questNames = E2EQuestData.AllQuestNames();
-        using var app = LaunchMaximized();
-
-        app.SelectTab("TabQuests", "LstQuests");
-        app.WaitForElementVisibility("RecommendationsExpander", visible: true, timeoutSeconds: 60);
-        app.ExpandElement("RecommendationsExpander");
-
-        // Pick a recommendation row's quest-name text that is actually on screen:
-        // an expanded panel can have more rows than fit the window, and off-screen
-        // rows expose no clickable point.
-        System.Windows.Automation.AutomationElement? target = null;
-        string? recommended = null;
-        WaitUntil(() =>
-        {
-            foreach (var element in app.TryGetTextElements("RecommendationsList"))
-            {
-                var name = element.Current.Name;
-                if (!questNames.Contains(name)) continue;
-                try
-                {
-                    element.GetClickablePoint();
-                }
-                catch (System.Windows.Automation.NoClickablePointException)
-                {
-                    continue;
-                }
-                target = element;
-                recommended = name;
-                return true;
-            }
-            return false;
-        }, "a clickable recommendation row naming a known quest");
-
-        // Make the list show nothing, so the recommended quest is filtered out. The
-        // search is debounced, so wait for the zero-result state (its Reset button is
-        // the probe) before clicking: a click that beats the debounce would take
-        // SelectQuestInternal's *visible* branch against the still-unfiltered list, and
-        // the assertions below would still pass once the tick landed, silently
-        // exercising the opposite path from the one this test names.
-        const string noMatchSearch = "e2e-no-such-quest";
-        app.SetTextBoxValue("TxtSearch", noMatchSearch);
-        app.WaitForElementVisibility("BtnResetFilters", visible: true);
-
-        app.ClickElement(target!);
-
-        WaitUntil(() => app.GetElementText("TxtDetailName") == recommended,
-            $"quest detail to show '{recommended}'");
-        Assert.Equal(noMatchSearch, app.GetTextBoxValue("TxtSearch"));
-        WaitForSelectedStatusChip(app, "Active");
-        app.WaitForElementVisibility("BtnShowInList", visible: true);
     }
 
     /// <summary>

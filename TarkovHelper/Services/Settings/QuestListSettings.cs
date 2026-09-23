@@ -4,10 +4,9 @@ namespace TarkovHelper.Services.Settings;
 
 /// <summary>
 /// Quest-tab UI state persisted across app restarts (pattern: <see cref="MapSettings"/>):
-/// the filter bar (Kappa/Item-Req checkboxes, trader, map, status), the detail-panel
-/// width, and the recommendations-expander state. Search text is deliberately NOT
-/// persisted — it is a transient query, and restoring it would surprise more than help
-/// (see feature-quest-overview-filters.md).
+/// the filter bar (Kappa/Item-Req checkboxes, trader, map, status) and the detail-panel
+/// width. Search text is deliberately NOT persisted — it is a transient query, and
+/// restoring it would surprise more than help (see feature-quest-overview-filters.md).
 ///
 /// First access must happen after UserDataDbService is initialized (the page touches
 /// this from Loaded, never from a constructor — see the init-order note on
@@ -30,7 +29,6 @@ public class QuestListSettings
     private const string KeyMap = "questList.map";
     private const string KeyStatusTag = "questList.statusTag";
     private const string KeyDetailPanelWidth = "questList.detailPanelWidth";
-    private const string KeyRecommendationsExpanded = "questList.recommendationsExpanded";
 
     #endregion
 
@@ -54,7 +52,6 @@ public class QuestListSettings
     private string? _map;
     private string? _statusTag;
     private double? _detailPanelWidth;
-    private bool? _recommendationsExpanded;
 
     #endregion
 
@@ -178,24 +175,6 @@ public class QuestListSettings
         }
     }
 
-    public bool RecommendationsExpanded
-    {
-        get
-        {
-            EnsureLoaded();
-            return _recommendationsExpanded ?? false;
-        }
-        set
-        {
-            EnsureLoaded();
-            if (_recommendationsExpanded != value)
-            {
-                _recommendationsExpanded = value;
-                SaveSetting(KeyRecommendationsExpanded, value.ToString());
-            }
-        }
-    }
-
     /// <summary>
     /// Persists the whole filter-bar snapshot in ONE connection/transaction (the
     /// <see cref="UserDataDbService.SetSettings"/> batch path <c>MapSettings.SaveLastView</c>
@@ -288,9 +267,6 @@ public class QuestListSettings
 
             if (SettingsValue.TryParseDouble(_userDataDb.GetSetting(KeyDetailPanelWidth), out var width))
                 _detailPanelWidth = Math.Clamp(width, MinDetailPanelWidth, MaxDetailPanelWidth);
-
-            if (bool.TryParse(_userDataDb.GetSetting(KeyRecommendationsExpanded), out var recommendationsExpanded))
-                _recommendationsExpanded = recommendationsExpanded;
 
             _settingsLoaded = true;
         }

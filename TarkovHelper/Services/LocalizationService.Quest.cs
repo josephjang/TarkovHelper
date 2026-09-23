@@ -4,7 +4,7 @@ namespace TarkovHelper.Services;
 
 /// <summary>
 /// Quest-related localization strings for LocalizationService.
-/// Includes: In-Progress Quest Input, Quest Recommendations, etc.
+/// Includes: In-Progress Quest Input, the Quest List Page, the quest detail sections, etc.
 /// </summary>
 public partial class LocalizationService
 {
@@ -192,80 +192,6 @@ public partial class LocalizationService
         AppLanguage.KO => "필터 초기화",
         AppLanguage.JA => "フィルターをリセット",
         _ => "Reset Filters"
-    };
-
-    #endregion
-
-    #region Quest Recommendations
-
-    public string RecommendedQuests => CurrentLanguage switch
-    {
-        AppLanguage.KO => "추천 퀘스트",
-        AppLanguage.JA => "おすすめクエスト",
-        _ => "Recommended Quests"
-    };
-
-    public string ReadyToComplete => CurrentLanguage switch
-    {
-        AppLanguage.KO => "지금 완료 가능",
-        AppLanguage.JA => "今すぐ完了可能",
-        _ => "Ready to Complete"
-    };
-
-    public string ItemHandInOnly => CurrentLanguage switch
-    {
-        AppLanguage.KO => "아이템 제출만",
-        AppLanguage.JA => "アイテム提出のみ",
-        _ => "Item Hand-in Only"
-    };
-
-    public string KappaPriority => CurrentLanguage switch
-    {
-        AppLanguage.KO => "카파 필수",
-        AppLanguage.JA => "Kappa必須",
-        _ => "Kappa Priority"
-    };
-
-    public string UnlocksMany => CurrentLanguage switch
-    {
-        AppLanguage.KO => "다수 해금",
-        AppLanguage.JA => "複数解放",
-        _ => "Unlocks Many"
-    };
-
-    public string EasyQuest => CurrentLanguage switch
-    {
-        AppLanguage.KO => "쉬운 퀘스트",
-        AppLanguage.JA => "簡単なクエスト",
-        _ => "Easy Quest"
-    };
-
-    public string NoRecommendations => CurrentLanguage switch
-    {
-        AppLanguage.KO => "현재 추천 퀘스트가 없습니다",
-        AppLanguage.JA => "現在おすすめクエストはありません",
-        _ => "No recommendations at this time"
-    };
-
-    public string ItemsOwned => CurrentLanguage switch
-    {
-        AppLanguage.KO => "보유",
-        AppLanguage.JA => "所持",
-        _ => "owned"
-    };
-
-    public string ItemsNeeded => CurrentLanguage switch
-    {
-        AppLanguage.KO => "필요",
-        AppLanguage.JA => "必要",
-        _ => "needed"
-    };
-
-    public string UnlocksQuests => CurrentLanguage switch
-    {
-        AppLanguage.KO => "개 퀘스트 해금",
-        AppLanguage.JA => "クエスト解放",
-        _ => "quest(s) unlock"
     };
 
     #endregion
@@ -530,7 +456,7 @@ public partial class LocalizationService
     // the thirteen flagged quests are different sets, and the old literal "Prerequisites:
     // (x/13 completed)" sent a player who had done all twelve looking for the one they missed
     // (feature-kappa-collector-1-1.md, R4 and PD2). "Kappa" renders as "카파" in KO and stays
-    // "Kappa" in JA, as the recommendation reason already does.
+    // "Kappa" in JA.
 
     public string KappaProgressHeading => CurrentLanguage switch
     {

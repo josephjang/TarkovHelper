@@ -11,10 +11,10 @@ namespace TarkovHelper.Pages.Components;
 /// data gates on, each a trader label plus one button per level, in the shape the DSP control
 /// already uses.
 /// <para>
-/// A PASSIVE panel, the way <see cref="QuestRecommendationsPanel"/> is: it subscribes to no
-/// service and owns no lifecycle. MainWindow keeps the three subscriptions that drive it
-/// (<c>SettingsService.TraderLoyaltyChanged</c>, <c>SettingsService.ProfileSettingsReloaded</c>
-/// and <c>QuestDbService.DataRefreshed</c>) together with the matching detaches
+/// A PASSIVE panel: it subscribes to no service and owns no lifecycle. MainWindow keeps the
+/// three subscriptions that drive it (<c>SettingsService.TraderLoyaltyChanged</c>,
+/// <c>SettingsService.ProfileSettingsReloaded</c> and <c>QuestDbService.DataRefreshed</c>)
+/// together with the matching detaches
 /// <c>MainWindowTeardownTests</c> reads out of MainWindow.xaml.cs, and calls
 /// <see cref="Rebuild"/> and <see cref="Repaint"/> from its own handlers. Nothing here reaches
 /// back into the window: the parent's "these controls are being written, not clicked" guard

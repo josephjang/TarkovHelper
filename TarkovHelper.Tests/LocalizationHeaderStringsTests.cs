@@ -193,30 +193,15 @@ public class LocalizationHeaderStringsTests
     }
 
     /// <summary>
-    /// The Kappa wording 1.1 left true, pinned byte for byte so a broader "Kappa" rewording
-    /// cannot ride in beside the two texts this phase does change: the container is still
-    /// Collector's reward, so the recommendation priority keeps its text (R7, PD4).
-    /// </summary>
-    [Theory]
-    [InlineData(AppLanguage.EN, "Kappa Priority")]
-    [InlineData(AppLanguage.KO, "카파 필수")]
-    [InlineData(AppLanguage.JA, "Kappa必須")]
-    public void The_Kappa_priority_recommendation_keeps_its_text(AppLanguage language, string expected)
-        => Assert.Equal(expected, TestLocalization.WithLanguage(language).KappaPriority);
-
-    /// <summary>
-    /// The other R7 texts live in markup and in the recommendation service rather than on the
-    /// localization service, so they are pinned where they are written: the badge tooltip on
-    /// both surfaces that show it, the Kappa filter's label, and the recommendation reason.
+    /// The Kappa wording 1.1 left true (R7, PD4), pinned byte for byte so a broader "Kappa"
+    /// rewording cannot ride in beside the texts that phase did change. Both live in markup
+    /// rather than on the localization service, so they are pinned where they are written:
+    /// the quest row's badge tooltip and the Kappa filter's label.
     /// </summary>
     [Theory]
     [InlineData("Pages/QuestListPage.xaml", "ToolTip=\"Required for Kappa Container\"")]
-    [InlineData("Pages/Components/QuestRecommendationsPanel.xaml", "ToolTip=\"Required for Kappa Container\"")]
     [InlineData("Pages/QuestListPage.xaml", "x:Name=\"ChkKappaOnly\" Content=\"Kappa\"")]
-    [InlineData("Services/QuestRecommendationService.cs", "\"Kappa required + unlocks {unlocksCount} quest(s)\"")]
-    [InlineData("Services/QuestRecommendationService.cs", "\"카파 필수 + {unlocksCount}개 퀘스트 해금\"")]
-    [InlineData("Services/QuestRecommendationService.cs", "\"Kappa必須 + {unlocksCount}クエスト解放\"")]
-    public void The_Kappa_badge_filter_and_reason_keep_their_text(string relativePath, string literal)
+    public void The_Kappa_badge_and_filter_keep_their_text(string relativePath, string literal)
     {
         var source = File.ReadAllText(Path.Combine(TestRepo.Root(), "TarkovHelper", relativePath));
 

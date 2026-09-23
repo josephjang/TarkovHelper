@@ -8,7 +8,8 @@ namespace TarkovHelper.Tests;
 /// feature-quest-chip-only-status-filter successor: the status chips as the sole
 /// status filter (with the All chip and toggle-to-All), the zero-results empty state
 /// with its reset button, and quest-tab filter persistence across an app relaunch
-/// against the same Config dir.
+/// against the same Config dir, including a user database that still holds a row for
+/// a setting this build no longer has.
 ///
 /// Status-filter state is read through the chips' UIA ItemStatus
 /// (QuestStatusTags.ChipSelected/ChipUnselected, published by UpdateStatusChips) via
@@ -204,5 +205,41 @@ public sealed class QuestOverviewFiltersE2ETests : E2ETestBase
 
             app.CloseAndWaitForExit();
         }
+    }
+
+    /// <summary>
+    /// A user database from a build that still had the recommendations panel holds its
+    /// expander row. That row must read as nothing (2026-09-22-remove-quest-recommendations.md,
+    /// R9): the Quests tab loads with no expander on it (R1), the settings beside the row still
+    /// restore, and the row itself is left where it is rather than cleaned up (D2).
+    /// <para>
+    /// The expander id is named here on purpose, which is why QuestRecommendationsRemovalTests
+    /// exempts this file from its no-mention scan: a build that still had the panel shows it,
+    /// expanded, as soon as the tab has loaded and the restored chip is published.
+    /// </para>
+    /// </summary>
+    [E2EFact]
+    public void A_stored_recommendations_expander_row_is_inert()
+    {
+        const string oldExpanderKey = "questList.recommendationsExpanded";
+        var configDir = NewConfigDir();
+        E2EDb.CreateUserDataDb(configDir);
+        E2EDb.SeedSetting(configDir, oldExpanderKey, "True");
+        E2EDb.SeedSetting(configDir, "questList.statusTag", "Done");
+
+        using (var app = LaunchMaximized(configDir))
+        {
+            app.SelectTab("TabQuests", "LstQuests");
+
+            // The page's Loaded restored the filters and ran its refresh sequence, so
+            // anything that sequence still shows is on screen by now.
+            WaitForSelectedStatusChip(app, "Done");
+            Assert.False(app.IsElementVisible("RecommendationsExpander"),
+                "the Quests tab should have no recommendations expander");
+
+            app.CloseAndWaitForExit();
+        }
+
+        Assert.Equal("True", E2EDb.ReadSetting(configDir, oldExpanderKey));
     }
 }
