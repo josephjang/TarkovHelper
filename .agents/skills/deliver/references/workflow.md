@@ -33,7 +33,7 @@ because something cost time there. Unified support is recorded in
    | Implementation checklist | **Files touched** (the list that ends Design) | **Requirements**, plus the file list the plan derives from the code |
    | Slice order | the **Design** order | the plan's own order, chosen so each slice builds and tests green |
    | Planned checks and commands | **Test Strategy** | the plan's "Files touched and test strategy" section, derived while planning |
-   | Divergence from the proposal | **Technical Decisions** | **Decisions**, as a reversed or added decision |
+   | Divergence from the proposal | **Technical Decisions** | **Decisions**, as a reversed or added decision, only for a divergence from a Requirement or a Decision; a correction to the plan's own file list stays in the plan |
    | Checks that actually ran | **Verification** | **Verification** in PR A's body (PR B's for the fix branch) |
    | Facts already verified | **Context** | **Problem** |
 
@@ -65,6 +65,10 @@ Do not ask for approval between steps once the plan is written. Phase
 boundaries are checkpoints, not handoffs. Stop only for a genuine blocker:
 a design problem that invalidates the plan, an ambiguity the docs cannot
 settle, or a failing test that exposes a flaw the plan did not anticipate.
+A Unified proposal that turns out to need a Technical Design is such a
+blocker: stop, split it as root `CLAUDE.md` describes and have the new design
+approved, then rewrite the plan from the template's Split alternatives and
+resume with the Split roles from step 0. Never switch forms silently mid-run.
 
 ## 1. Implementation
 
@@ -104,10 +108,13 @@ Ripple discipline, which is where the real cost hides:
 - self-review of the whole diff against the global checklist, reading each
   edited function whole rather than each hunk
 - the checklist from step 0 matches the diff: for Split, the Technical
-  Design's Files touched; for Unified, every Requirement holds and the plan's
-  file list matches. Any divergence is **recorded in this PR** (the Technical
-  Design's Technical Decisions, or the Unified proposal's Decisions), never
-  left silent
+  Design's Files touched; for Unified, every Requirement holds. A divergence
+  from what was approved is **recorded in this PR** (the Technical Design's
+  Technical Decisions, or, for a Unified proposal, its Decisions when a
+  Requirement or a Decision no longer holds as written), never left silent.
+  The Unified plan's file list was never reviewed, so a file it missed is
+  corrected in the plan and carried to PR A's **What changed**, not written
+  into the proposal
 - the checks from the planned test strategy that ran against this branch, what
   was observed, and what was not checked and why, are written down: in the
   Technical Design's Verification for Split, in the plan (to become PR A's
@@ -184,6 +191,13 @@ hour, and expect it to be the most expensive step here by a wide margin, in
 tokens as much as in wall clock: start it when you can leave it running. Answer
 its steering questions as they come.
 
+For a Unified proposal, the planned files and checks exist only in the
+gitignored plan file, which the review worktree does not have. Give them to the
+review: paste the plan's "Files touched and test strategy" section and PR A's
+Verification into the fresh session with the command, so it reviews against the
+planned scope and the checks that did not run, as a Split review does from the
+Technical Design on the branch.
+
 After the report:
 
 - read every Fixed, Refuted and Needs-your-decision item
@@ -192,10 +206,11 @@ After the report:
 - re-run build, both suites, and any guide checkers and lab drivers, since the
   review may have edited the guides
 - a fix that reverses a recorded decision is recorded in the same PR, in the
-  Technical Design's Technical Decisions or the Unified proposal's Decisions,
-  and the record of what ran is brought up to date for the fix branch (the
-  Technical Design's Verification, or PR B's Verification section for Unified):
+  Technical Design's Technical Decisions or the Unified proposal's Decisions:
   PR B is part of the same change, so the proposal is still open to it
+- whatever the fixes are, the record of what ran is brought up to date for the
+  fix branch, including what was not checked and why (the Technical Design's
+  Verification, or PR B's Verification section for Unified)
 - commit. The repo's precedent (PRs #57 and #51) is **one fix commit** plus the
   guide commit, with the clusters enumerated in the body. Splitting an
   interdependent refactor into per-cluster commits that do not build is worse
@@ -237,7 +252,9 @@ so the diff is only the fixes. Body shape (the repo's model is PR #57):
 - opens with "Stacked on #A. Base is `<feature-branch>`"
 - one section per defect cluster: what would have gone wrong, why the fix lands
   where it does, which test now pins it
-- Tests, Verification, Residuals carried forward
+- Tests, Verification, Residuals carried forward. For a Unified proposal,
+  Verification is the fix branch's record of what ran, and says what was not
+  checked and why, as PR A's does
 - a **read closely** note for anything reconstructed, judgement-called, or
   unverifiable
 - names the guide file and the proposal's documents

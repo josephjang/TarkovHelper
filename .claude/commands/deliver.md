@@ -14,5 +14,6 @@ Unified proposal's). If it is empty, ask which
 proposal this run implements before writing the plan file.
 
 The workflow makes no product decisions. If the proposal does not exist, or does
-not answer a question the implementation needs, stop and say so: that is a
-blocker for `/design-product-spec`, not a gap to fill by guessing.
+not answer a question the implementation needs, stop and say so: the answer
+belongs in the proposal, written from the matching template in
+`docs/decisions/templates/` and approved, not filled in by guessing here.

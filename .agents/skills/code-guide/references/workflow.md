@@ -16,8 +16,9 @@ The series so far is indexed in `docs/README.md`. These three set the format:
 1. Identify the change set: the PR number or branch the user names (default:
    the current branch's open PR). Gather the full diff
    (`git diff main...<branch>` or `gh pr diff <N>`), the change proposal it
-   implements (`docs/decisions/<date>-<slug>.requirements.md` and `.design.md`,
-   or an older `<name>.md` and `.spec.md` pair), and any assessment findings it
+   implements (a Split `docs/decisions/<date>-<slug>.requirements.md` and
+   `.design.md` pair, a Unified `docs/decisions/<date>-<slug>.md`, or an older
+   `<name>.md` and `.spec.md` pair), and any assessment findings it
    resolves (`docs/assessments/`).
 2. Extract, in writing, before designing the page:
    - the whole change in one sentence;
@@ -25,8 +26,8 @@ The series so far is indexed in `docs/README.md`. These three set the format:
      design third (the reader must be able to judge the design before seeing
      it);
    - the invariants and boundary decisions (the "not after" comparisons, the
-     null policies, the capture moments), plus what the Product Requirements
-     rejected and why;
+     null policies, the capture moments), plus what the proposal rejected and
+     why (the Product Requirements, or a Unified proposal's Decisions);
    - which C# tests pin each behaviour, by name.
 3. Pick 2 to 4 lab candidates. A good lab is decision logic reimplementable in
    a small amount of vanilla JS with visible consequences: a resolver, a race,
@@ -135,7 +136,8 @@ which format point you bent.
   lab text should point at the boundary case (put it within reach of the
   controls, e.g. a slider step that lands exactly on an event).
 - Do not overstate: where the design accepts a hole (DST fold, clock skew),
-  the guide says so in the same terms the Technical Design does.
+  the guide says so in the same terms the proposal does (the Technical Design,
+  or a Unified proposal's Decisions and Risks).
 
 ## 5. Verify before committing
 
