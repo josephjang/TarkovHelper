@@ -142,9 +142,17 @@ quest".
   user databases.** Deleting it on the next settings load was considered and
   rejected: the settings table is a key-value store that tolerates unknown keys,
   one-shot cleanup code for an inert row would outlive its purpose in every
-  build after the first, and the complete profile reset already clears it. The
-  row costs nothing and reads as nothing. Revisit if a settings-key audit or
-  migration step ever exists; the key would join that list.
+  build after the first. The row costs nothing and reads as nothing. Revisit if
+  a settings-key audit or migration step ever exists; the key would join that
+  list.
+
+  Corrected during implementation: this decision first also said the complete
+  profile reset already clears the row. It does not. `QuestListSettings` keeps
+  its keys in the app-wide `UserSettings` table, and
+  `UserDataDbService.ResetProfileAsync` deletes only the profile's
+  `ProfileSettings` rows, so the row survives a reset like every other
+  `questList.*` key. The decision stands on the two reasons above; the reset
+  was never needed for it.
 
 - **D3: The archived PRD gets the supersede note too.** `archive/` is frozen in
   format and location, and a blockquote under the title changes neither. The
