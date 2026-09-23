@@ -1,0 +1,2187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Remove Quest Recommendations - Code Guide</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Ground and structure, inherited from the earlier guides so the
+         interactive docs read as one set. */
+      --page: #101010;
+      --surface: #181818;
+      --surface-2: #222222;
+      --surface-3: #2d2d2d;
+      --line: #3d3d3d;
+      --line-soft: #2a2a2a;
+      --text: #e0e0e0;
+      --muted: #9e9e9e;
+      --dim: #737373;
+
+      /* Accent: the app's own AccentBrush. */
+      --gold: #c5a84a;
+      --gold-hover: #d4b85a;
+      --gold-ink: #19170f;
+
+      /* Profile hues. These are a LAW, not decoration: the same profile is the same
+         colour in every table, lane and timeline on this page. Nothing on this page is
+         a profile, so it spends none of them. */
+      --pvp: #5ea9e8;
+      --pve: #4caf50;
+      --season: #ff9800;
+
+      /* Reserved for data in the wrong place. */
+      --wrong: #ef5350;
+      --right: #4caf50;
+
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+
+      --body: "Segoe UI", "Noto Sans", system-ui, sans-serif;
+      --mono: Consolas, "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 14% -12%, rgba(197, 168, 74, .12), transparent 36rem),
+        var(--page);
+      color: var(--text);
+      font-family: var(--body);
+      line-height: 1.55;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    }
+
+    button, input, select { font: inherit; }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* ---------- shell ---------- */
+
+    .shell {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      gap: 44px;
+      width: min(1320px, calc(100% - 44px));
+      margin: 0 auto;
+      padding: 56px 0 96px;
+      align-items: start;
+    }
+
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .rail { position: static; margin-bottom: 40px; }
+    }
+
+    .rail {
+      position: sticky;
+      top: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 18px 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: rgba(24, 24, 24, .84);
+      backdrop-filter: blur(10px);
+    }
+
+    .rail-title {
+      margin: 0 0 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .rail a {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 13.5px;
+      text-decoration: none;
+      transition: background .15s, color .15s;
+    }
+
+    .rail a:hover { background: var(--surface-2); color: var(--text); }
+    .rail a .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+    .rail a.is-lab { color: var(--gold); }
+    .rail a.is-lab .n { color: var(--gold); }
+
+    .rail-gate {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line-soft);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    .rail-gate strong { display: block; color: var(--text); font-size: 13px; }
+
+    .gate-meter {
+      height: 5px;
+      margin-top: 8px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .gate-meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--gold);
+      transition: width .3s ease;
+    }
+
+    /* ---------- type ---------- */
+
+    main { max-width: 100%; }
+
+    .eyebrow {
+      margin: 0;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    h1 {
+      max-width: 18ch;
+      margin: 12px 0 18px;
+      font-size: clamp(38px, 5.6vw, 70px);
+      font-weight: 800;
+      line-height: 1.0;
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+
+    .lede {
+      max-width: 62ch;
+      margin: 0 0 14px;
+      font-size: 19px;
+      color: #c2c2c2;
+    }
+
+    h2 {
+      margin: 0 0 6px;
+      font-size: clamp(24px, 3vw, 33px);
+      font-weight: 800;
+      letter-spacing: -.03em;
+      line-height: 1.12;
+      text-wrap: balance;
+    }
+
+    h3 {
+      margin: 30px 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    p, li { max-width: 68ch; }
+    p { margin: 0 0 14px; }
+    ul, ol { margin: 0 0 14px; padding-left: 22px; }
+    li { margin-bottom: 7px; }
+
+    strong { color: #f0f0f0; }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: #ddc98a;
+      font-family: var(--mono);
+      font-size: .88em;
+    }
+
+    a { color: var(--gold); }
+
+    section { margin-bottom: 68px; scroll-margin-top: 24px; }
+
+    .chapter-head {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 16px;
+      align-items: baseline;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .chapter-num {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      color: var(--gold);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kicker {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 62ch;
+    }
+
+    /* ---------- callouts ---------- */
+
+    .note {
+      margin: 22px 0;
+      padding: 16px 18px;
+      border-left: 3px solid var(--gold);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: linear-gradient(100deg, rgba(197, 168, 74, .1), rgba(197, 168, 74, .02));
+    }
+
+    .note p:last-child { margin-bottom: 0; }
+
+    .note-label {
+      margin: 0 0 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .note.is-wrong { border-left-color: var(--wrong); background: linear-gradient(100deg, rgba(239, 83, 80, .1), transparent); }
+    .note.is-wrong .note-label { color: var(--wrong); }
+
+    /* ---------- code and logs ---------- */
+
+    .code {
+      margin: 18px 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #141414;
+      overflow: hidden;
+    }
+
+    .code-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .code pre {
+      margin: 0;
+      padding: 14px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.62;
+      tab-size: 2;
+    }
+
+    .code .del { display: block; background: rgba(239, 83, 80, .12); color: #f0b3b1; }
+    .code .add { display: block; background: rgba(76, 175, 80, .12); color: #b3e0b5; }
+    .code .cmt { color: var(--dim); }
+
+    /* ---------- labs ---------- */
+
+    .lab {
+      margin: 34px 0 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .lab-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      align-items: baseline;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line-soft);
+      background: linear-gradient(180deg, rgba(197, 168, 74, .07), transparent);
+    }
+
+    .lab-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .lab-head h3 { margin: 0; font-size: 19px; }
+    .lab-head .sub { width: 100%; margin: 2px 0 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
+
+    .lab-body { padding: 20px; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    .ctl-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .seg {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      background: var(--surface-2);
+      gap: 3px;
+    }
+
+    .seg button {
+      padding: 6px 14px;
+      border: 0;
+      border-radius: 99px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+
+    .seg button:hover { color: var(--text); }
+    .seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); }
+    .seg button[aria-pressed="true"][data-tone="bad"] { background: rgba(239, 83, 80, .2); color: var(--wrong); }
+    .seg button[aria-pressed="true"][data-tone="good"] { background: rgba(76, 175, 80, .2); color: var(--right); }
+
+    .btn {
+      padding: 8px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+
+    .btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--gold); }
+    .btn:disabled { opacity: .42; cursor: not-allowed; }
+    .btn.is-primary { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+    .btn.is-primary:hover:not(:disabled) { background: var(--gold-hover); }
+
+    .slider-wrap { display: flex; align-items: center; gap: 10px; }
+    .slider-wrap input[type="range"] { width: 210px; accent-color: var(--gold); }
+    .slider-read { font-family: var(--mono); font-size: 13px; color: var(--text); min-width: 15ch; }
+
+    .verdict {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: var(--surface-2);
+      font-size: 14.5px;
+    }
+
+    .verdict[data-tone="bad"] { border-color: rgba(239, 83, 80, .5); background: rgba(239, 83, 80, .08); }
+    .verdict[data-tone="good"] { border-color: rgba(76, 175, 80, .45); background: rgba(76, 175, 80, .07); }
+    .verdict b { display: block; margin-bottom: 3px; }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-top: 6px;
+    }
+
+    .stat {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .stat .k {
+      margin: 0 0 4px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .stat .v {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .v[data-tone="bad"] { color: var(--wrong); }
+    .v[data-tone="good"] { color: var(--right); }
+    .v[data-tone="season"] { color: var(--season); }
+    .v[data-tone="pve"] { color: var(--pve); }
+    .v[data-tone="pvp"] { color: var(--pvp); }
+
+    /* ---------- step chips, shared by labs A, B and D ---------- */
+
+    .lanes { display: grid; gap: 12px; }
+
+    .lane {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .lane[data-profile="pvp"] { border-left: 3px solid var(--pvp); }
+    .lane[data-profile="pve"] { border-left: 3px solid var(--pve); }
+    .lane[data-profile="season"] { border-left: 3px solid var(--season); }
+
+    .lane-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 12px;
+      align-items: baseline;
+      margin-bottom: 8px;
+      font-size: 13.5px;
+      font-weight: 700;
+    }
+
+    .lane-head .rev { font-family: var(--mono); font-size: 12px; color: var(--dim); font-weight: 600; }
+
+    .steps { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .step {
+      padding: 4px 9px;
+      border: 1px solid var(--line-soft);
+      border-radius: 99px;
+      background: #141414;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--dim);
+    }
+
+    .step.is-done { color: var(--text); border-color: var(--line); }
+    .step.is-now { color: var(--gold-ink); background: var(--gold); border-color: var(--gold); font-weight: 700; }
+    .step.is-kill { color: var(--wrong); border-color: rgba(239, 83, 80, .55); }
+    .step.is-win { color: var(--right); border-color: rgba(76, 175, 80, .55); }
+
+    /* ---------- labs C and D: the document rows ---------- */
+
+    .reads { border: 1px solid var(--line-soft); border-radius: var(--radius-sm); overflow: hidden; }
+
+    .read-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) 92px minmax(0, 1.9fr);
+      gap: 10px;
+      align-items: center;
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      background: var(--surface-2);
+    }
+
+    .read-row:last-child { border-bottom: 0; }
+    .read-row .rk { color: var(--text); overflow-wrap: anywhere; }
+    .read-row .rv { font-weight: 700; text-align: right; overflow-wrap: anywhere; }
+    .read-row .ro { font-size: 11.5px; color: var(--muted); font-family: var(--body); }
+    .read-row.is-dropped { opacity: .45; }
+    .read-row.is-dropped .rv { text-decoration: line-through; }
+    .read-row.is-boundary { box-shadow: inset 0 -2px 0 var(--wrong); }
+    .read-row .rv[data-tone="bad"] { color: var(--wrong); }
+    .read-row .rv[data-tone="good"] { color: var(--right); }
+
+    @media (max-width: 760px) {
+      .read-row { grid-template-columns: minmax(0, 1fr) 78px; }
+      .read-row .ro { display: none; }
+    }
+
+    /* ---------- lab-specific: the hourly meter in lab A ---------- */
+
+    .meter {
+      margin-top: 14px;
+      height: 10px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      overflow: hidden;
+    }
+
+    .meter i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--wrong);
+      transition: width .25s ease;
+    }
+
+    .meter.is-good i { background: var(--right); }
+
+    /* ---------- quiz ---------- */
+
+    .quiz-intro {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 26px;
+      padding: 18px 20px;
+      border: 1px solid rgba(197, 168, 74, .35);
+      border-radius: var(--radius);
+      background: linear-gradient(110deg, rgba(197, 168, 74, .12), rgba(197, 168, 74, .02));
+    }
+
+    .quiz-score {
+      display: grid;
+      place-items: center;
+      min-width: 62px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      color: var(--gold);
+    }
+
+    .q {
+      margin-bottom: 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .q[data-state="right"] { border-color: rgba(76, 175, 80, .55); }
+    .q[data-state="wrong"] { border-color: rgba(239, 83, 80, .5); }
+
+    .q-head { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 16px 18px 10px; }
+
+    .q-num {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--gold);
+      padding-top: 3px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .q-text { margin: 0; font-size: 15.5px; font-weight: 600; max-width: 72ch; }
+
+    .q-opts { display: grid; gap: 7px; padding: 4px 18px 16px 44px; }
+
+    .opt {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      cursor: pointer;
+      font-size: 14px;
+      transition: border-color .15s, background .15s;
+    }
+
+    .opt:hover { border-color: var(--line); background: var(--surface-3); }
+    .opt input { margin: 3px 0 0; accent-color: var(--gold); }
+    .opt.is-right { border-color: rgba(76, 175, 80, .6); background: rgba(76, 175, 80, .1); }
+    .opt.is-wrong { border-color: rgba(239, 83, 80, .55); background: rgba(239, 83, 80, .1); }
+
+    .q-why {
+      display: none;
+      margin: 0 18px 16px 44px;
+      padding: 12px 14px;
+      border-left: 3px solid var(--line);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: var(--surface-2);
+      font-size: 13.5px;
+      color: #c4c4c4;
+    }
+
+    .q-why p { margin: 0; max-width: 74ch; }
+    .q[data-state] .q-why { display: block; }
+    .q[data-state="right"] .q-why { border-left-color: var(--right); }
+    .q[data-state="wrong"] .q-why { border-left-color: var(--wrong); }
+
+    .q-why .verdict-word { font-weight: 700; }
+    .q[data-state="right"] .verdict-word { color: var(--right); }
+    .q[data-state="wrong"] .verdict-word { color: var(--wrong); }
+
+    /* gate */
+
+    .gate {
+      margin-top: 30px;
+      padding: 22px 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .gate.is-locked { border-style: dashed; color: var(--muted); }
+    .gate.is-open { border-color: rgba(76, 175, 80, .55); background: linear-gradient(150deg, rgba(76, 175, 80, .1), transparent); }
+
+    .gate h3 { margin: 0 0 8px; }
+    .gate ul { margin-top: 10px; }
+
+    .approval {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: #141414;
+      border: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: #b9d8bb;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    footer {
+      margin-top: 22px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--dim);
+      font-size: 13px;
+    }
+
+    footer a { color: var(--muted); }
+
+    /* ---------- this guide: the row tables the labs print ---------- */
+
+    .tbl {
+      margin: 14px 0 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      overflow-x: auto;
+    }
+
+    .tbl table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
+
+    /* Lab A has seven columns. Below this width the table scrolls sideways rather than
+       break quest names in the middle of a word. */
+    #lab-a .tbl table { min-width: 760px; }
+
+    .tbl th {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      text-align: left;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+      white-space: nowrap;
+    }
+
+    .tbl td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      vertical-align: top;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      overflow-wrap: anywhere;
+    }
+
+    .tbl tr:last-child td { border-bottom: 0; }
+    .tbl td[data-tone="bad"] { color: var(--wrong); font-weight: 700; }
+    .tbl td[data-tone="good"] { color: var(--right); font-weight: 700; }
+    .tbl td[data-tone="dim"] { color: var(--dim); }
+    .tbl tr[data-row="wrong"] { background: rgba(239, 83, 80, .08); }
+    .tbl tr[data-row="kept"] { background: rgba(76, 175, 80, .06); }
+
+    .lane-note { font-size: 11.5px; color: var(--muted); font-family: var(--body); }
+
+    /* A test name is longer than a phone is wide, and .lab hides its overflow, so
+       inline code in a lab sub and in a stat tile has to break rather than be cut.
+       Nothing moves at desktop width. */
+    .lab-head .sub code, .stat .v { overflow-wrap: anywhere; }
+
+    /* ---------- this guide: the measure columns lab A compares ---------- */
+
+    .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+
+    .col {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .col.is-active { border-color: var(--gold); background: rgba(197, 168, 74, .07); }
+    .col h4 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+    .col p { margin: 0; font-size: 12.5px; color: var(--muted); max-width: none; }
+    .col .num { font-family: var(--mono); font-size: 20px; font-weight: 800; margin: 6px 0 2px; }
+    .col .num[data-tone="bad"] { color: var(--wrong); }
+    .col .num[data-tone="good"] { color: var(--right); }
+
+    /* This guide names the run each slider position stands for, which makes its
+       readouts longer than the shared 15ch minimum. .lab hides its overflow, so
+       they have to wrap at phone width. Nothing moves at desktop width. */
+    .slider-wrap { flex-wrap: wrap; }
+    .slider-read { overflow-wrap: anywhere; }
+
+    /* The ceiling mark on lab A's meter, so the boundary is visible and not only stated. */
+    .meter { position: relative; }
+    .meter .ceiling {
+      position: absolute;
+      top: -3px;
+      bottom: -3px;
+      width: 2px;
+      background: var(--gold);
+    }
+
+    /* ---------- this guide's additions ---------- */
+
+    /* Identifiers in a lab sub or a stat value are long and unbreakable, and a
+       narrow column would otherwise push the page sideways. */
+    .lab-head .sub code, .stat .v { overflow-wrap: anywhere; }
+
+    /* The drawer, rebuilt. One row per trader, each a label and four levels,
+       laid out the way TraderLoyaltyPanel.Rebuild lays them out. */
+    .drawer {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(214px, 1fr));
+      gap: 10px;
+      margin-top: 6px;
+    }
+
+    .trader {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .trader-name {
+      flex: 1 1 auto;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    .trader[data-need="unmet"] { border-color: rgba(239, 83, 80, .45); }
+    .trader[data-need="unmet"] .trader-name { color: var(--text); }
+
+    .levels { display: inline-flex; gap: 3px; }
+
+    .levels button {
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--surface-3);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .levels button:hover { border-color: var(--gold); }
+    .levels button[aria-pressed="true"] { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+
+    /* One quest row, as the list draws it: trader initial, name, status badge. */
+    .questrow {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .initial {
+      width: 34px;
+      padding: 3px 0;
+      border-radius: 5px;
+      background: var(--surface-3);
+      color: var(--gold);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .qname { flex: 1 1 auto; font-size: 14px; }
+
+    .badge {
+      padding: 3px 9px;
+      border-radius: 5px;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .badge[data-kind="active"] { background: rgba(76, 175, 80, .22); color: var(--right); }
+    .badge[data-kind="levellocked"] { background: rgba(255, 152, 0, .2); color: var(--season); }
+    .badge[data-kind="locked"] { background: rgba(158, 158, 158, .18); color: var(--muted); }
+    .badge[data-kind="unavailable"] { background: rgba(158, 158, 158, .12); color: var(--dim); }
+
+    /* The detail pane's Requirements block. */
+    .reqs {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .reqs h5 {
+      margin: 0 0 8px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .reqline {
+      margin: 0 0 4px;
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    .reqline[data-met="no"] { color: var(--season); }
+    .reqline[data-met="yes"] { color: var(--text); }
+
+    /* The status walk, one gate per step. */
+    .walk { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+    .gatechip {
+      padding: 5px 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: 99px;
+      font-size: 12px;
+      color: var(--dim);
+    }
+
+    .gatechip[data-state="pass"] { border-color: rgba(76, 175, 80, .4); color: var(--right); }
+    .gatechip[data-state="stop"] { border-color: rgba(255, 152, 0, .5); color: var(--season); background: rgba(255, 152, 0, .1); }
+    .gatechip[data-state="skip"] { opacity: .45; }
+
+    /* Event fan-out, one line per announcement. */
+    .events { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+
+    .ev {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 11px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      font-family: var(--mono);
+      font-size: 12.5px;
+    }
+
+    .ev .evn { flex: 1 1 auto; }
+    .ev .evv { color: var(--muted); }
+    .ev[data-kind="loyalty"] { border-color: rgba(197, 168, 74, .4); }
+    .ev[data-kind="reload"] { border-color: rgba(94, 169, 232, .45); }
+    .ev[data-kind="none"] { color: var(--dim); font-style: italic; }
+
+    /* The profile a value belongs to, coloured by the page's law. */
+    .owner[data-profile="pvp"] { color: var(--pvp); }
+    .owner[data-profile="pve"] { color: var(--pve); }
+    .owner[data-profile="wrong"] { color: var(--wrong); font-weight: 700; }
+
+    /* ---------- this guide's additions ---------- */
+
+    /* The status walk, drawn as a column of gates so the stop point is visible. */
+    .gates { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+
+    .grow {
+      display: grid;
+      grid-template-columns: 26px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 7px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      font-size: 13px;
+    }
+
+    .grow .gn {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--dim);
+      text-align: right;
+    }
+
+    .grow .gv { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+    .grow[data-state="pass"] .gv { color: var(--right); }
+    .grow[data-state="stop"] {
+      border-color: rgba(255, 152, 0, .55);
+      background: rgba(255, 152, 0, .1);
+    }
+    .grow[data-state="stop"] .gv { color: var(--season); }
+    .grow[data-state="skip"] { opacity: .4; }
+
+    /* Two answers side by side, one of which is wrong. */
+    .answers {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .answer {
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .answer h4 {
+      margin: 0 0 8px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .answer .big {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .answer[data-verdict="right"] { border-color: rgba(76, 175, 80, .45); }
+    .answer[data-verdict="right"] .big { color: var(--right); }
+    .answer[data-verdict="wrong"] { border-color: rgba(239, 83, 80, .5); }
+    .answer[data-verdict="wrong"] .big { color: var(--wrong); }
+
+    .answer .why { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
+
+    /* A published row and what the loader did with it. */
+    .rowcard {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 9px 13px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      margin-bottom: 6px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+    }
+
+    .rowcard[data-kept="dropped"] { border-color: rgba(239, 83, 80, .45); }
+    .rowcard[data-kept="kept"] { border-color: rgba(76, 175, 80, .35); }
+    .rowcard[data-kept="warned"] { border-color: rgba(197, 168, 74, .5); }
+
+    .rowcard .fate { font-size: 11.5px; font-weight: 700; }
+    .rowcard[data-kept="dropped"] .fate { color: var(--wrong); }
+    .rowcard[data-kept="kept"] .fate { color: var(--right); }
+    .rowcard[data-kept="warned"] .fate { color: var(--gold); }
+
+    /* Three consumers of one ordering rule. */
+    .consumers { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+
+    .consumer {
+      display: grid;
+      grid-template-columns: 190px 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 9px 13px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    @media (max-width: 620px) {
+      .consumer { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    }
+
+    .consumer .cname { font-size: 12.5px; color: var(--muted); }
+    .consumer .cval { font-family: var(--mono); font-size: 12.5px; }
+    .consumer[data-agrees="no"] { border-color: rgba(239, 83, 80, .5); }
+    .consumer[data-agrees="no"] .cval { color: var(--wrong); font-weight: 700; }
+    .consumer[data-agrees="yes"] .cval { color: var(--text); }
+
+    /* ---------- this guide: the badge and the condition lines lab B paints ----------
+       These are the app's own QuestStatusBrushes, quoted: the fill behind a status
+       badge and the colour of an unmet Requirements line. They are the app's status
+       colours, not this page's profile hues, and the panel is shown the way the app
+       shows it. */
+
+    .kbadge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 700;
+      color: #ffffff;
+    }
+
+    .kbadge[data-status="Locked"] { background: #666666; }
+    .kbadge[data-status="LevelLocked"] { background: #ff9800; color: #19170f; }
+    .kbadge[data-status="Active"] { background: #4caf50; }
+    .kbadge[data-status="Done"] { background: #2196f3; }
+
+    .klines { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 12px; }
+
+    .kline {
+      padding: 4px 9px;
+      border: 1px solid var(--line-soft);
+      border-radius: 6px;
+      background: #141414;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--text);
+    }
+
+    .kline[data-met="no"] { color: #ff9800; border-color: rgba(255, 152, 0, .45); }
+
+    /* The walk rows lab B and lab D print reuse .gates/.grow from the earlier labs.
+       The row tables the other labs print reuse .tbl. */
+
+    .panel-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      align-items: center;
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .panel-strip .heading { font-weight: 700; }
+    .panel-strip .count { font-family: var(--mono); font-size: 13px; color: var(--text); }
+
+    /* ---------- this guide: lab C's surface table ----------
+       The shared .read-row was shaped for a short value in a 92px column. Lab C's values are
+       phrases, so here the value column takes the room it needs and the third column, which
+       this lab has no use for, is dropped. Nothing else on the page uses this layout. */
+    #labCReads .read-row { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
+    #labCReads .read-row .rv { text-align: right; }
+    #labCReads .read-row .ro { display: none; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="rail" aria-label="Guide contents">
+      <p class="rail-title">Curriculum</p>
+      <a href="#ch1"><span class="n">01</span><span>Five buckets and a tie</span></a>
+      <a href="#ch2"><span class="n">02</span><span>What 1.1 took from the inputs</span></a>
+      <a href="#lab-a" class="is-lab"><span class="n">LAB</span><span>What the panel ranks</span></a>
+      <a href="#ch3"><span class="n">03</span><span>Remove, not re-score</span></a>
+      <a href="#ch4"><span class="n">04</span><span>What goes, and where</span></a>
+      <a href="#ch5"><span class="n">05</span><span>One sequence, one step shorter</span></a>
+      <a href="#ch6"><span class="n">06</span><span>The row that stays behind</span></a>
+      <a href="#lab-b" class="is-lab"><span class="n">LAB</span><span>The stored row across builds</span></a>
+      <a href="#ch7"><span class="n">07</span><span>How the removal is pinned</span></a>
+      <a href="#quiz"><span class="n">08</span><span>Comprehension gate</span></a>
+      <div class="rail-gate">
+        <strong id="railGateLabel">Gate locked</strong>
+        <span id="railGateHint">0 of 8 correct</span>
+        <div class="gate-meter"><i id="railGateBar"></i></div>
+      </div>
+    </nav>
+
+    <main>
+      <p class="eyebrow">PR #65 &middot; Code guide</p>
+      <h1>A list that no longer says why, taken off the Quests tab</h1>
+      <p class="lede">
+        This guide is a short curriculum for one removal. It starts with what the Recommended
+        Quests panel did and why its ranking stopped making sense under the EFT 1.1 data. Then
+        it shows what the change deletes, what it keeps, and how the tests hold the result.
+      </p>
+      <p class="lede">
+        The decision is <code>docs/decisions/2026-09-22-remove-quest-recommendations.md</code>,
+        a Unified change proposal. The 1.1 data context is the subject of
+        <code>docs/2026-09-kappa-collector-1-1-code-guide.html</code> and the quest data
+        refresh guides before it.
+      </p>
+
+      <div class="note">
+        <p class="note-label">The whole change</p>
+        <p>
+          The Quests tab loses its Recommended Quests panel. The service, the view model, the
+          setting and the strings behind the panel go with it. Nothing else on the tab changes,
+          and no published data changes.
+        </p>
+      </div>
+
+      <!-- ===================== 1 ===================== -->
+      <section id="ch1">
+        <div class="chapter-head">
+          <span class="chapter-num">01</span>
+          <div>
+            <h2>Five buckets and a tie</h2>
+            <p class="kicker">
+              What the panel did, in the terms of the code this change deletes.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          <code>QuestRecommendationService.GetRecommendations</code> looked at every Active quest.
+          For each one, <code>AnalyzeQuest</code> made five checks in a fixed order. The first
+          check that matched gave the quest its bucket and its priority. A quest that matched no
+          check got no recommendation.
+        </p>
+
+        <div class="tbl">
+          <table>
+            <thead>
+              <tr><th>Check, in order</th><th>Matches when</th><th>Priority</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Ready to complete</td><td>the quest needs items, and the tracked inventory holds all of them</td><td>100 + 20 for Kappa + 5 per follow-up</td></tr>
+              <tr><td>Item hand-in only</td><td>the objectives are item hand-ins, and at least half the items are owned</td><td>50 + 40 x owned share + 10 for Kappa</td></tr>
+              <tr><td>Kappa priority</td><td>the quest is required for Kappa</td><td>70 + 5 per follow-up</td></tr>
+              <tr><td>Unlocks many</td><td>the quest leads to 2 or more quests</td><td>60 + 10 per follow-up</td></tr>
+              <tr><td>Easy quest</td><td>the quest needs no items</td><td>40, flat</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          The panel showed the first five after one sort. The sort compares priority first. It
+          then puts ready quests and hand-in quests first. Nothing after that separates two quests
+          with the same numbers.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/QuestRecommendationService.cs</span><span>deleted</span></div>
+          <pre>return recommendations
+    .OrderByDescending(r =&gt; r.Priority)
+    .ThenByDescending(r =&gt; r.Type == RecommendationType.ReadyToComplete)
+    .ThenByDescending(r =&gt; r.Type == RecommendationType.ItemHandInOnly)
+    .Take(maxResults)
+    .ToList();</pre>
+        </div>
+
+        <p>
+          LINQ <code>OrderBy</code> is a stable sort. When two quests tie on every key, they keep
+          the order they had in the input. The input was <code>AllTasks</code>, which loads in
+          name order. So a tie is settled by the alphabet.
+        </p>
+
+        <div class="note">
+          <p class="note-label">Two inputs need the user</p>
+          <p>
+            The first two buckets read the tracked inventory. The inventory is what the user types
+            on the Items tab. When the user types nothing, every count is zero, and those two
+            buckets never match. That was true before 1.1 as well.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== 2 ===================== -->
+      <section id="ch2">
+        <div class="chapter-head">
+          <span class="chapter-num">02</span>
+          <div>
+            <h2>What 1.1 took from the inputs</h2>
+            <p class="kicker">
+              The weights did not go wrong. The values they multiply stopped telling quests apart.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The design of 2025-12 assumed long prerequisite chains and a Kappa flag on half of all
+          quests. EFT 1.1 replaced most chains with player level and trader loyalty gates. The
+          proposal measured the inputs of the score in both databases, and this guide repeats its
+          numbers without a new measurement.
+        </p>
+
+        <div class="tbl">
+          <table>
+            <thead>
+              <tr><th>Input the score reads</th><th>v2026.7.0 data</th><th>1.1.0 data</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Kappa-required quests</td><td>248</td><td data-tone="bad">13</td></tr>
+              <tr><td>Quests with no prerequisite</td><td>23</td><td data-tone="bad">294</td></tr>
+              <tr><td>Prerequisite rows</td><td>794</td><td>216</td></tr>
+              <tr><td>Quests that unlock two or more others</td><td>221</td><td>30</td></tr>
+              <tr><td>Active pool, fresh profile at level 15</td><td>33</td><td>224</td></tr>
+              <tr><td>Active pool, fresh profile at level 79 and loyalty 4</td><td>46</td><td>316</td></tr>
+              <tr><td>Quests that land in the flat easy bucket</td><td>81</td><td data-tone="bad">184</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          Put the two chapters together. A fresh profile tracks no items, so the first two buckets
+          are empty. A few Kappa quests and a few quests with many follow-ups fill the top places.
+          After them come the quests at a flat 40. On a fresh profile there are 81 to 125 of them, by level.
+        </p>
+        <p>
+          The last places of the five are therefore the first names of the alphabet. The proposal
+          records that output: Acquaintance, All This Filth..., Belka and Strelka, and so on.
+        </p>
+
+        <div class="note is-wrong">
+          <p class="note-label">The cost</p>
+          <p>
+            The panel still looked like advice. Nothing on it could tell a 1.1 player why this
+            quest, and not one of the other hundred, was on the list. The expander was collapsed
+            by default, so most users saw only a count badge that always said 5.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== LAB A ===================== -->
+      <div class="lab" id="lab-a">
+        <div class="lab-head">
+          <span class="lab-tag">Lab A</span>
+          <h3>What the panel ranks</h3>
+          <p class="sub">
+            The logic is the deleted <code>QuestRecommendationService.AnalyzeQuest</code> and its
+            sort, copied check for check. Its absence is pinned by
+            <code>QuestRecommendationsRemovalTests.The_recommendation_types_are_gone</code>.
+          </p>
+          <p class="sub">
+            The two pools are examples with the shape of each database, not real quests. The
+            names are alphabetical so that you can see where the name order decides a place.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">Data</span>
+            <div class="seg" id="labAWorld">
+              <button type="button" data-a-world="old">v2026.7.0 shape</button>
+              <button type="button" data-a-world="new" aria-pressed="true">1.1.0 shape</button>
+            </div>
+            <span class="ctl-label">Items tab</span>
+            <div class="seg" id="labAInv">
+              <button type="button" data-a-inv="none" aria-pressed="true">no counts typed</button>
+              <button type="button" data-a-inv="tracked">counts typed</button>
+            </div>
+          </div>
+
+          <div class="tbl">
+            <table>
+              <thead>
+                <tr><th>Quest</th><th>Kappa</th><th>Follow-ups</th><th>Items</th><th>Bucket</th><th>Priority</th><th>Place</th></tr>
+              </thead>
+              <tbody id="labARows"></tbody>
+            </table>
+          </div>
+
+          <div class="state-grid" style="margin-top:14px;">
+            <div class="stat">
+              <p class="k">Active quests in the pool</p>
+              <p class="v" id="labAPool">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Quests at the flat 40</p>
+              <p class="v" id="labAFlat">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">Top places the alphabet decides</p>
+              <p class="v" id="labAByName">-</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labAVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== 3 ===================== -->
+      <section id="ch3">
+        <div class="chapter-head">
+          <span class="chapter-num">03</span>
+          <div>
+            <h2>Remove, not re-score</h2>
+            <p class="kicker">
+              Decision D1, and what the change does not try to do.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The proposal looked at a new set of weights. It could drop the Kappa bonus, raise the
+          unlock threshold, or rank the easy bucket by level. It rejected all of them for one
+          reason: new weights still multiply the same inputs.
+        </p>
+        <p>
+          With 294 of 488 quests free of prerequisites, the position of a quest in the graph no
+          longer separates it from the others. Thirteen Kappa quests cannot carry a priority
+          scheme. A 1.1 player asks other questions. What does the next level unlock? Which Active
+          quests share the map of the next raid? Which hand-ins does the stash already cover?
+        </p>
+        <p>
+          Those questions need their own product decision, so they get their own proposal. This
+          change makes room for that proposal and assumes nothing about its shape. If it wants a
+          scoring service, it starts from its own inputs.
+        </p>
+
+        <div class="note">
+          <p class="note-label">What stays as it is</p>
+          <p>
+            The filters, the status chips, the progression sort and the follow-ups in the detail
+            pane do not change. <code>TarkovTask.LeadsTo</code>, <code>QuestGraphService</code>
+            and <code>ItemInventoryService</code> fed the score, and they keep their other users.
+            These are the tools a player uses now to choose the next quest.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== 4 ===================== -->
+      <section id="ch4">
+        <div class="chapter-head">
+          <span class="chapter-num">04</span>
+          <div>
+            <h2>What goes, and where</h2>
+            <p class="kicker">
+              Requirements R1 and R2: the feature leaves no dead code behind.
+            </p>
+          </div>
+        </div>
+
+        <div class="tbl">
+          <table>
+            <thead>
+              <tr><th>Deleted</th><th>Where it was</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>QuestRecommendationService</code>, <code>QuestRecommendation</code>, <code>RecommendationType</code></td><td>Services/QuestRecommendationService.cs, the whole file</td></tr>
+              <tr><td><code>QuestRecommendationsPanel</code></td><td>Pages/Components, the markup and the code-behind</td></tr>
+              <tr><td><code>RecommendationViewModel</code></td><td>Pages/QuestListViewModels.cs</td></tr>
+              <tr><td><code>RecommendationsExpanded</code> and its key</td><td>Services/Settings/QuestListSettings.cs</td></tr>
+              <tr><td>ten strings, in all three languages</td><td>Services/LocalizationService.Quest.cs, the whole region</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          R2 names seven strings. The region held three more: <code>ItemsOwned</code>,
+          <code>ItemsNeeded</code> and <code>UnlocksQuests</code>. The same 2025-12 commit added
+          them for the panel, and nothing ever read them. The goal of no dead code covers them, so
+          the change deletes the region whole. PR A lists this as a correction to the plan.
+        </p>
+        <p>
+          The page markup loses the panel element and its row. The grid had four rows. It now has
+          three, and the main content moves up from row 3 to row 2.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Pages/QuestListPage.xaml</span><span>the outer grid</span></div>
+          <pre>&lt;Grid.RowDefinitions&gt;
+<span class="del">-   &lt;RowDefinition Height="Auto"/&gt;</span>    &lt;RowDefinition Height="Auto"/&gt;
+    &lt;RowDefinition Height="Auto"/&gt;
+    &lt;RowDefinition Height="*"/&gt;
+&lt;/Grid.RowDefinitions&gt;
+<span class="cmt">&lt;!-- filter bar in row 0, status chips in row 1 --&gt;</span>
+<span class="del">-&lt;components:QuestRecommendationsPanel x:Name="RecommendationsPanel" Grid.Row="2" .../&gt;</span><span class="del">-&lt;Grid Grid.Row="3"&gt;</span><span class="add">+&lt;Grid Grid.Row="2"&gt;</span></pre>
+        </div>
+
+        <p>
+          Why delete the row, when an empty Auto row takes no height? An empty row is a slot with
+          no owner. The next edit can put an element in it by mistake, and nothing would look
+          wrong. R1 asks for the row to be gone, and a test counts the rows against the children.
+        </p>
+        <p>
+          The <code>components</code> namespace prefix goes too. The panel was its only user in
+          this file.
+        </p>
+      </section>
+
+      <!-- ===================== 5 ===================== -->
+      <section id="ch5">
+        <div class="chapter-head">
+          <span class="chapter-num">05</span>
+          <div>
+            <h2>One sequence, one step shorter</h2>
+            <p class="kicker">
+              Requirement R3: every refresh path keeps the rest of its steps.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Four paths called <code>UpdateRecommendations</code>. They were the page load, the
+          shared state-change sequence, the database-refresh handler and
+          <code>RefreshDisplay</code>. Each path loses that one call and nothing else.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Pages/QuestListPage.xaml.cs</span><span>RefreshAllForStateChange</span></div>
+          <pre>private void RefreshAllForStateChange()
+{
+    RefreshQuestStatuses();
+    ApplyFilters();
+    UpdateDetailPanel();
+<span class="del">-   UpdateRecommendations();</span>}</pre>
+        </div>
+
+        <p>
+          <code>RefreshDisplay</code> did not change. It still delegates to the shared sequence.
+          This matters because an earlier change closed a shortcut here: a second, shorter copy
+          of the sequence (<code>feature-quest-chip-only-status-filter.spec.md</code>). The
+          proposal lists a new copy as a risk of this change.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Pages/QuestListPage.xaml.cs</span><span>RefreshDisplay, unchanged</span></div>
+          <pre>public void RefreshDisplay() =&gt; RefreshAllForStateChange();</pre>
+        </div>
+
+        <p>
+          The comment above <code>RefreshDisplay</code> used the panel as its reason. It said
+          that a shorter copy once left the panel stale after a level edit. The rule stays, so
+          the comment now gives a reason that is still true. Level and karma move rows, chip
+          counts and the detail pane together, and a second copy is where one path loses a step.
+        </p>
+      </section>
+
+      <!-- ===================== 6 ===================== -->
+      <section id="ch6">
+        <div class="chapter-head">
+          <span class="chapter-num">06</span>
+          <div>
+            <h2>The row that stays behind</h2>
+            <p class="kicker">
+              Decision D2 and requirement R9, and a correction to D2.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          Older builds saved the state of the expander as the row
+          <code>questList.recommendationsExpanded</code> in <code>user_data.db</code>. This build
+          does not read the row, and it does not delete it. The settings table is a key and value
+          store, and an unknown key does no harm.
+        </p>
+        <p>
+          The proposal rejected a cleanup on the next load. That code would run once for each user
+          and then stay in every later build with no purpose. The row costs nothing and means
+          nothing.
+        </p>
+
+        <div class="code">
+          <div class="code-head"><span>TarkovHelper/Services/Settings/QuestListSettings.cs</span><span>LoadSettings</span></div>
+          <pre>if (SettingsValue.TryParseDouble(_userDataDb.GetSetting(KeyDetailPanelWidth), out var width))
+    _detailPanelWidth = Math.Clamp(width, MinDetailPanelWidth, MaxDetailPanelWidth);
+<span class="del">-if (bool.TryParse(_userDataDb.GetSetting(KeyRecommendationsExpanded), out var recommendationsExpanded))</span><span class="del">-    _recommendationsExpanded = recommendationsExpanded;</span>_settingsLoaded = true;</pre>
+        </div>
+
+        <div class="note is-wrong">
+          <p class="note-label">A correction to the proposal</p>
+          <p>
+            D2 first said that the complete profile reset clears the row. It does not.
+            <code>QuestListSettings</code> keeps its keys in the app-wide <code>UserSettings</code>
+            table. <code>UserDataDbService.ResetProfileAsync</code> deletes only the rows of the
+            profile in <code>ProfileSettings</code>.
+          </p>
+          <p>
+            So the row survives a reset, like every other <code>questList.*</code> key. D2 stands
+            on its other two reasons. This pull request corrects the text of D2 in the proposal.
+          </p>
+        </div>
+      </section>
+
+      <!-- ===================== LAB B ===================== -->
+      <div class="lab" id="lab-b">
+        <div class="lab-head">
+          <span class="lab-tag">Lab B</span>
+          <h3>The stored row across builds</h3>
+          <p class="sub">
+            The old read is the deleted <code>bool.TryParse</code> step of
+            <code>QuestListSettings.LoadSettings</code>, with the getter default of false. The
+            new behaviour is pinned end to end by
+            <code>QuestOverviewFiltersE2ETests.A_stored_recommendations_expander_row_is_inert</code>.
+          </p>
+          <p class="sub">
+            Choose what the database holds, which build opens it, and whether a complete profile
+            reset runs first. Then read what the Quests tab shows and what stays on disk.
+          </p>
+        </div>
+        <div class="lab-body">
+          <div class="controls">
+            <span class="ctl-label">Stored row</span>
+            <div class="seg" id="labBStored">
+              <button type="button" data-b-stored="none">no row</button>
+              <button type="button" data-b-stored="True" aria-pressed="true">True</button>
+              <button type="button" data-b-stored="False">False</button>
+              <button type="button" data-b-stored="yes">yes (not a bool)</button>
+            </div>
+            <span class="ctl-label">Build that opens it</span>
+            <div class="seg" id="labBBuild">
+              <button type="button" data-b-build="before">before this change</button>
+              <button type="button" data-b-build="after" aria-pressed="true">after this change</button>
+            </div>
+            <span class="ctl-label">Complete profile reset first</span>
+            <div class="seg" id="labBReset">
+              <button type="button" data-b-reset="no" aria-pressed="true">no</button>
+              <button type="button" data-b-reset="yes">yes</button>
+            </div>
+          </div>
+
+          <div class="state-grid">
+            <div class="stat">
+              <p class="k">Row after the reset step</p>
+              <p class="v" id="labBRow">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">What the build reads</p>
+              <p class="v" id="labBRead">-</p>
+            </div>
+            <div class="stat">
+              <p class="k">The Quests tab shows</p>
+              <p class="v" id="labBShows">-</p>
+            </div>
+          </div>
+
+          <div class="verdict" id="labBVerdict"></div>
+        </div>
+      </div>
+
+      <!-- ===================== 7 ===================== -->
+      <section id="ch7">
+        <div class="chapter-head">
+          <span class="chapter-num">07</span>
+          <div>
+            <h2>How the removal is pinned</h2>
+            <p class="kicker">
+              A removal has no defect to reproduce. The tests pin what must stay gone and what must stay.
+            </p>
+          </div>
+        </div>
+
+        <p>
+          The page cannot be built in the unit suite, because its markup needs the resources of
+          the app. So <code>QuestRecommendationsRemovalTests</code> reads the source and reflects
+          over the assembly. Its cases were written before the removal and run against the old
+          tree first.
+        </p>
+
+        <div class="tbl">
+          <table>
+            <thead>
+              <tr><th>Case</th><th>Pins</th><th>Old tree</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>The_recommendation_types_are_gone</code></td><td>R2, five types</td><td data-tone="bad">failed</td></tr>
+              <tr><td><code>The_recommendation_strings_are_gone</code></td><td>R2, ten strings</td><td data-tone="bad">failed</td></tr>
+              <tr><td><code>The_expander_setting_is_gone</code></td><td>R2 and D2 in code</td><td data-tone="bad">failed</td></tr>
+              <tr><td><code>The_quest_page_grid_has_no_row_left_for_the_panel</code></td><td>R1, one row per child</td><td data-tone="bad">failed</td></tr>
+              <tr><td><code>Each_refresh_path_keeps_its_remaining_steps_in_order</code></td><td>R3, three paths</td><td data-tone="good">passed</td></tr>
+              <tr><td><code>RefreshDisplay_still_delegates_to_the_shared_sequence</code></td><td>R3 and the risk</td><td data-tone="good">passed</td></tr>
+              <tr><td><code>No_source_file_still_refers_to_the_panel</code></td><td>R6, code and comments</td><td data-tone="bad">failed</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          The two R3 cases passed on the old tree, and that is correct. They pin steps that must
+          survive, so they must pass before and after. The other cases failed on the old tree for
+          the expected reason, which shows that they are not empty. That run is evidence, not a
+          reproduced defect.
+        </p>
+        <p>
+          The source scan exempts two test files. Each one names the panel to prove that it is
+          absent. The E2E case also failed on the old tree, so its element name is real.
+        </p>
+        <p>
+          Some tests went with the feature. <code>LocalizationHeaderStringsTests</code> no longer
+          pins the Kappa priority text or the text of the service (R5). The E2E case that clicked
+          a recommendation is deleted with its entry point (R4). The other navigation tests stay.
+        </p>
+        <p>
+          The documents that specified the panel get a <code>Superseded in part</code> note (R8).
+          The archived 2025-12 PRD gets one too (D3). A reader who finds those documents learns
+          that the panel is gone, and why, without a search of the history.
+        </p>
+      </section>
+
+      <!-- ===================== Quiz ===================== -->
+      <section id="quiz">
+        <div class="chapter-head">
+          <span class="chapter-num">08</span>
+          <div>
+            <h2>Comprehension gate</h2>
+            <p class="kicker">
+              There are eight questions. Each one needs the reasoning, and not the words. The
+              approval checklist below opens when all eight answers are correct. Every answer
+              gives an explanation, so you can read the chapter again.
+            </p>
+          </div>
+        </div>
+
+        <div class="quiz-intro">
+          <div class="quiz-score" id="quizScore">0/8</div>
+          <div>
+            <strong>Most of these questions ask why something is kept or deleted.</strong>
+            <p style="margin:4px 0 0;color:#c2c2c2;">
+              Questions 1 and 6 are the important ones. Question 1 is the defect that made the
+              panel go. Question 6 is the fact that the proposal first had wrong.
+            </p>
+          </div>
+        </div>
+
+        <div id="quizList"></div>
+
+        <div class="gate is-locked" id="gate">
+          <h3 id="gateTitle">Approval checklist: locked</h3>
+          <p id="gateBody">Answer all eight questions correctly to unlock the reviewer checklist.</p>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          Sources. The decision is
+          <code>docs/decisions/2026-09-22-remove-quest-recommendations.md</code>, which this pull
+          request merges and corrects in D2. The panel was specified in
+          <code>docs/decisions/archive/2025-12/smart-quest-recommendations.md</code>. The 1.1
+          data context is in <code>docs/2026-09-kappa-collector-1-1-code-guide.html</code>.
+        </p>
+        <p>
+          The labs obey the same decision logic as the deleted code, but their pools are examples.
+          They are not the released code. The released behaviour is pinned by
+          <code>QuestRecommendationsRemovalTests</code>, <code>LocalizationHeaderStringsTests</code>,
+          <code>QuestNavigationE2ETests</code> and
+          <code>QuestOverviewFiltersE2ETests.A_stored_recommendations_expander_row_is_inert</code>.
+        </p>
+      </footer>
+    </main>
+  </div>
+  <script>
+  (function () {
+    "use strict";
+
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+
+    function bindSegment(root, attr, onPick) {
+      var buttons = Array.prototype.slice.call(root.querySelectorAll("[" + attr + "]"));
+      buttons.forEach(function (b) {
+        b.addEventListener("click", function () {
+          buttons.forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+          onPick(b.getAttribute(attr));
+        });
+      });
+    }
+
+    function say(node, tone, title, body) {
+      node.setAttribute("data-tone", tone);
+      node.innerHTML = "";
+      node.appendChild(el("b", null, title));
+      node.appendChild(document.createTextNode(body));
+    }
+
+    /* ============================================================
+       LAB A. The deleted QuestRecommendationService.AnalyzeQuest and
+       the sort in GetRecommendations. Each quest: kappa (ReqKappa),
+       leads (LeadsTo.Count), handIn (IsItemHandInOnly: items and no
+       complex objective), items: [{ amount, owned }] where owned is
+       what the Items tab would hold once counts are typed.
+       ============================================================ */
+
+    var POOLS = {
+      old: [
+        { name: "Alpha",   kappa: true,  leads: 3, handIn: false, items: [] },
+        { name: "Bravo",   kappa: true,  leads: 1, handIn: true,  items: [{ amount: 1, owned: 1 }, { amount: 2, owned: 2 }] },
+        { name: "Charlie", kappa: true,  leads: 2, handIn: false, items: [{ amount: 1, owned: 0 }] },
+        { name: "Delta",   kappa: true,  leads: 0, handIn: false, items: [] },
+        { name: "Echo",    kappa: false, leads: 4, handIn: false, items: [] },
+        { name: "Foxtrot", kappa: true,  leads: 5, handIn: false, items: [] },
+        { name: "Golf",    kappa: false, leads: 0, handIn: false, items: [] },
+        { name: "Hotel",   kappa: true,  leads: 2, handIn: true,  items: [{ amount: 1, owned: 1 }, { amount: 1, owned: 1 }, { amount: 3, owned: 0 }] }
+      ],
+      "new": [
+        { name: "Alpha",    kappa: false, leads: 0, handIn: false, items: [] },
+        { name: "Bravo",    kappa: false, leads: 1, handIn: false, items: [] },
+        { name: "Charlie",  kappa: false, leads: 0, handIn: false, items: [{ amount: 2, owned: 2 }, { amount: 1, owned: 1 }] },
+        { name: "Delta",    kappa: false, leads: 0, handIn: false, items: [] },
+        { name: "Echo",     kappa: true,  leads: 1, handIn: false, items: [] },
+        { name: "Foxtrot",  kappa: false, leads: 0, handIn: false, items: [] },
+        { name: "Golf",     kappa: false, leads: 2, handIn: false, items: [] },
+        { name: "Hotel",    kappa: false, leads: 0, handIn: false, items: [] },
+        { name: "India",    kappa: false, leads: 0, handIn: true,  items: [{ amount: 1, owned: 1 }, { amount: 1, owned: 1 }, { amount: 1, owned: 1 }, { amount: 5, owned: 2 }] },
+        { name: "Juliet",   kappa: false, leads: 0, handIn: false, items: [] },
+        { name: "Kilo",     kappa: false, leads: 1, handIn: false, items: [] },
+        { name: "Lima",     kappa: false, leads: 0, handIn: false, items: [{ amount: 1, owned: 0 }] },
+        { name: "Mike",     kappa: false, leads: 0, handIn: false, items: [] },
+        { name: "November", kappa: false, leads: 3, handIn: false, items: [] }
+      ]
+    };
+
+    var BUCKET_TEXT = {
+      ReadyToComplete: "Ready to complete",
+      ItemHandInOnly: "Item hand-in only",
+      KappaPriority: "Kappa priority",
+      UnlocksMany: "Unlocks many",
+      EasyQuest: "Easy quest"
+    };
+
+    /* available >= item.Amount, with nothing typed every count is 0. */
+    function availableOf(item, tracked) { return tracked ? item.owned : 0; }
+
+    function analyzeQuest(q, tracked) {
+      var ready = 0, missing = 0;
+      q.items.forEach(function (it) {
+        if (availableOf(it, tracked) >= it.amount) ready++; else missing++;
+      });
+      var unlocks = q.leads;
+
+      /* IsQuestReadyToComplete: no items means IsItemHandInOnly, which is false with no items. */
+      var isReady = q.items.length === 0 ? false : missing === 0;
+      if (isReady) {
+        return { type: "ReadyToComplete", priority: 100 + (q.kappa ? 20 : 0) + unlocks * 5 };
+      }
+      if (q.handIn && q.items.length > 0) {
+        var total = ready + missing;
+        var ratio = total === 0 ? 1.0 : ready / total;
+        if (ratio >= 0.5) {
+          /* (int)(ratio * 40) truncates toward zero; ratio is never negative. */
+          return { type: "ItemHandInOnly", priority: 50 + Math.floor(ratio * 40) + (q.kappa ? 10 : 0) };
+        }
+      }
+      if (q.kappa) {
+        return { type: "KappaPriority", priority: 70 + unlocks * 5 };
+      }
+      if (unlocks >= 2) {
+        return { type: "UnlocksMany", priority: 60 + unlocks * 10 };
+      }
+      if (q.items.length === 0) {
+        return { type: "EasyQuest", priority: 40 };
+      }
+      return null;
+    }
+
+    /* OrderByDescending(Priority).ThenByDescending(Ready).ThenByDescending(HandIn),
+       stable over the input, which is name order. */
+    function rank(pool, tracked) {
+      var recs = [];
+      pool.forEach(function (q, index) {
+        var r = analyzeQuest(q, tracked);
+        if (r) recs.push({ quest: q, type: r.type, priority: r.priority, index: index });
+      });
+      recs.sort(function (a, b) {
+        if (a.priority !== b.priority) return b.priority - a.priority;
+        var ar = a.type === "ReadyToComplete" ? 1 : 0, br = b.type === "ReadyToComplete" ? 1 : 0;
+        if (ar !== br) return br - ar;
+        var ah = a.type === "ItemHandInOnly" ? 1 : 0, bh = b.type === "ItemHandInOnly" ? 1 : 0;
+        if (ah !== bh) return bh - ah;
+        return a.index - b.index;
+      });
+      return recs;
+    }
+
+    function sameKeys(a, b) {
+      return a.priority === b.priority
+        && (a.type === "ReadyToComplete") === (b.type === "ReadyToComplete")
+        && (a.type === "ItemHandInOnly") === (b.type === "ItemHandInOnly");
+    }
+
+    /* A top place is decided by name when a quest below the cut ties with it on every key. */
+    function placesByName(recs, take) {
+      var count = 0;
+      for (var i = 0; i < Math.min(take, recs.length); i++) {
+        for (var j = take; j < recs.length; j++) {
+          if (sameKeys(recs[i], recs[j])) { count++; break; }
+        }
+      }
+      return count;
+    }
+
+    var TAKE = 5;
+    var labA = { world: "new", inv: "none" };
+    var labARows = document.getElementById("labARows");
+    var labAPool = document.getElementById("labAPool");
+    var labAFlat = document.getElementById("labAFlat");
+    var labAByName = document.getElementById("labAByName");
+    var labAVerdict = document.getElementById("labAVerdict");
+
+    function itemsText(q, tracked) {
+      if (q.items.length === 0) return "none";
+      var kind = q.handIn ? "hand-in" : "other";
+      if (!tracked) return q.items.length + ", " + kind;
+      var have = q.items.filter(function (it) { return it.owned >= it.amount; }).length;
+      return have + " of " + q.items.length + " owned, " + kind;
+    }
+
+    function renderLabA() {
+      var pool = POOLS[labA.world];
+      var tracked = labA.inv === "tracked";
+      var recs = rank(pool, tracked);
+      var place = {};
+      recs.forEach(function (r, i) { place[r.quest.name] = { i: i, r: r }; });
+
+      var tiedAcross = {};
+      for (var i = 0; i < Math.min(TAKE, recs.length); i++) {
+        for (var j = TAKE; j < recs.length; j++) {
+          if (sameKeys(recs[i], recs[j])) { tiedAcross[recs[i].quest.name] = true; break; }
+        }
+      }
+
+      labARows.innerHTML = "";
+      pool.forEach(function (q) {
+        var tr = document.createElement("tr");
+        var p = place[q.name];
+        if (p && p.i < TAKE) tr.setAttribute("data-row", "kept");
+        tr.appendChild(el("td", null, q.name));
+        tr.appendChild(el("td", null, q.kappa ? "yes" : "no"));
+        tr.appendChild(el("td", null, String(q.leads)));
+        tr.appendChild(el("td", null, itemsText(q, tracked)));
+        var bucket = el("td", null, p ? BUCKET_TEXT[p.r.type] : "no recommendation");
+        if (!p) bucket.setAttribute("data-tone", "dim");
+        tr.appendChild(bucket);
+        var prio = el("td", null, p ? String(p.r.priority) : "-");
+        if (tiedAcross[q.name]) prio.setAttribute("data-tone", "bad");
+        tr.appendChild(prio);
+        var placeCell = el("td", null, p ? (p.i < TAKE ? String(p.i + 1) : "below the five") : "-");
+        if (!p || p.i >= TAKE) placeCell.setAttribute("data-tone", "dim");
+        tr.appendChild(placeCell);
+        labARows.appendChild(tr);
+      });
+
+      var flat = recs.filter(function (r) { return r.type === "EasyQuest"; }).length;
+      var byName = placesByName(recs, TAKE);
+      labAPool.textContent = String(pool.length);
+      labAFlat.textContent = String(flat);
+      labAByName.textContent = byName + " of " + Math.min(TAKE, recs.length);
+      labAByName.setAttribute("data-tone", byName > 0 ? "bad" : "good");
+
+      if (byName > 0) {
+        say(labAVerdict, "bad", "The alphabet chooses part of the list.",
+          " " + byName + " of the top places tie with a quest below the cut on every sort key. "
+          + "The stable sort keeps name order, so the earlier name wins. The panel cannot say why that quest is there.");
+      } else {
+        var reason = " No top place ties with a quest below the cut, so each of the five is there because of its own numbers.";
+        if (labA.world === "new") {
+          reason += " In the 1.1 shape this needs typed item counts, which the user must keep by hand.";
+        }
+        say(labAVerdict, "good", "Every top place has a reason.", reason);
+      }
+    }
+
+    bindSegment(document.getElementById("labAWorld"), "data-a-world", function (v) { labA.world = v; renderLabA(); });
+    bindSegment(document.getElementById("labAInv"), "data-a-inv", function (v) { labA.inv = v; renderLabA(); });
+    renderLabA();
+
+    /* ============================================================
+       LAB B. The stored questList.recommendationsExpanded row.
+       Before: bool.TryParse(GetSetting(key), out v), getter ?? false.
+       After: no code reads the key, and no code deletes it.
+       ResetProfileAsync deletes ProfileSettings rows only; this row
+       lives in UserSettings, so a reset leaves it.
+       ============================================================ */
+
+    var labB = { stored: "True", build: "after", reset: "no" };
+    var labBRow = document.getElementById("labBRow");
+    var labBRead = document.getElementById("labBRead");
+    var labBShows = document.getElementById("labBShows");
+    var labBVerdict = document.getElementById("labBVerdict");
+
+    /* .NET bool.TryParse: "True"/"False" in any case, surrounding white space allowed. */
+    function tryParseBool(s) {
+      if (s == null) return null;
+      var t = s.trim().toLowerCase();
+      if (t === "true") return true;
+      if (t === "false") return false;
+      return null;
+    }
+
+    function renderLabB() {
+      /* ResetProfileAsync deletes ProfileSettings rows only, so the UserSettings row is the
+         same whether or not the reset ran. The reset control changes only the verdict text. */
+      var row = labB.stored === "none" ? null : labB.stored;
+      labBRow.textContent = row == null ? "no row" : row;
+
+      if (labB.build === "before") {
+        var parsed = tryParseBool(row);
+        var expanded = parsed == null ? false : parsed;
+        labBRead.textContent = parsed == null
+          ? (row == null ? "nothing, default false" : "not a bool, default false")
+          : String(parsed);
+        labBShows.textContent = expanded ? "the panel, expanded" : "the panel, collapsed";
+        labBShows.setAttribute("data-tone", "bad");
+        say(labBVerdict, "bad", "The old build shows the panel.",
+          " It reads the row, and a value that is not a bool falls back to collapsed. "
+          + "Either way the ranking from chapter 2 is on the tab.");
+      } else {
+        labBRead.textContent = "nothing, no code reads the key";
+        labBShows.textContent = "no panel";
+        labBShows.setAttribute("data-tone", "good");
+        var tail = row == null
+          ? " There is no row, so there is nothing to leave."
+          : " The row stays on disk and means nothing (D2).";
+        if (labB.reset === "yes" && row != null) {
+          tail += " The reset did not remove it, because it lives in UserSettings and the reset clears ProfileSettings.";
+        }
+        say(labBVerdict, "good", "The tab has no panel, whatever the row holds.", tail);
+      }
+      labBRead.setAttribute("data-tone", labB.build === "before" ? "bad" : "good");
+      labBRow.setAttribute("data-tone", "good");
+    }
+
+    bindSegment(document.getElementById("labBStored"), "data-b-stored", function (v) { labB.stored = v; renderLabB(); });
+    bindSegment(document.getElementById("labBBuild"), "data-b-build", function (v) { labB.build = v; renderLabB(); });
+    bindSegment(document.getElementById("labBReset"), "data-b-reset", function (v) { labB.reset = v; renderLabB(); });
+    renderLabB();
+
+    /* ============================================================
+       Comprehension gate.
+       ============================================================ */
+
+    var QUESTIONS = [
+      {
+        q: "A fresh 1.1 profile types no item counts. What decides the last places of the five on the panel?",
+        options: [
+          "The number of follow-ups, because every quest still has one",
+          "The name order, because many quests tie at the flat 40 and the stable sort keeps the input order",
+          "The player level, because the easy bucket ranks by level",
+          "The Kappa flag, because 13 Kappa quests fill every place"
+        ],
+        answer: 1,
+        why: "No typed counts means the two inventory buckets never match. The few Kappa and multi-unlock quests take the top places, and then 81 to 125 quests tie at 40. OrderBy is stable, and AllTasks loads in name order, so the alphabet settles the tie."
+      },
+      {
+        q: "Why does the proposal delete the panel instead of new weights for 1.1?",
+        options: [
+          "The weights were typed wrong in 2025-12",
+          "The panel was too slow on a pool of 300 quests",
+          "The inputs no longer separate quests: most have no prerequisite and only 13 are Kappa, so any weights multiply values that are nearly the same",
+          "Users could not open the expander"
+        ],
+        answer: 2,
+        why: "D1 says the inputs, not the weights, are what 1.1 took away. A 1.1 recommender asks different questions, such as the next level unlock or the next raid map, so it gets its own proposal."
+      },
+      {
+        q: "When did the Ready to complete bucket match a quest?",
+        options: [
+          "When the quest had no items and no follow-ups",
+          "When the user had typed item counts on the Items tab that covered every item the quest needs",
+          "When the quest was the last one of a Kappa chain",
+          "When the game log reported the items in the stash"
+        ],
+        answer: 1,
+        why: "The check compares the tracked inventory with each item amount. The tracked inventory is what the user types. With nothing typed every count is zero, so the bucket never matched. A quest with no items cannot match it at all."
+      },
+      {
+        q: "An empty Auto row in a WPF grid takes no height. Why does the change still delete the row definition?",
+        options: [
+          "An empty Auto row takes 12 pixels of margin",
+          "The compiler warns about an empty row",
+          "A row with no owner is a slot that a later edit can fill by mistake. The grid test counts rows against children",
+          "The detail pane needs the row index 3"
+        ],
+        answer: 2,
+        why: "Nothing visible changes either way, which is exactly why a stray slot goes unnoticed. The_quest_page_grid_has_no_row_left_for_the_panel requires one row for each child and the star row last."
+      },
+      {
+        q: "RefreshDisplay needs only three calls now. Why does it still delegate to RefreshAllForStateChange?",
+        options: [
+          "Delegation is faster than three calls",
+          "A second copy of the sequence is where one path loses a step while the other still works; an earlier change closed that shortcut, and the proposal lists it as a risk",
+          "MainWindow cannot call private methods",
+          "RefreshAllForStateChange also reloads the database"
+        ],
+        answer: 1,
+        why: "One definition with one fewer step keeps every path equal. RefreshDisplay_still_delegates_to_the_shared_sequence pins it, and the order test pins the three remaining steps."
+      },
+      {
+        q: "A user of this build had the expander open in an older build and then runs a complete profile reset. What happens to the stored row?",
+        options: [
+          "The reset deletes it with the other profile settings",
+          "This build deletes it on the next load",
+          "It stays, because QuestListSettings keeps it in the app-wide UserSettings table and ResetProfileAsync deletes only ProfileSettings rows; the row is inert, so that is harmless",
+          "It is changed to False"
+        ],
+        answer: 2,
+        why: "D2 first claimed the reset clears it, and that was wrong. The row survives like every other questList key. D2 stands on its other reasons: the store tolerates unknown keys, and cleanup code would outlive its purpose."
+      },
+      {
+        q: "An old build opens a database whose expander row holds the text yes. What does the old code do?",
+        options: [
+          "It throws a FormatException and the tab fails to load",
+          "It treats any text as true",
+          "bool.TryParse fails, the cache stays null, and the getter returns its default of false, so the panel is collapsed",
+          "It deletes the row"
+        ],
+        answer: 2,
+        why: "The old LoadSettings only set the cache when TryParse succeeded. The getter used ?? false. Lab B shows this case, and the new build does not read the row at all."
+      },
+      {
+        q: "No_source_file_still_refers_to_the_panel exempts two test files. Why is that not a hole in the guard?",
+        options: [
+          "Test files are never compiled",
+          "Each exempt file names the panel to prove it is absent. Both failed on the old tree, so the names are real",
+          "The guard only checks comments",
+          "The exempt files are deleted in a later change"
+        ],
+        answer: 1,
+        why: "To pin an absence, a test has to name the absent thing. The guard file names the identifiers, and the E2E case names the expander id. Both ran red against the old tree before the removal."
+      }
+    ];
+
+    var CHECKLIST = [
+      "QuestRecommendationService, QuestRecommendationsPanel and RecommendationViewModel are deleted, and nothing in the solution names them.",
+      "The Quests tab grid has three rows, and the main content is in the star row.",
+      "Page load, RefreshAllForStateChange and OnDatabaseRefreshed each lose only the one call, and RefreshDisplay still delegates.",
+      "QuestListSettings no longer reads or writes the expander key, and no code deletes the stored row.",
+      "The ten strings are gone in all three languages, including the three the plan found dead.",
+      "The comments that cited the panel give reasons that are still true.",
+      "The READMEs and the eight superseded documents say the panel is gone.",
+      "D2 in the proposal no longer claims that the profile reset clears the row."
+    ];
+
+    var answered = {};
+    var quizList = document.getElementById("quizList");
+    var quizScore = document.getElementById("quizScore");
+    var railLabel = document.getElementById("railGateLabel");
+    var railHint = document.getElementById("railGateHint");
+    var railBar = document.getElementById("railGateBar");
+
+    QUESTIONS.forEach(function (item, qi) {
+      var card = el("div", "q");
+
+      var head = el("div", "q-head");
+      head.appendChild(el("span", "q-num", String(qi + 1).padStart(2, "0")));
+      head.appendChild(el("p", "q-text", item.q));
+      card.appendChild(head);
+
+      var why = el("div", "q-why");
+
+      var opts = el("div", "q-opts");
+      item.options.forEach(function (text, oi) {
+        var label = el("label", "opt");
+        var input = document.createElement("input");
+        input.type = "radio";
+        input.name = "q" + qi;
+        input.value = String(oi);
+        label.appendChild(input);
+        label.appendChild(el("span", null, text));
+        opts.appendChild(label);
+
+        input.addEventListener("change", function () {
+          answered[qi] = oi;
+          var correct = oi === item.answer;
+          card.setAttribute("data-state", correct ? "right" : "wrong");
+
+          Array.prototype.forEach.call(opts.children, function (child, ci) {
+            child.classList.remove("is-right", "is-wrong");
+            if (ci === item.answer && (correct || ci === oi)) child.classList.add("is-right");
+            if (ci === oi && !correct) child.classList.add("is-wrong");
+          });
+
+          why.innerHTML = "";
+          var p = el("p");
+          p.appendChild(el("span", "verdict-word", correct ? "Correct. " : "Not quite. "));
+          p.appendChild(document.createTextNode(item.why));
+          why.appendChild(p);
+
+          updateGate();
+        });
+      });
+      card.appendChild(opts);
+      card.appendChild(why);
+
+      quizList.appendChild(card);
+    });
+
+    var gate = document.getElementById("gate");
+    var gateTitle = document.getElementById("gateTitle");
+    var gateBody = document.getElementById("gateBody");
+
+    function updateGate() {
+      var correct = 0;
+      QUESTIONS.forEach(function (item, i) { if (answered[i] === item.answer) correct++; });
+
+      quizScore.textContent = correct + "/" + QUESTIONS.length;
+      railHint.textContent = correct + " of " + QUESTIONS.length + " correct";
+      railBar.style.width = (100 * correct / QUESTIONS.length) + "%";
+
+      if (correct === QUESTIONS.length) {
+        railLabel.textContent = "Gate open";
+        gate.className = "gate is-open";
+        gateTitle.textContent = "Approval checklist: unlocked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Eight of eight. You know why the panel goes and what stays. Now compare the "
+          + "changes with it. Check these items before you approve:"));
+        var ul = el("ul");
+        CHECKLIST.forEach(function (line) { ul.appendChild(el("li", null, line)); });
+        gateBody.appendChild(ul);
+        var pre = el("pre", "approval",
+          "Reviewed the removal of the quest recommendations panel on PR #65.\n" +
+          "Guide: docs/2026-09-remove-quest-recommendations-code-guide.html\n" +
+          "Comprehension gate: 8/8\n" +
+          "Checklist items examined:\n" +
+          "1. The deleted types, and the source scan.\n" +
+          "2. The three-row grid.\n" +
+          "3. The refresh paths, and the delegation.\n" +
+          "4. The setting, and the row left on disk.\n" +
+          "5. The ten strings.\n" +
+          "6. The reworded comments.\n" +
+          "7. The READMEs and the supersede notes.\n" +
+          "8. The corrected D2.\n" +
+          "Read closely: D2 now says the profile reset leaves the row.");
+        gateBody.appendChild(pre);
+      } else {
+        railLabel.textContent = "Gate locked";
+        gate.className = "gate is-locked";
+        gateTitle.textContent = "Approval checklist: locked";
+        gateBody.innerHTML = "";
+        gateBody.appendChild(document.createTextNode(
+          "Answer all eight questions correctly to open the reviewer checklist. You have "
+          + correct + " of " + QUESTIONS.length
+          + " correct. Each incorrect answer gives an explanation, so read the chapter again."));
+      }
+    }
+
+    updateGate();
+  })();
+  </script>
+</body>
+</html>

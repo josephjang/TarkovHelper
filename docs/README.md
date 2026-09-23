@@ -128,6 +128,11 @@ Context 섹션으로 남깁니다. 코드베이스 전반을 훑는 시점 평�
   아이템 충족 규칙, 자기 자신을 마지막 항목으로 돌려주던 선행 퀘스트 탐색, 그리고 시간당
   데이터 퍼블리시가 와도 재시작 전까지 갱신되지 않던 퀘스트 집합을 조작해 보는 인터랙티브 랩
   3개와 퀴즈 게이트를 포함합니다 (PR #62)
+- [2026-09-remove-quest-recommendations-code-guide.html](2026-09-remove-quest-recommendations-code-guide.html):
+  퀘스트 탭의 추천 퀘스트 패널 제거를 다룹니다. 1.1 데이터에서 점수 입력값이 퀘스트를 더는
+  구분하지 못해 마지막 자리를 이름순이 정하게 된 이유, 삭제되는 코드와 남는 갱신 순서, 기존
+  사용자 DB에 남겨 두는 확장 상태 행(프로필 초기화로도 지워지지 않는다는 D2 정정 포함)을
+  조작해 보는 인터랙티브 랩 2개와 퀴즈 게이트를 포함합니다 (PR #65)
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
   마커 API 분석
 
