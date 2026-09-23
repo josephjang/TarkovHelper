@@ -1,5 +1,10 @@
 # Smart Quest Recommendations PRD
 
+> Superseded in part by `2026-09-22-remove-quest-recommendations.md` (2026-09-22):
+> the panel this document specified is removed. Under the EFT 1.1 quest data three
+> of its five scoring signals no longer tell quests apart, so it is not re-scored;
+> a 1.1-aware replacement gets its own proposal.
+
 ## 기능 개요
 
 플레이어의 현재 상태(레벨, 보유 아이템, 퀘스트 진행도)를 분석하여 "다음에 할 퀘스트"를 자동으로 추천해주는 시스템.

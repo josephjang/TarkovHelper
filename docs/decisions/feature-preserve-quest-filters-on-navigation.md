@@ -8,6 +8,10 @@
 > A later change that reverses a decision here appends `Superseded by <doc>` below
 > this line, in the PR that reverses it.
 
+> Superseded in part by `2026-09-22-remove-quest-recommendations.md` (2026-09-22):
+> the recommendations panel is removed, so R2 now covers only the quest links on
+> the Items and Collector tabs. Every other decision here stands.
+
 ## Summary
 
 Clicking any quest link — a prerequisite in the quest detail panel, a quest in the

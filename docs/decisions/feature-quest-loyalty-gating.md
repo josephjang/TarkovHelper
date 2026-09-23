@@ -8,6 +8,10 @@
 > change that reverses a decision here appends `Superseded by <doc>` below this
 > line, in the PR that reverses it.
 
+> Superseded in part by `2026-09-22-remove-quest-recommendations.md` (2026-09-22):
+> the recommendations panel is removed, so R6's list of what refreshes on a
+> loyalty edit no longer includes it. Every other decision here stands.
+
 ## Summary
 
 Phase 4 of the EFT 1.1 adaptation roadmap (`feature-eft-1-1-roadmap.md`). The

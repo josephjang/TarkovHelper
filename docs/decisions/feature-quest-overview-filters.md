@@ -16,6 +16,12 @@
 > one without the other would make the bar disagree with the combo") no longer
 > hold. Everything else here stands.
 
+> Superseded in part by `2026-09-22-remove-quest-recommendations.md` (2026-09-22):
+> the recommendations panel is removed, so R4 no longer persists an expander state
+> and R6 no longer covers recommendation rows. A stored expander row in an existing
+> user database is left in place and reads as nothing. Every other decision here
+> stands.
+
 ## Summary
 
 The Quest tab's read-only statistics line becomes a row of clickable status chips,

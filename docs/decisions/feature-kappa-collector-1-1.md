@@ -13,6 +13,11 @@ Technical Design: [feature-kappa-collector-1-1.spec.md](feature-kappa-collector-
 > decision here appends `Superseded by <doc>` below this line, in the PR that
 > reverses it.
 
+> Superseded in part by `2026-09-22-remove-quest-recommendations.md` (2026-09-22):
+> the recommendations panel is removed, so R7's "the Kappa priority recommendation
+> keeps its current text" no longer applies. The badge, its tooltip and the Kappa
+> filter keep their text. Every other decision here stands.
+
 ## Summary
 
 Phase 5 of the EFT 1.1 adaptation roadmap (`feature-eft-1-1-roadmap.md`), the
