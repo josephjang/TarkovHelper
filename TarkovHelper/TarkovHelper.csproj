@@ -8,8 +8,11 @@
     <UseWPF>true</UseWPF>
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
 
-    <!-- App version. Still 4.3.1 (inherited); the first fork release retargets this
-         to CalVer YYYY.M.N via /release. AssemblyVersion/FileVersion are intentionally
+    <!-- XML doc-comment diagnostics are off: no GenerateDocumentationFile, so a <see cref>
+         to a deleted member compiles silently. Turning them on (and fixing what they report)
+         is tracked in https://github.com/josephjang/TarkovHelper/issues/66. -->
+
+    <!-- App version, CalVer YYYY.M.N, bumped by /release. AssemblyVersion/FileVersion are intentionally
          omitted so the SDK derives both from Version — one knob the release can't leave
          half-bumped, and the value UpdateService reads at runtime. -->
     <Version>2026.9.0</Version>

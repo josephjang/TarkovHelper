@@ -11,14 +11,14 @@ namespace TarkovHelper.Pages.Components;
 /// data gates on, each a trader label plus one button per level, in the shape the DSP control
 /// already uses.
 /// <para>
-/// A PASSIVE panel: it subscribes to no service and owns no lifecycle. MainWindow keeps the
-/// three subscriptions that drive it (<c>SettingsService.TraderLoyaltyChanged</c>,
-/// <c>SettingsService.ProfileSettingsReloaded</c> and <c>QuestDbService.DataRefreshed</c>)
-/// together with the matching detaches
-/// <c>MainWindowTeardownTests</c> reads out of MainWindow.xaml.cs, and calls
-/// <see cref="Rebuild"/> and <see cref="Repaint"/> from its own handlers. Nothing here reaches
-/// back into the window: the parent's "these controls are being written, not clicked" guard
-/// arrives as <see cref="IsInputSuppressed"/>.
+/// A PASSIVE panel: it subscribes to no service and owns no lifecycle. MainWindow keeps every
+/// subscription that drives it, together with the matching detaches
+/// <c>MainWindowTeardownTests</c> reads out of MainWindow.xaml.cs, and calls it from two
+/// methods only, both in its Trader Loyalty region: <c>BuildLoyaltyGroup</c> calls
+/// <see cref="Rebuild"/> and <c>UpdateLoyaltyUI</c> calls <see cref="Repaint"/>. Which events
+/// end in those two is MainWindow's business and is not listed here, so a new one cannot
+/// outdate this paragraph. Nothing here reaches back into the window: the parent's "these
+/// controls are being written, not clicked" guard arrives as <see cref="IsInputSuppressed"/>.
 /// </para>
 /// <para>
 /// A plain class rather than a UserControl because this widget has no markup to declare: the

@@ -1473,10 +1473,16 @@
 
         <p>
           The comment above <code>RefreshDisplay</code> used the panel as its reason. It said
-          that a shorter copy once left the panel stale after a level edit. The rule stays, so
-          the comment now gives a reason that is still true. A completed quest unlocks its
-          follow-up quests. That moves rows, chip counts and the detail pane together, and a
-          second copy is where one path loses a step.
+          that a shorter copy once left the panel stale after a level edit. The comment also said
+          that <code>MainWindow</code> calls <code>RefreshDisplay</code> after a log event and
+          after the in-progress quest dialog.
+        </p>
+
+        <p>
+          The review removed those two calls. Each progress write raises
+          <code>ProgressChanged</code>, and the page runs the shared sequence for that event, so
+          each call ran the same pass a second time. The comment now says this, and it keeps the
+          rule: a second copy of the sequence is where one path loses a step.
         </p>
       </section>
 

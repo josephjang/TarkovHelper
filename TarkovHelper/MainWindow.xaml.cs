@@ -40,7 +40,8 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// The drawer's trader loyalty inputs. A passive panel: this window keeps the subscriptions
-    /// that drive it and calls it from its own handlers (see the Trader Loyalty region).
+    /// that drive it and calls it only from BuildLoyaltyGroup and UpdateLoyaltyUI (see the
+    /// Trader Loyalty region).
     /// Assigned in the constructor BODY, since it is handed controls InitializeComponent creates.
     /// </summary>
     private readonly TraderLoyaltyPanel _loyaltyPanel;
@@ -2086,11 +2087,11 @@ public partial class MainWindow : Window
         // The event's own log timestamp rides along so the reset fence can judge it: an event
         // from before the owner's reset must never restore removed progress (PRD R6 of
         // feature-complete-profile-reset.md).
+        //
+        // No quest-list refresh here. When the rows land on screen, ApplyLogEventAsync raises
+        // ProgressChanged and the page refreshes itself from it; for a profile that is not
+        // loaded nothing on screen changed. A second refresh would redo the whole pass.
         await progressService.ApplyLogEventAsync(task, evt.EventType, owner, evt.Timestamp);
-
-        // Refresh quest list if visible. ApplyLogEventAsync leaves the snapshot untouched for
-        // a profile that is not loaded, so this is a no-op redraw in that case.
-        _questListPage?.RefreshDisplay();
     }
 
     /// <summary>
@@ -2214,7 +2215,8 @@ public partial class MainWindow : Window
     {
         var progressService = QuestProgressService.Instance;
 
-        // Complete all prerequisites
+        // Complete all prerequisites. Each CompleteQuest that writes rows raises ProgressChanged,
+        // which refreshes the quest list, so nothing is left to refresh after the loop.
         var completedCount = 0;
         foreach (var prereqName in result.PrerequisitesToComplete)
         {
@@ -2225,9 +2227,6 @@ public partial class MainWindow : Window
                 completedCount++;
             }
         }
-
-        // Refresh quest list
-        _questListPage?.RefreshDisplay();
 
         // Show success message
         MessageBox.Show(
