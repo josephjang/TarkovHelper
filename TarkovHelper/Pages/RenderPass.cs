@@ -19,11 +19,13 @@ namespace TarkovHelper.Pages;
 /// unlock panel and the item list under it, and the Items page for its quest list and detail
 /// pane. The pass answers the status itself (<see cref="StatusOf"/>), so a page holding one has
 /// no reason to reach for the live per-quest overload and no way to read one by accident: this
-/// is the only file under Pages/ that names <c>GetStatus</c> at all, apart from the map page,
+/// is the only file under Pages/ whose code calls <c>GetStatus</c>, apart from the map page,
 /// and <c>RenderPassStatusGuardTests</c> keeps Pages/ that way rather than leaving it to review.
-/// The live overload stays for callers outside Pages/ that are not rendering from a pass and are
-/// right to read the current state (feature-kappa-collector-1-1.spec.md, Risks). They are not
-/// listed here: the guard does not look outside Pages/, so nothing would keep a list current.
+/// The live overload stays for the map page, which paints its markers off the live singletons and
+/// captures no pass, and for callers outside Pages/ that are not rendering from a pass and are
+/// right to read the current state (feature-kappa-collector-1-1.spec.md, Risks). The callers
+/// outside Pages/ are not listed here: the guard does not look outside Pages/, so nothing would
+/// keep a list current.
 /// </para>
 /// <para>
 /// The Kappa readings (<see cref="KappaProgress"/>, <see cref="KappaQuests"/>) are here for the

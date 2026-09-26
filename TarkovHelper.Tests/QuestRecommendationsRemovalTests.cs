@@ -1,5 +1,6 @@
 using System.IO;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using TarkovHelper.Services;
 using TarkovHelper.Services.Settings;
@@ -107,7 +108,7 @@ public sealed class QuestRecommendationsRemovalTests
     [Theory]
     [InlineData("private void RefreshAllForStateChange()",
         new[] { "RefreshQuestStatuses();", "ApplyFilters();", "UpdateDetailPanel();" })]
-    [InlineData("private async void OnDatabaseRefreshed(object? sender, EventArgs e)",
+    [InlineData("private void ReloadAllForDataChange()",
         new[] { "LoadQuests();", "PopulateTraderFilter();", "PopulateMapFilter();", "ApplyFilters();", "UpdateDetailPanel();" })]
     [InlineData("private async void QuestListPage_Loaded(object sender, RoutedEventArgs e)",
         new[] { "RefreshAllForStateChange();", "LoadQuests();", "RestoreFilterSettings();", "ApplyFilters();", "SelectQuestInternal(pendingName);" })]
@@ -124,10 +125,75 @@ public sealed class QuestRecommendationsRemovalTests
         }
     }
 
+    /// <summary>
+    /// The two data-reload paths share one sequence (the deep review's DESIGN-2). They had
+    /// drifted: ReloadDataAsync, which runs after a profile reset, a sync apply and a folder
+    /// migration, skipped UpdateDetailPanel, so an open detail pane kept its pre-reload render.
+    /// Each path now fetches its item lookup its own way and then calls the shared sequence,
+    /// and neither keeps a copy of the steps that could drift again.
+    /// </summary>
+    [Theory]
+    [InlineData("private async void OnDatabaseRefreshed(object? sender, EventArgs e)")]
+    [InlineData("public async Task ReloadDataAsync()")]
+    public void Both_reload_paths_run_the_one_shared_sequence(string signature)
+    {
+        var body = SourceGuards.MemberBody(QuestListPageSource, signature);
+
+        Assert.Contains("ReloadAllForDataChange();", body, StringComparison.Ordinal);
+        foreach (var step in new[] { "LoadQuests();", "PopulateTraderFilter();", "PopulateMapFilter();", "ApplyFilters();", "UpdateDetailPanel();", "RefreshQuestDisplayNames();" })
+            Assert.DoesNotContain(step, body, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void RefreshDisplay_still_delegates_to_the_shared_sequence()
         => Assert.Contains("public void RefreshDisplay() => RefreshAllForStateChange();",
             QuestListPageSource, StringComparison.Ordinal);
+
+    /// <summary>
+    /// With the panel gone, the only reason left for MainWindow to call RefreshDisplay after a
+    /// log event or the in-progress dialog was the progress write itself, and the page already
+    /// refreshes from that write: the explicit call ran the whole pass a second time on every
+    /// log event, and once more after the dialog's per-prerequisite passes, hidden tab included.
+    /// Each case also pins the write it follows, so a renamed member fails here instead of
+    /// passing on a body that no longer does the write.
+    /// </summary>
+    [Theory]
+    [InlineData("private async Task HandleQuestEventAsync(QuestLogEvent evt)", "progressService.ApplyLogEventAsync(")]
+    [InlineData("private void ApplyInProgressQuestResult(InProgressQuestInputResult result)", "progressService.CompleteQuest(")]
+    public void MainWindow_progress_writes_leave_the_quest_list_refresh_to_ProgressChanged(string signature, string write)
+    {
+        var body = SourceGuards.MemberBody(SourceGuards.Read("TarkovHelper", "MainWindow.xaml.cs"), signature);
+
+        Assert.Contains(write, body, StringComparison.Ordinal);
+        Assert.DoesNotContain("RefreshDisplay", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The other half of the same rule: both writes above announce themselves, and the page turns
+    /// the announcement into the full sequence. ApplyToSnapshot is CompleteQuest's write path;
+    /// ApplyForOwnerAsync is ApplyLogEventAsync's for the profile on screen.
+    /// </summary>
+    [Fact]
+    public void The_progress_writes_raise_the_event_the_quest_list_refreshes_from()
+    {
+        var service = SourceGuards.Read("TarkovHelper", "Services", "QuestProgressService.cs");
+        foreach (var signature in new[]
+        {
+            "private void ApplyToSnapshot(Func<ProgressSnapshot, QuestCompletionPlan> computePlan)",
+            "private async Task<int> ApplyForOwnerAsync(",
+        })
+        {
+            Assert.Contains("ProgressChanged?.Invoke(this, EventArgs.Empty);",
+                SourceGuards.MemberBody(service, signature), StringComparison.Ordinal);
+        }
+
+        Assert.Contains("_progressService.ProgressChanged += OnProgressChanged;",
+            SourceGuards.MemberBody(QuestListPageSource, "private void SubscribeServiceEvents()"),
+            StringComparison.Ordinal);
+        Assert.Contains("Dispatcher.Invoke(RefreshAllForStateChange);",
+            SourceGuards.MemberBody(QuestListPageSource, "private void OnProgressChanged(object? sender, EventArgs e)"),
+            StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// R6: no source file names the panel, its service, view model or expander, or describes
@@ -187,6 +253,28 @@ public sealed class QuestRecommendationsRemovalTests
         Assert.Empty(offenders);
         // The walk found real source, so a green run is not an empty directory passing.
         Assert.InRange(scanned, 100, int.MaxValue);
+    }
+
+    /// <summary>
+    /// R6 rewrote TraderLoyaltyPanel's passive-panel summary without the cref it used to cite.
+    /// The summary now names the two MainWindow methods that reach the panel instead of listing
+    /// the events that drive it, so a third caller fails here rather than outdating the text.
+    /// </summary>
+    [Fact]
+    public void MainWindow_reaches_the_loyalty_panel_only_through_its_two_loyalty_methods()
+    {
+        var source = SourceGuards.Read("TarkovHelper", "MainWindow.xaml.cs");
+        var build = SourceGuards.MemberBody(source, "private void BuildLoyaltyGroup()");
+        var repaint = SourceGuards.MemberBody(source, "private void UpdateLoyaltyUI()");
+
+        Assert.Contains("_loyaltyPanel.Rebuild(", build, StringComparison.Ordinal);
+        Assert.Contains("_loyaltyPanel.Repaint();", repaint, StringComparison.Ordinal);
+
+        var outside = Regex.Matches(source, @"_loyaltyPanel\.").Count
+            - Regex.Matches(build + repaint, @"_loyaltyPanel\.").Count;
+        Assert.True(outside == 0,
+            $"MainWindow calls _loyaltyPanel in {outside} place(s) outside BuildLoyaltyGroup and " +
+            "UpdateLoyaltyUI, the only two TraderLoyaltyPanel's summary names.");
     }
 
     private static string QuestListPageSource =>

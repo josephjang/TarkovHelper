@@ -341,9 +341,10 @@ namespace TarkovHelper.Pages
         /// <summary>
         /// The standard refresh sequence for a change in anything the rows are derived from:
         /// profile, progress, and the app's language, whose badges name a trader. Shared by
-        /// every state-change handler — and by the public <see cref="RefreshDisplay"/>
-        /// entry point MainWindow uses — so the sequence cannot drift between them.
-        /// (OnDatabaseRefreshed is deliberately separate: it reloads data first.)
+        /// every state-change handler and by the public <see cref="RefreshDisplay"/> entry
+        /// point, so the sequence cannot drift between them.
+        /// (The data-reload paths are deliberately separate: they rebuild the rows first, through
+        /// <see cref="ReloadAllForDataChange"/>.)
         /// </summary>
         private void RefreshAllForStateChange()
         {
@@ -366,13 +367,27 @@ namespace TarkovHelper.Pages
                 // Item lookup 새로고침
                 _itemLookup = ItemDbService.Instance.GetItemLookup();
 
-                // Quest 데이터 다시 로드
-                LoadQuests();
-                PopulateTraderFilter();
-                PopulateMapFilter();
-                ApplyFilters();
-                UpdateDetailPanel();
+                ReloadAllForDataChange();
             });
+        }
+
+        /// <summary>
+        /// The standard sequence after the underlying data changed: rebuild the rows from the
+        /// current task set, repopulate the trader and map filters from it, reapply the filters,
+        /// and re-render the detail pane. Shared by <see cref="OnDatabaseRefreshed"/> and
+        /// <see cref="ReloadDataAsync"/>, which differ only in how they fetch the item lookup
+        /// first, so the two cannot drift apart. They had: ReloadDataAsync skipped
+        /// UpdateDetailPanel, so after a profile reset, a sync apply or a folder migration an
+        /// open detail pane kept its pre-reload render. Loaded is not a caller: it restores the
+        /// saved filters partway through this sequence.
+        /// </summary>
+        private void ReloadAllForDataChange()
+        {
+            LoadQuests();
+            PopulateTraderFilter();
+            PopulateMapFilter();
+            ApplyFilters();
+            UpdateDetailPanel();
         }
 
         // The eight profile-scoped settings events this page consumes all need the same refresh, so
@@ -453,40 +468,29 @@ namespace TarkovHelper.Pages
         }
 
         /// <summary>
-        /// Refreshes the whole page for an externally-driven progress change: MainWindow calls this
-        /// after applying a quest event from the game logs and after the in-progress quest input
-        /// dialog. Profile-scoped SETTINGS changes do not come through here - the page subscribes to
-        /// those eight events itself and coalesces them (see <see cref="_settingsRefresh"/>).
+        /// Refreshes the whole page on demand. Nothing calls it after a progress write: every
+        /// write raises ProgressChanged, which <see cref="OnProgressChanged"/> already turns into
+        /// this same pass, so MainWindow's calls after a log event and after the in-progress quest
+        /// input dialog were dropped for running it a second time. Profile-scoped SETTINGS changes
+        /// do not come through here either: the page subscribes to those eight events itself and
+        /// coalesces them (see <see cref="_settingsRefresh"/>).
         /// Runs the SAME sequence as the internal state-change handlers
-        /// (<see cref="RefreshAllForStateChange"/>) rather than a shorter copy of it:
-        /// completing a quest (from a log event or from the dialog's prerequisites) unlocks its
-        /// follow-up quests, which moves rows, chip counts and the detail pane together, and a
-        /// second copy of the sequence is where a step goes missing on one path while the other
-        /// still works.
+        /// (<see cref="RefreshAllForStateChange"/>) rather than a shorter copy of it: a second
+        /// copy of the sequence is where a step goes missing on one path while the other still
+        /// works.
         /// </summary>
         public void RefreshDisplay() => RefreshAllForStateChange();
 
         /// <summary>
-        /// Reload all quest data from QuestProgressService
-        /// Call this after data has been refreshed from API
+        /// Reload all quest data from QuestProgressService. MainWindow calls this after its data
+        /// reload (profile reset, sync apply, folder migration), which does not raise
+        /// ProgressChanged. Display names need no separate pass: LoadQuests builds every row
+        /// with its localized names.
         /// </summary>
         public async Task ReloadDataAsync()
         {
-            // Reload map and item data
             await LoadItemDataAsync();
-
-            // Reload quests from the updated progress service
-            LoadQuests();
-
-            // Repopulate filters
-            PopulateTraderFilter();
-            PopulateMapFilter();
-
-            // Refresh display names with current locale
-            RefreshQuestDisplayNames();
-
-            // Apply filters to update the list
-            ApplyFilters();
+            ReloadAllForDataChange();
         }
 
         /// <summary>

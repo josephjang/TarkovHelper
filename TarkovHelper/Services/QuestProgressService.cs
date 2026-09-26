@@ -1143,7 +1143,7 @@ namespace TarkovHelper.Services
 
         /// <summary>
         /// A quest's recorded terminal status under the key policy
-        /// <see cref="GetStatus(TarkovTask, ProgressSnapshot)"/> uses (Id first, NormalizedName
+        /// <see cref="GetStatus(TarkovTask, ProgressSnapshot, ProfileSettingsSnapshot)"/> uses (Id first, NormalizedName
         /// only when the Id lookup misses), or null when nothing terminal is recorded (a
         /// recorded non-terminal value reports null too, matching GetStatus, which ignores one
         /// and falls through to derivation).
