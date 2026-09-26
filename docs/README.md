@@ -133,6 +133,11 @@ Context 섹션으로 남깁니다. 코드베이스 전반을 훑는 시점 평�
   구분하지 못해 마지막 자리를 이름순이 정하게 된 이유, 삭제되는 코드와 남는 갱신 순서, 기존
   사용자 DB에 남겨 두는 확장 상태 행(프로필 초기화로도 지워지지 않는다는 D2 정정 포함)을
   조작해 보는 인터랙티브 랩 2개와 퀴즈 게이트를 포함합니다 (PR #65)
+- [2026-09-remove-quest-recommendations-deep-review-guide.html](2026-09-remove-quest-recommendations-deep-review-guide.html):
+  코드 가이드 2부. 바로 위 변경을 딥 리뷰가 다시 훑어 찾은 결함과 수정을 다룹니다. 진행도 기록
+  한 번에 퀘스트 목록을 두 번 다시 그리던 MainWindow의 중복 갱신과, 프로필 초기화, 로그 동기화,
+  데이터 마이그레이션 뒤에 상세 패널을 다시 그리지 않던 두 벌의 재로드 순서를 조작해 보는
+  인터랙티브 랩 2개와 퀴즈 게이트를 포함합니다 (PR #67)
 - [tarkov-market-markers-api.md](tarkov-market-markers-api.md): Tarkov Market
   마커 API 분석
 
