@@ -14,9 +14,9 @@ Technical Design: [feature-kappa-collector-1-1.spec.md](feature-kappa-collector-
 > reverses it.
 
 > Superseded in part by `2026-09-22-remove-quest-recommendations.md` (2026-09-22):
-> the recommendations panel is removed, so R7's "the Kappa priority recommendation
-> keeps its current text" no longer applies. The badge, its tooltip and the Kappa
-> filter keep their text. Every other decision here stands.
+> the recommendations panel is removed, so R7's rule that the Kappa priority
+> recommendation keeps its current text no longer applies. The badge, its tooltip
+> and the Kappa filter keep their text. Every other decision here stands.
 
 ## Summary
 

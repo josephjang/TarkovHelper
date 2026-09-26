@@ -25,10 +25,12 @@ graph of late 2025: a few dozen chain heads, a Kappa flag on half the quests,
 and a follow-up count that told chain quests from leaf quests.
 
 EFT 1.1 replaced most of that graph with player-level and trader-loyalty gates.
-`feature-quest-data-1-1-refresh.md` records that 296 quests now have no
-prerequisite and that Kappa requires 13 quests. Read-only queries on 2026-09-22
-over the bundled 1.1 database (db_version 1.1.0) and the frozen v2026.7.0 copy
-give the recommender's inputs before and after:
+`feature-quest-data-1-1-refresh.md` records that 296 of the 517 tasks the JSON
+API serves now have no prerequisite and that Kappa requires 13 quests. Read-only
+queries on 2026-09-22 over the bundled 1.1 database (db_version 1.1.0) and the
+frozen v2026.7.0 copy give the recommender's inputs before and after. They count
+the 488 quests the database publishes rather than the API's task set, so the
+prerequisite count below is 294, not 296:
 
 | Input the score reads | v2026.7.0 data | 1.1.0 data |
 |---|---|---|
@@ -143,7 +145,7 @@ quest".
 - **D2: Leave the persisted `questList.recommendationsExpanded` row in existing
   user databases.** Deleting it on the next settings load was considered and
   rejected: the settings table is a key-value store that tolerates unknown keys,
-  one-shot cleanup code for an inert row would outlive its purpose in every
+  and one-shot cleanup code for an inert row would outlive its purpose in every
   build after the first. The row costs nothing and reads as nothing. Revisit if
   a settings-key audit or migration step ever exists; the key would join that
   list.
@@ -165,6 +167,31 @@ quest".
   Revisit if the archive's rules are ever tightened to forbid the note; the
   record then lives only in this proposal.
 
+- **D4: MainWindow stops calling `RefreshDisplay` after a progress write.**
+  Added by the deep review (EFFICIENCY-1). R3 lists `RefreshDisplay` as a
+  refresh path. With the panel gone, MainWindow's two calls into it, after a log
+  event and after the in-progress quest dialog, only repeated a pass the page
+  already runs: both writes raise `ProgressChanged`, and the page turns that
+  event into the same sequence. The list, the chips and the detail pane still
+  refresh on those events, so R3 holds in what the user sees, but the second
+  pass on every log event is gone. `RefreshDisplay` stays as the page's public
+  on-demand entry point, still delegating to the one shared sequence. Keeping
+  the explicit calls was rejected because they doubled the work with no
+  visible effect. Revisit if a write path appears that changes rows without
+  raising `ProgressChanged`.
+
+- **D5: The two data-reload paths share one sequence.** Added by the deep
+  review (DESIGN-2), at the author's choice. `OnDatabaseRefreshed` and
+  `ReloadDataAsync` both rebuild the rows, the filters and the list, but only
+  the first re-rendered the detail pane. `ReloadDataAsync` runs after a profile
+  reset, a sync apply or a folder migration, which raise no `ProgressChanged`,
+  so an open detail pane could keep its pre-reload render. Both now call one
+  `ReloadAllForDataChange`. This extends R3's "exactly as before" on purpose:
+  after those three reloads the detail pane now re-renders, which it did not
+  do before this change. Fixing only the pane was rejected because it keeps two
+  copies of the sequence, the hazard R3's risk names. Deferring was rejected
+  because the drift was found by this change's own review and costs five lines.
+
 ## Risks
 
 - Users who did open the panel lose it in the same release that removes it,
@@ -173,6 +200,16 @@ quest".
 - The Quests tab's content shifts up by the panel's row, so the interactive code
   guides under `docs/` that show the tab still picture the panel. Accepted:
   those guides are frozen records of their PRs, not living documentation.
+  The shift reaches every user, not only those whose panel had items: only the
+  panel's inner expander started collapsed, and the panel itself always kept its
+  row and its 12px bottom margin. No automated check measures that spacing (the
+  grid guard reads row indices, the e2e test checks that the expander is gone),
+  so the tab was checked by hand on 2026-09-26: a build of this branch, launched
+  without elevation on a fresh config and maximized, showed the filter bar, the
+  status chips, then the list and the detail pane, with no empty band where the
+  panel was and no `RecommendationsExpander` in the UI Automation tree. The gap
+  from the bottom of `ChipAll` to the top of `LstQuests` measured 40 physical
+  pixels at about 250% display scale, roughly 16 DIP.
 - Removing one step from the shared refresh sequence in `QuestListPage` must not
   reopen the shortcut `feature-quest-chip-only-status-filter.spec.md` closed
   (a second, shorter copy of the sequence). Accepted: the sequence keeps one
